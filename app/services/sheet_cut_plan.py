@@ -5,7 +5,7 @@ from app.services.warehouse_goods import goods_profile, qualification_issues, lo
 from app.services.sheet_measurement import crease_match
 
 
-def rectangular_cut_plan(db, lot, product, expected):
+def rectangular_cut_plan(db, lot, product, expected, *, reviewed=False):
     detail = lot.semi_finished_detail
     profile = goods_profile(db, lot)
     if profile and (profile.get("output_piece") or profile.get("dimension_basis") == "source_board"):
@@ -22,11 +22,21 @@ def rectangular_cut_plan(db, lot, product, expected):
             rotated=False,requires_production=True,material_code=detail.material_code_snapshot,flute_type=detail.flute_type,
             utilization=round(expected.board_length_mm*expected.board_width_mm*100/(detail.board_length_mm*detail.board_width_mm),2))
     # Only explicitly intact, unprinted rectangles. A die-cut bounding box is not a sheet.
+    if reviewed and detail and detail.sheet_type == "raw_board" and profile is None:
+        # An explicitly registered blank rectangle can be reviewed for this
+        # allocation without rewriting its stock/customer profile.
+        profile = {"processing": "raw"}
     if not detail or not profile or profile.get("processing") not in {"raw", "cut"}:
         return None
     if any(getattr(detail, name, None) for name in ('crease_left_mm', 'crease_middle_mm', 'crease_right_mm')):
         return None  # Registered creases cannot be treated as an arbitrary blank rectangle.
-    if qualification_issues(db, lot, product, expected_material_code=expected.normalized_material_code):
+    issues = qualification_issues(db, lot, product, expected_material_code=expected.normalized_material_code)
+    if reviewed:
+        # Review may accept material variance for this allocation only; all
+        # customer, shape, mold, face, layer and component gates still apply.
+        issues = [issue for issue in issues if issue not in {
+            "材质不一致，不能抵扣", "替代材质尚未确认适用，不能按尺寸推断强度合格"}]
+    if issues:
         return None
     if (lot_face(db, lot, profile) != product_face(product)
             or detail.flute_type != expected.flute_type
@@ -59,7 +69,7 @@ def rectangular_cut_plan(db, lot, product, expected):
         return None
     if across < 1 or down < 1:
         return None
-    if (length, width) == (detail.board_length_mm, detail.board_width_mm):
+    if not reviewed and (length, width) == (detail.board_length_mm, detail.board_width_mm):
         return None  # Existing exact-match production rules are unchanged.
     output = across * down * expected.stock_yield_per_sheet
     return dict(schema=1, method="fixed_direction_grid", product_id=product.id,

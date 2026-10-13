@@ -4064,6 +4064,7 @@ def _late_semi_inventory_options(
         requirement = db.scalar(
             select(OrderItemSemiRequirement).where(
                 OrderItemSemiRequirement.order_item_id == item.id,
+                OrderItemSemiRequirement.sales_order_item_bom_component_id.is_(None),
                 OrderItemSemiRequirement.component_type == component,
             )
         )
@@ -18654,6 +18655,7 @@ def _reserve_semi_inventory_from_pending(
         existing = db.scalar(
             select(OrderItemSemiRequirement).where(
                 OrderItemSemiRequirement.order_item_id == item.id,
+                OrderItemSemiRequirement.sales_order_item_bom_component_id.is_(None),
                 OrderItemSemiRequirement.component_type == payload.component_type,
             )
         )

@@ -2182,6 +2182,17 @@ def adopt_bom_paper(snapshot_id: int, payload: BomPaperAdoptPayload,
         _handle_integrity(error)
 
 
+class ManualSheetReservationPayload(BaseModel):
+    component_type: Literal["whole", "cover", "base"] = "whole"
+    lot_id: int = Field(gt=0)
+    stock_quantity: int = Field(gt=0, strict=True)
+    expected_version: int = Field(gt=0)
+    expected_order_item_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    review_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    warning_acknowledged_codes: list[str] = Field(default_factory=list)
+    idempotency_key: str = Field(min_length=8, max_length=80)
+
+
 class SemiReleasePayload(BaseModel):
     expected_version: int = Field(gt=0)
     stock_quantity: int | None = Field(default=None, gt=0)
@@ -3773,6 +3784,258 @@ def upsert_semi_requirement(
         )
         db.commit()
         return _semi_requirement_dict(row)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
+def _manual_sheet_digest(value):
+    import hashlib
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _manual_order_revision(item):
+    return _manual_sheet_digest({"id": item.id, "quantity": item.quantity,
+        "material_status": item.material_status,
+        "requisition_status": item.requisition_status,
+        "delivered_quantity": item.delivered_quantity, "force_closed": item.is_force_closed,
+        "sheet_cutting": item.sheet_cutting_settings_snapshot, "special_process": item.special_process})
+
+
+def _bom_manual_sheet_state(db, snapshot_id, component_type, user):
+    """Build a read-only frozen demand; opening/cancelling creates no records."""
+    from app.services.semi_finished_inventory import browse_semi_finished_inventory_for_requirement
+    from app.services.sheet_cutting_settings import component_settings
+    from app.services.bom_physical_quantities import resolve_bom_sheet_yield
+    snapshot = db.get(SalesOrderItemBomComponent, snapshot_id)
+    if snapshot is None:
+        raise WarehouseInventoryError("组件快照不存在", 404)
+    _require_order_item_customer_access(db, snapshot.sales_order_item_id, user)
+    item = db.get(OrderItem, snapshot.sales_order_item_id, populate_existing=True)
+    order = db.get(Order, item.order_id)
+    component = _bom_snapshot_component_type(snapshot, component_type)
+    from app.api.requisition import ORDER_ITEM_ACTIVE_ORDER_STATUSES, _bom_snapshot_has_active_requisition
+    if order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES or item.is_force_closed or item.material_status != "pending":
+        raise WarehouseInventoryError("当前订单已结档、完工或不是待生产状态，不能新增片料抵扣", 409)
+    if _bom_snapshot_has_active_requisition(db, snapshot.id, component_type=component):
+        raise WarehouseInventoryError("该组件已有正式报料，请先处理原报料单，再使用库存片料", 409)
+    facts = _bom_snapshot_physical_facts(snapshot, component)
+    settings = component_settings(snapshot.sheet_cutting_settings_snapshot, component)
+    output = settings.mold_count if settings else resolve_bom_sheet_yield(snapshot, strict=True).yield_per_sheet
+    required = component_effective_required_piece_qty(db, snapshot) * _bom_snapshot_physical_pieces_per_component(snapshot, component)
+    requirement = OrderItemSemiRequirement(
+        order_item_id=item.id, sales_order_item_bom_component_id=snapshot.id,
+        customer_id=order.customer_id, component_type=component,
+        board_length_mm=sheet_dimension_number(facts["board_length_mm"] or 0),
+        board_width_mm=sheet_dimension_number(facts["board_width_mm"] or 0),
+        material_code_snapshot=snapshot.snapshot_component_material or "",
+        normalized_material_code=normalize_material_code(snapshot.snapshot_component_material),
+        flute_type=snapshot.snapshot_component_flute_type,
+        pieces_per_box=_bom_snapshot_physical_pieces_per_component(snapshot, component),
+        stock_yield_per_sheet=output, required_piece_quantity=required,
+    )
+    if requirement.board_length_mm <= 0 or requirement.board_width_mm <= 0 or not requirement.normalized_material_code:
+        raise WarehouseInventoryError("组件缺少冻结的报料尺寸或材质，请先完善资料", 409)
+    coverage = component_inventory_coverage(db, snapshot.id, component_type=component)
+    remaining = max(required - coverage["total_piece_quantity"], 0)
+    candidates = browse_semi_finished_inventory_for_requirement(db, requirement, reviewed_raw=True, include_ineligible=True)
+    rows = _semi_candidate_dicts(db, _visible_semi_candidates(candidates, user, db))
+    for row in rows:
+        yield_factor = max(int(row["stock_yield_per_sheet"]), 1)
+        row["max_stock_quantity"] = min(int(row["available_stock_quantity"]), (remaining + yield_factor - 1) // yield_factor)
+        row["review_hash"] = _manual_sheet_digest({
+            "snapshot_id": snapshot.id, "component": component,
+            "order_revision": _manual_order_revision(item), "requirement": _semi_requirement_dict(requirement),
+            "remaining": remaining, "row": row,
+        })
+    return snapshot, item, requirement, {
+        "product_code": snapshot.snapshot_component_product_code,
+        "product_name": snapshot.snapshot_component_product_name,
+        "order_item_id": item.id, "expected_order_item_revision": _manual_order_revision(item),
+        "required_piece_quantity": required,
+        "remaining_required_piece_qty": remaining,
+        "finished_reserved_piece_qty": coverage["finished_piece_quantity"],
+        "semi_finished_reserved_piece_qty": coverage["semi_piece_quantity"],
+        "board_length_mm": requirement.board_length_mm, "board_width_mm": requirement.board_width_mm,
+        "material_code": requirement.material_code_snapshot,
+        "pieces_per_box": requirement.pieces_per_box, "items": rows,
+    }
+
+
+def _order_manual_sheet_state(db, item_id, component_type, user):
+    from app.api.requisition import (_semi_component_specs_for_requisition, _current_requisition_requirements,
+        _requisition_item_component, INACTIVE_REQUISITION_ITEM_STATUSES, ORDER_ITEM_ACTIVE_ORDER_STATUSES,
+        theoretical_order_yield, _active_requisition_hold)
+    from app.services.semi_finished_inventory import browse_semi_finished_inventory_for_requirement
+    _require_order_item_customer_access(db, item_id, user)
+    item = db.get(OrderItem, item_id, populate_existing=True)
+    order = db.get(Order, item.order_id)
+    product = db.get(Product, item.product_id)
+    if product is None or product.deleted_at is not None:
+        raise WarehouseInventoryError("订单产品不存在", 404)
+    if order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES or item.is_force_closed or item.material_status != "pending":
+        raise WarehouseInventoryError("当前订单已结档、完工或不是待生产状态，不能新增片料抵扣", 409)
+    if _active_requisition_hold(db, item.id) is not None:
+        raise WarehouseInventoryError("该明细正在等候报料，请先恢复待报料", 409)
+    active = db.scalars(select(RequisitionItem).where(RequisitionItem.order_item_id == item.id,
+        func.lower(RequisitionItem.status).notin_(INACTIVE_REQUISITION_ITEM_STATUSES))).all()
+    if any(_requisition_item_component(row) == component_type for row in active):
+        raise WarehouseInventoryError("该明细已有正式报料，请先处理原报料单，再使用库存片料", 409)
+    spec = _semi_component_specs_for_requisition(item, product, component_type=component_type)[0]
+    current = _current_requisition_requirements(db, item, pieces_per_box=spec["pieces_per_box"], component_type=component_type)
+    requirement = OrderItemSemiRequirement(order_item_id=item.id, customer_id=order.customer_id,
+        component_type=component_type, board_length_mm=sheet_dimension_number(spec["board_length_mm"] or 0),
+        board_width_mm=sheet_dimension_number(spec["board_width_mm"] or 0),
+        material_code_snapshot=item.snapshot_material or "", normalized_material_code=normalize_material_code(item.snapshot_material),
+        flute_type=item.flute_type, pieces_per_box=spec["pieces_per_box"],
+        stock_yield_per_sheet=theoretical_order_yield(item,component_type), required_piece_quantity=current["required_piece_qty"])
+    if requirement.board_length_mm <= 0 or requirement.board_width_mm <= 0 or not requirement.normalized_material_code or not requirement.flute_type:
+        raise WarehouseInventoryError("订单缺少冻结的报料尺寸、材质或楞型，请先完善资料", 409)
+    candidates = browse_semi_finished_inventory_for_requirement(db, requirement, reviewed_raw=True, include_ineligible=True)
+    rows = _semi_candidate_dicts(db, _visible_semi_candidates(candidates, user, db))
+    remaining = current["remaining_required_piece_qty"]
+    for row in rows:
+        output = max(int(row["stock_yield_per_sheet"]),1)
+        row["max_stock_quantity"] = min(int(row["available_stock_quantity"]),(remaining+output-1)//output)
+        row["review_hash"] = _manual_sheet_digest({"order_item_id":item.id,"component":component_type,
+            "order_revision":_manual_order_revision(item),"requirement":_semi_requirement_dict(requirement),
+            "remaining":remaining,"row":row})
+    return None, item, requirement, {"product_code":item.snapshot_product_code,"product_name":item.snapshot_product_name,
+        "order_item_id":item.id,"expected_order_item_revision":_manual_order_revision(item),
+        "required_piece_quantity":requirement.required_piece_quantity,"remaining_required_piece_qty":remaining,
+        "finished_reserved_piece_qty":current["finished_inventory_reserved_qty"]*spec["pieces_per_box"],
+        "finished_inventory_reserved_qty":current["finished_inventory_reserved_qty"],
+        "semi_finished_reserved_piece_qty":current["semi_finished_reserved_piece_qty"],
+        "board_length_mm":requirement.board_length_mm,"board_width_mm":requirement.board_width_mm,
+        "material_code":requirement.material_code_snapshot,"pieces_per_box":spec["pieces_per_box"],"items":rows}
+
+
+@router.get("/semi-finished/bom-components/{bom_snapshot_id}/manual-inventory")
+def bom_manual_sheet_inventory(
+    bom_snapshot_id: int, component_type: Literal["whole", "cover", "base"] = "whole",
+    db: Session = Depends(get_db), user: User = Depends(can_view_reservations),
+) -> dict:
+    try:
+        return _bom_manual_sheet_state(db, bom_snapshot_id, component_type, user)[3]
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.post("/semi-finished/bom-components/{bom_snapshot_id}/manual-reserve")
+def reserve_bom_manual_sheet_inventory(
+    bom_snapshot_id: int, payload: ManualSheetReservationPayload,
+    db: Session = Depends(get_db), user: User = Depends(can_reserve),
+) -> dict:
+    return _reserve_manual_sheet_inventory(bom_snapshot_id, payload, db, user, is_bom=True)
+
+
+@router.get("/semi-finished/order-items/{order_item_id}/manual-inventory")
+def order_manual_sheet_inventory(order_item_id: int, component_type: Literal["whole", "cover", "base"] = "whole",
+    db: Session = Depends(get_db), user: User = Depends(can_view_reservations)) -> dict:
+    try:
+        return _order_manual_sheet_state(db, order_item_id, component_type, user)[3]
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.post("/semi-finished/order-items/{order_item_id}/manual-reserve")
+def reserve_order_manual_sheet_inventory(order_item_id: int, payload: ManualSheetReservationPayload,
+    db: Session = Depends(get_db), user: User = Depends(can_reserve)) -> dict:
+    return _reserve_manual_sheet_inventory(order_item_id, payload, db, user, is_bom=False)
+
+
+def _reserve_manual_sheet_inventory(target_id, payload, db, user, *, is_bom):
+    from app.models.audit import OperationLog
+    from app.services.semi_finished_inventory import SIGNATURE_OVERRIDE_WARNING
+    snapshot = db.get(SalesOrderItemBomComponent, target_id) if is_bom else None
+    if is_bom and snapshot is None:
+        raise HTTPException(404, "组件快照不存在")
+    item_id = snapshot.sales_order_item_id if is_bom else target_id
+    _require_order_item_customer_access(db, item_id, user)
+    _require_lot_customer_access(db, payload.lot_id, user)
+    action = "bom_manual_sheet_reserve" if is_bom else "order_manual_sheet_reserve"
+    operation_id = _manual_sheet_digest(payload.idempotency_key)
+    request_digest = _manual_sheet_digest({"target_id": target_id, "is_bom": is_bom, **payload.model_dump()})
+    try:
+        previous = db.scalar(select(OperationLog).where(OperationLog.action_code == action, OperationLog.request_id == operation_id))
+        if previous is not None:
+            saved = json.loads(previous.details)
+            if saved["request_digest"] != request_digest or previous.user_id != user.id:
+                raise WarehouseInventoryError("同一抵扣凭证不能更改批次、数量或确认依据", 409)
+            return {**saved["response"], "replayed": True,
+                "message": "已核对上次抵扣提交结果，请以刷新后的库存和报料缺口为准"}
+        conflicting = db.scalar(select(InventoryReservation.id).where(or_(
+            InventoryReservation.reservation_group_key == payload.idempotency_key,
+            InventoryReservation.idempotency_key == payload.idempotency_key)))
+        if conflicting is not None:
+            raise WarehouseInventoryError("该抵扣凭证已用于其他库存预占，请重新查看库存", 409)
+        from app.services.production_workflow import lock_order_rows_for_production_transition, ProductionWorkflowError
+        current_item = db.get(OrderItem, item_id)
+        try:
+            lock_order_rows_for_production_transition(db, [current_item.order_id])
+        except ProductionWorkflowError as error:
+            raise WarehouseInventoryError(str(error), error.status_code) from error
+        state_builder = _bom_manual_sheet_state if is_bom else _order_manual_sheet_state
+        snapshot, item, temporary, preview = state_builder(db, target_id, payload.component_type, user)
+        if preview["expected_order_item_revision"] != payload.expected_order_item_revision:
+            raise WarehouseInventoryError("订单已修改，请重新查看片料后抵扣", 409)
+        candidate = next((row for row in preview["items"] if row["lot_id"] == payload.lot_id), None)
+        if candidate is None or not candidate["selectable"]:
+            raise WarehouseInventoryError("该批片料用途或加工状态不满足当前组件，请先核对库存用途", 409)
+        if candidate["version"] != payload.expected_version or candidate["review_hash"] != payload.review_hash:
+            raise WarehouseInventoryError("库存或需求已变化，请重新查看片料后抵扣", 409)
+        if payload.stock_quantity > candidate["max_stock_quantity"]:
+            raise WarehouseInventoryError("本次张数超过可用库存或剩余需求；请按页面上限填写", 409)
+        if set(payload.warning_acknowledged_codes) != set(candidate["warning_codes"]):
+            raise WarehouseInventoryError("请查看并确认当前批次的全部差异提示", 409)
+        requirement = save_order_item_semi_requirement(
+            db, order_item_id=item.id, sales_order_item_bom_component_id=snapshot.id if is_bom else None,
+            component_type=temporary.component_type,
+            board_length_mm=temporary.board_length_mm, board_width_mm=temporary.board_width_mm,
+            material_code=temporary.material_code_snapshot, flute_type=temporary.flute_type,
+            pieces_per_box=temporary.pieces_per_box, stock_yield_per_sheet=temporary.stock_yield_per_sheet,
+            required_piece_quantity=temporary.required_piece_quantity, operator_id=user.id,
+        )
+        credited = min(payload.stock_quantity * candidate["stock_yield_per_sheet"], preview["remaining_required_piece_qty"])
+        result = reserve_semi_finished_inventory(
+            db, requirement_id=requirement.id, requested_requirement_quantity=credited,
+            lots=[SemiFinishedLotVersion(payload.lot_id, payload.expected_version)],
+            operator_id=user.id, idempotency_key=payload.idempotency_key, confirmed=True,
+            override=SIGNATURE_OVERRIDE_WARNING in candidate["warning_codes"],
+            warning_acknowledged_codes=payload.warning_acknowledged_codes,
+        )
+        if sum(row.reserved_stock_quantity for row in result.reservations) != payload.stock_quantity:
+            raise WarehouseInventoryError("本次实际预占张数与填写数量不一致，已取消抵扣", 409)
+        if is_bom:
+            coverage = component_inventory_coverage(db, snapshot.id, component_type=temporary.component_type)
+            remaining = max(temporary.required_piece_quantity - coverage["total_piece_quantity"], 0)
+        else:
+            from app.api.requisition import _current_requisition_requirements
+            current = _current_requisition_requirements(db,item,pieces_per_box=temporary.pieces_per_box,component_type=temporary.component_type)
+            coverage = {"finished_piece_quantity":current["finished_inventory_reserved_qty"]*temporary.pieces_per_box,
+                "semi_piece_quantity":current["semi_finished_reserved_piece_qty"]}
+            remaining = current["remaining_required_piece_qty"]
+        response = {
+            "stock_quantity": payload.stock_quantity,
+            "allocated_requirement_quantity": result.allocated_requirement_quantity,
+            "finished_reserved_piece_qty": coverage["finished_piece_quantity"],
+            "finished_inventory_reserved_qty": preview.get("finished_inventory_reserved_qty", coverage["finished_piece_quantity"]),
+            "semi_finished_reserved_piece_qty": coverage["semi_piece_quantity"],
+            "remaining_required_piece_qty": remaining,
+            "reservation_ids": [row.id for row in result.reservations],
+            "message": f"已按填写数量预占 {payload.stock_quantity} 张片料，报料只保留剩余缺口",
+        }
+        append_audit_event(db, event_category="business", result="success", source="web",
+            module_code="warehouse", action_code=action, resource="semi_finished_inventory",
+            actor=user, entity_type="bom_component" if is_bom else "order_item", entity_id=target_id,
+            customer_id=temporary.customer_id, request_id=operation_id,
+            description="用户按批次自定张数抵扣库存片料",
+            details={"request_digest": request_digest, "response": response})
+        db.commit()
+        return response
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)

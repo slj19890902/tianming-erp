@@ -214,6 +214,8 @@ def test_automatic_bom_warning_keeps_supplier_contract_and_replays(stock_repleni
     with factory() as db:
         assert db.scalar(select(func.count(StockReplenishmentOrder.id))) == 1
         assert db.get(InventoryStockPolicy, policy_id).updated_at == datetime(2020, 1, 1)
+        source = db.scalar(select(StockReplenishmentOrder))
+        assert all(json.loads(item.production_snapshot_json)['bom_parent_basis'] for item in source.items)
 
 
 def test_purchase_audit_failure_rolls_back_both_supplier_orders(stock_replenishment_app, monkeypatch):

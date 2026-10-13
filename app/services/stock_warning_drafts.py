@@ -80,8 +80,17 @@ def create_paperboard_warning_draft(db, *, policy, delivery, plan, plan_hash, op
         items=[_build_replenishment_item(db, StockReplenishmentItemPayload(**item), source_type='stock_warning')
                for item in plan['items']])
     if plan.get('replenishment_plan'):
+        from app.models.product import Product
+        from app.services.finished_stock_identity import product_basis
+        from app.services.stock_purchase_identity import capture
+        parent = db.get(Product, plan['replenishment_plan']['parent_product_id'])
+        if parent is None:
+            raise StockReplenishmentError('补库BOM父产品已变化，请刷新', 409)
         for item in order.items:
             item.quantity_contract_json = json.dumps(plan['replenishment_plan'], ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            identity = capture(db.get(Product, item.reference_product_id), item)
+            identity['bom_parent_basis'] = product_basis(parent)
+            item.production_snapshot_json = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     db.add(order)
     db.flush()
     return order, True

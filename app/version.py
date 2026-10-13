@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.626"
-APP_VERSION_NAME = "订单库存匹配与库位查询闭环"
+APP_VERSION = "v0.22.627"
+APP_VERSION_NAME = "库存闭环与备份运行时兼容"
 APP_BUILD_DATE = "2026-10-13"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6115,3 +6115,7 @@ APP_VERIFICATION_STEPS = [
     "按完整编码和客户在仓库及首页查询，核对同一批实物位置一致；历史待核批次或地图异常须保留原因。",
 ]
 APP_CHANGELOG = [*(f"v0.22.626：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v627 keeps the v626 business acceptance steps; only the required backup prerequisite is added.
+APP_CHANGES = [*APP_CHANGES, "Mac备份运行时通过受控验证后升级，保留现有NAS目标和凭据；完整备份验证通过后才允许库存修复迁移。"]
+APP_CHANGELOG = ["v0.22.627：本次更新｜Mac备份运行时受控升级，保留库存闭环修复。", *APP_CHANGELOG]

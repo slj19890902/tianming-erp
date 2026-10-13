@@ -304,10 +304,213 @@ def run(args, *, script, executable, prompt=getpass.getpass):
 def main(*, script, executable):
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--phase',choices=sorted(PHASES),required=True)
+    parser.add_argument('--phase',choices=sorted(PHASES | {UPGRADE_PHASE}),required=True)
     parser.add_argument('--attempt',required=True)
     parser.add_argument('--plan-sha256',required=True)
     parser.add_argument('--challenge',required=True)
     parser.add_argument('--socket-fd',type=int)
-    result = run(parser.parse_args(),script=script,executable=executable)
+    args = parser.parse_args()
+    operation = run_upgrade_probe if args.phase == UPGRADE_PHASE else run
+    result = operation(args,script=script,executable=executable)
     sys.stdout.buffer.write(boot.canonical(result)+b'\n'); sys.stdout.buffer.flush()
+
+
+# A distinct upgrade protocol. First provisioning and ordinary runtime binding
+# remain unchanged; this worker can only read the existing credential and probe.
+UPGRADE_PHASE = 'upgrade-probe'
+UPGRADE_CAPABILITY = 'archive_smb_upgrade_v1'
+UPGRADE_TYPE = 'tianming.mac-smb-stream-upgrade-plan.v1'
+UPGRADE_RESULT = 'tianming.mac-smb-stream-upgrade-probe.v1'
+UPGRADE_FIELDS = FIELDS | {'previous_control', 'supervisor_sha256'}
+
+
+def upgrade_pending(attempt):
+    require(token(attempt))
+    return cfg.BASE / ('smb-stream-upgrade-' + attempt + '.pending.json')
+
+
+def upgrade_header(raw, approved_sha):
+    require(cfg.sha(approved_sha) and cfg.digest(raw) == approved_sha)
+    plan = boot.decode(raw)
+    require(boot.canonical(plan) == raw and set(plan) == UPGRADE_FIELDS and plan['type'] == UPGRADE_TYPE)
+    # Reuse the original closed fields and time/contract validation.
+    base = {k: plan[k] for k in FIELDS}; base['type'] = TYPE
+    header(boot.canonical(base), cfg.digest(boot.canonical(base)))
+    require(cfg.sha(plan['supervisor_sha256']))
+    cfg.validate(plan['previous_control'], plan['contract'], plan['context_sha256'], plan['contract']['uid'])
+    require(plan['previous_control']['publisher_sha256'] == plan['publisher_sha256']
+            and plan['previous_control']['package_sha256'] != plan['package_sha256'])
+    return plan
+
+
+def upgrade_control(plan):
+    # The install attempt still identifies the existing credential. The new
+    # plan retains the entire previous control, including its original plan SHA.
+    value = {**plan['previous_control'], 'package_sha256': plan['package_sha256'],
+             'plan_sha256': cfg.digest(boot.canonical(plan))}
+    return cfg.validate(value, plan['contract'], plan['context_sha256'], plan['contract']['uid'])
+
+
+def upgrade_validate(raw, approved_sha, *, started=False):
+    plan = upgrade_header(raw, approved_sha)
+    meta = metadata(plan['package_sha256']); binding(plan, meta)
+    manifest = service._program_manifest(meta)
+    require(type(manifest.get('runtime_capabilities', {}).get(UPGRADE_CAPABILITY)) is int
+            and manifest['runtime_capabilities'][UPGRADE_CAPABILITY] == 1)
+    require(publication.read_record(cfg.CONTROL) == boot.canonical(plan['previous_control'])
+            and publication.read_record(cfg.CONTRACT) == boot.canonical(plan['contract'])
+            and cfg.digest(publication.read_record(service.CONTROL)) == plan['supervisor_sha256'])
+    if started:
+        require(publication.read_record(upgrade_pending(plan['attempt_id'])) == raw)
+    else:
+        require(not os.path.lexists(upgrade_pending(plan['attempt_id'])))
+    return plan, meta
+
+
+def make_upgrade_plan(package):
+    from . import mac_system_upgrade as supervisor
+    supervisor._entry()
+    meta = metadata(package)
+    previous = boot.decode(publication.read_record(cfg.CONTROL))
+    old = metadata(previous['package_sha256'])
+    require(old['context'] == meta['context'] and old['public'] == meta['public'])
+    now = int(time.time())
+    plan = dict(type=UPGRADE_TYPE, attempt_id=uuid.uuid4().hex,
+        created_at=now, expires_at=now+86400, code_manifest_sha256=supervisor.verify_code(),
+        package_sha256=package, contract=boot.decode(publication.read_record(cfg.CONTRACT)),
+        previous_control=previous, supervisor_sha256=cfg.digest(publication.read_record(service.CONTROL)),
+        **{k:meta[k] for k in ('context_sha256','publisher_sha256','registry_sha256')})
+    raw = boot.canonical(plan)
+    upgrade_validate(raw, cfg.digest(raw))
+    return plan
+
+
+def upgrade_reply(value, plan, meta, challenge):
+    expected = dict(type=UPGRADE_RESULT, challenge=challenge,
+        plan_sha256=cfg.digest(boot.canonical(plan)), package_sha256=plan['package_sha256'],
+        identity=boot._expected(meta['context']['uid'],meta['context']['gid']),
+        credential_changed=False, backup_authenticated=False)
+    require(isinstance(value,dict) and set(value) == set(expected) | {'proof'}
+            and all(value[k] == v and type(value[k]) is type(v) for k,v in expected.items()))
+    probe_proof(value['proof'], plan)
+    return value
+
+
+def upgrade_worker(meta, raw):
+    plan, current = upgrade_validate(raw, cfg.digest(raw), started=True)
+    require(meta == current); verify_policy()
+    challenge = uuid.uuid4().hex
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as channel:
+        endpoint = (plan['contract']['server_address'],445)
+        channel.settimeout(10); channel.connect(endpoint)
+        require(channel.getpeername() == endpoint and channel.fileno() >= 3)
+        channel.settimeout(None)
+        command = ['/usr/bin/sandbox-exec','-p',cfg.PROFILE,
+            str(meta['tree']/'runtime/bin/python3.12'),'-I','-B',str(meta['tree']/ENTRY),
+            '--phase',UPGRADE_PHASE,'--attempt',plan['attempt_id'],
+            '--plan-sha256',cfg.digest(raw),'--challenge',challenge,'--socket-fd',str(channel.fileno())]
+        process = subprocess.Popen(command,stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,cwd='/',user=meta['context']['uid'],
+            group=meta['context']['gid'],extra_groups=[],umask=0o077,close_fds=True,
+            pass_fds=(channel.fileno(),),env={'HOME':str(cfg.BASE/'home'),'PATH':'/usr/bin:/bin',
+                'LANG':'en_US.UTF-8','ERP_HOME_REHEARSAL':'1'})
+        interrupted = False
+        while True:
+            try: output,_ = process.communicate(); break
+            except KeyboardInterrupt: interrupted = True
+        require(not interrupted and process.returncode == 0)
+        return upgrade_reply(boot.decode(output),plan,meta,challenge)
+
+
+def apply_upgrade(raw, approved_sha):
+    """Root-only, maintenance-locked CAS. Does not stop ERP or touch its DB."""
+    from . import mac_system_upgrade as supervisor
+    supervisor._entry()
+    plan = upgrade_header(raw, approved_sha)
+    require(plan['code_manifest_sha256'] == supervisor.verify_code())
+    with supervisor._publication(), supervisor._paths() as paths, supervisor._locked(paths['operation']):
+        plan,meta = upgrade_validate(raw,approved_sha)
+        previous_state,_ = supervisor._state(paths['root'],499,499)
+        paths['check']()
+        boot._write(upgrade_pending(plan['attempt_id']),raw,mode=0o644)
+        publication.sync_directory(cfg.BASE)
+        result = upgrade_worker(meta,raw)
+        upgrade_validate(raw,approved_sha,started=True); paths['check']()
+        require(supervisor._state(paths['root'],499,499)[0] == previous_state)
+        replacement = boot.canonical(upgrade_control(plan))
+        verified = dict(type='tianming.mac-smb-stream-upgrade-verification.v1',
+            plan_sha256=approved_sha, previous_control_sha256=cfg.digest(boot.canonical(plan['previous_control'])),
+            replacement_control_sha256=cfg.digest(replacement), probe=result,
+            credential_changed=False, contract_changed=False, preferences_changed=False,
+            database_changed=False, backup_authenticated=False)
+        # This is precommit evidence only. Success requires the CAS and normal
+        # return; a verification file by itself never means the upgrade applied.
+        boot._write(cfg.BASE/('smb-stream-upgrade-'+plan['attempt_id']+'.verified.json'),
+                    boot.canonical(verified),mode=0o644)
+        publication.sync_directory(cfg.BASE)
+        upgrade_validate(raw,approved_sha,started=True); paths['check']()
+        supervisor._cas(paths['base'],cfg.CONTROL.name,boot.canonical(plan['previous_control']),
+                        replacement,'smb-stream-upgrade-'+plan['attempt_id']+'.control.pending')
+        require(publication.read_record(cfg.CONTROL) == replacement)
+        return {**verified, 'control_committed':True}
+
+
+def authenticated_upgrade(args, *, script, executable):
+    from app.core import mac_service_keychain as keychain
+    from . import mac_smb_stream_runtime as runtime, mac_published_runtime as published
+    require(sys.platform == 'darwin' and sys.flags.isolated and sys.dont_write_bytecode
+            and args.phase == UPGRADE_PHASE and token(args.attempt) and cfg.sha(args.plan_sha256)
+            and token(args.challenge) and type(args.socket_fd) is int and 3 <= args.socket_fd <= 2**31-1
+            and keychain.selected())
+    context = keychain.load_context()
+    require(boot._actual() == boot._expected(context['uid'],context['gid']))
+    raw = publication.read_record(upgrade_pending(args.attempt))
+    plan,meta = upgrade_validate(raw,args.plan_sha256,started=True)
+    require(plan['attempt_id'] == args.attempt and context == meta['context']
+            and Path(script).resolve() == meta['tree']/ENTRY
+            and Path(__file__).resolve() == meta['tree']/MODULE
+            and Path(executable).resolve() == meta['tree']/'runtime/bin/python3.12')
+    tree,_ = published.resolve(cfg.BASE/'instance',plan['package_sha256'],meta['public'],kind='migration')
+    require(tree == meta['tree']); runtime.denied_new_connection()
+    return plan,meta,raw
+
+
+def run_upgrade_probe(args, *, script, executable):
+    from app.core import mac_service_keychain as keychain
+    from .mac_smb_stream_transport import Channel
+    from .mac_smb_stream_session import open_share
+    from .mac_smb_stream_probe_v2 import check as check_nas
+    plan,meta,raw = authenticated_upgrade(args,script=script,executable=executable)
+    records = {upgrade_pending(args.attempt):raw,
+        cfg.CONTROL:boot.canonical(plan['previous_control']), cfg.CONTRACT:boot.canonical(plan['contract'])}
+    digests = {service.CONTROL:plan['supervisor_sha256'],
+        cfg.BASE/'published.json':plan['registry_sha256'], keychain.CONTEXT:plan['context_sha256'],
+        cfg.BASE/'publisher-public.pem':plan['publisher_sha256']}
+    def recheck():
+        # Full signed tree validation occurred before opening any secret. Root
+        # holds the publication lock; recheck immutable approval bytes at each
+        # boundary without hashing the 500MB package during the SMB handshake.
+        require(boot._actual() == boot._expected(meta['context']['uid'],meta['context']['gid'])
+                and keychain.load_context() == meta['context'])
+        require(all(publication.read_record(path) == value for path,value in records.items())
+                and all(cfg.digest(publication.read_record(path)) == value for path,value in digests.items()))
+    recheck()
+    store = keychain.ServiceStore(); require(store.value == meta['context'])
+    # No put/delete/prompt path: upgrade retains the initial account verbatim.
+    def secret():
+        recheck()
+        value = store.get(plan['previous_control']['credential_account'])
+        try:
+            require(isinstance(value,bytes) and 0 < len(value) <= 1024 and b'\0' not in value)
+            password = value.decode('utf-8','strict'); recheck()
+            return password
+        finally: value = None
+    channel = Channel(args.socket_fd,(plan['contract']['server_address'],445))
+    try:
+        with open_share(channel,plan['contract'],plan['context_sha256'],meta['context']['uid'],secret) as tree:
+            proof = check_nas(tree,plan['contract'],plan['attempt_id'],SIZE)
+        recheck()
+    finally: channel.close()
+    return upgrade_reply(dict(type=UPGRADE_RESULT,challenge=args.challenge,plan_sha256=args.plan_sha256,
+        package_sha256=plan['package_sha256'],identity=boot._actual(),proof=proof,
+        credential_changed=False,backup_authenticated=False),plan,meta,args.challenge)

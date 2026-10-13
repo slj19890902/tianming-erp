@@ -128,18 +128,14 @@ def _current_price(
     )
 
 
-def prepare_external_stock_purchase(
-    db: Session,
-    *,
-    product: Product,
-    finished_quantity: int,
-    purchase_quantity_override: Any | None = None,
-    physical_contract: dict | None = None,
-) -> dict[str, Any]:
+def external_stock_reference_contract(db: Session, *, product: Product) -> dict[str, Any]:
+    """Read the saved product/supplier/quote contract without buying anything.
+
+    Stocktakes can reuse its identity, date and unit checks without applying
+    minimum order quantities or creating a fictional purchase document.
+    """
     if product.supply_mode != "external_purchase":
         raise ExternalPurchaseContractError("当前常用箱不是纯外购产品")
-    if finished_quantity <= 0:
-        raise ExternalPurchaseContractError("建议备库数量必须大于 0")
     category_code = str(product.external_packaging_category_code or "").strip()
     specification_summary = str(
         product.external_packaging_specification_summary or ""
@@ -170,41 +166,6 @@ def prepare_external_stock_purchase(
         product.external_packaging_default_purchase_quantity_basis,
         label="供应商采购数量基数",
     )
-    if physical_contract is not None:
-        if (physical_contract['product_id'] != product.id
-                or physical_contract['customer_id'] != product.customer_id
-                or physical_contract['physical_unit'] != purchase_unit):
-            raise ExternalPurchaseContractError('补库实物单位或产品身份已变化，请先核对草稿', status_code=409)
-        order_basis = Decimal(physical_contract['customer_basis'])
-        purchase_basis = Decimal(physical_contract['physical_basis'])
-    recommended_purchase_quantity = (
-        Decimal(finished_quantity) * purchase_basis / order_basis
-    )
-    if (
-        recommended_purchase_quantity.quantize(SIX_PLACES)
-        != recommended_purchase_quantity
-    ):
-        raise ExternalPurchaseContractError(
-            "当前备库数量按常用箱比例换算后超过 6 位小数，请调整目标库存"
-        )
-    purchase_quantity = (
-        recommended_purchase_quantity.quantize(SIX_PLACES)
-        if purchase_quantity_override is None
-        else _positive_decimal(
-            purchase_quantity_override,
-            label="供应商采购数量",
-        ).quantize(SIX_PLACES)
-    )
-    converted_finished_quantity = int(
-        (purchase_quantity * order_basis / purchase_basis).to_integral_value(
-            rounding=ROUND_FLOOR
-        )
-    )
-    if converted_finished_quantity <= 0 and physical_contract is None:
-        raise ExternalPurchaseContractError(
-            "供应商采购数量按常用箱比例不足 1 个成品，请增加采购数量"
-        )
-
     snapshot = _default_candidate_snapshot(product)
     try:
         external_product_id = int(snapshot["external_product_id"])
@@ -255,6 +216,68 @@ def prepare_external_stock_purchase(
     )
     if price is None:
         raise ExternalPurchaseContractError(PACKAGING_MISSING_PRICE_MESSAGE)
+
+    return {
+        "product": product, "external_product": external_product,
+        "supplier": supplier, "price": price, "category_code": category_code,
+        "specification_summary": specification_summary, "specification_json": specification_json,
+        "purchase_unit": purchase_unit, "order_basis": order_basis, "purchase_basis": purchase_basis,
+    }
+
+
+def prepare_external_stock_purchase(
+    db: Session,
+    *,
+    product: Product,
+    finished_quantity: int,
+    purchase_quantity_override: Any | None = None,
+    physical_contract: dict | None = None,
+) -> dict[str, Any]:
+    if product.supply_mode != "external_purchase":
+        raise ExternalPurchaseContractError("当前常用箱不是纯外购产品")
+    if finished_quantity <= 0:
+        raise ExternalPurchaseContractError("建议备库数量必须大于 0")
+    contract = external_stock_reference_contract(db, product=product)
+    external_product, supplier, price = (contract[key] for key in ("external_product", "supplier", "price"))
+    category_code = contract["category_code"]
+    specification_json = contract["specification_json"]
+    specification_summary = contract["specification_summary"]
+    purchase_unit = contract["purchase_unit"]
+    order_basis, purchase_basis = contract["order_basis"], contract["purchase_basis"]
+    if physical_contract is not None:
+        if (physical_contract['product_id'] != product.id
+                or physical_contract['customer_id'] != product.customer_id
+                or physical_contract['physical_unit'] != purchase_unit):
+            raise ExternalPurchaseContractError('补库实物单位或产品身份已变化，请先核对草稿', status_code=409)
+        order_basis = Decimal(physical_contract['customer_basis'])
+        purchase_basis = Decimal(physical_contract['physical_basis'])
+    recommended_purchase_quantity = (
+        Decimal(finished_quantity) * purchase_basis / order_basis
+    )
+    if (
+        recommended_purchase_quantity.quantize(SIX_PLACES)
+        != recommended_purchase_quantity
+    ):
+        raise ExternalPurchaseContractError(
+            "当前备库数量按常用箱比例换算后超过 6 位小数，请调整目标库存"
+        )
+    purchase_quantity = (
+        recommended_purchase_quantity.quantize(SIX_PLACES)
+        if purchase_quantity_override is None
+        else _positive_decimal(
+            purchase_quantity_override,
+            label="供应商采购数量",
+        ).quantize(SIX_PLACES)
+    )
+    converted_finished_quantity = int(
+        (purchase_quantity * order_basis / purchase_basis).to_integral_value(
+            rounding=ROUND_FLOOR
+        )
+    )
+    if converted_finished_quantity <= 0 and physical_contract is None:
+        raise ExternalPurchaseContractError(
+            "供应商采购数量按常用箱比例不足 1 个成品，请增加采购数量"
+        )
 
     quantity_error = _purchase_quantity_error(
         purchase_quantity, unit=purchase_unit

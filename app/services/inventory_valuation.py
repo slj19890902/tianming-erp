@@ -77,7 +77,7 @@ def _external_cost(db, product):
         ~Item.purchase_order_id.in_(select(Cancel.purchase_order_id)),
     ).order_by(Item.confirmed_at.desc(), Item.id.desc()).limit(1)))
     if not rows:
-        return CostResolution(None, ["请维护本产品的供应商采购单价及采购片数/成品数量关系"])
+        return _external_quote_cost(db, product)
     row = rows[0]
     unit, numerator, denominator = (positive(row.unit_price),
         positive(row.purchase_quantity_basis_snapshot), positive(row.order_quantity_basis_snapshot))
@@ -97,6 +97,59 @@ def _external_cost(db, product):
         "price_version_id": row.price_version_id, "purchase_unit_price": str(row.unit_price),
         "purchase_quantity_basis": str(numerator), "order_quantity_basis": str(denominator),
         "formula": "含税采购单价 × 采购数量基数 / 成品数量基数",
+    }), [])
+
+
+def _external_quote_cost(db, product):
+    """Value existing physical goods from a quote, without inventing a purchase.
+
+    Use the published base quote. A stocktake quantity is not evidence of a
+    historical bulk discount, minimum purchase or supplier packaging multiple.
+    """
+    from app.core.time_contract import beijing_today
+    from app.services.external_packaging_stock_replenishment import external_stock_reference_contract
+    from app.services.external_packaging_purchase import ExternalPurchaseContractError, _resolved_purchase_pricing, _price_snapshot
+    try:
+        contract = external_stock_reference_contract(db, product=product)
+        price = contract['price']
+        if price.currency != 'CNY':
+            return CostResolution(None, ['请在外购包材报价维护人民币采购价；盘点不能自动换算外币'])
+        # A detached quote prevents costing from editing maintained price facts.
+        values = {column.name: getattr(price, column.name) for column in price.__table__.columns}
+        values['tier_prices_json'] = '[]'
+        pricing = _resolved_purchase_pricing(SimpleNamespace(
+            category_code=contract['category_code'], specification_json=contract['specification_json'],
+            purpose=product.product_name or product.product_code), SimpleNamespace(**values),
+            purchase_quantity=Decimal(1))
+    except ExternalPurchaseContractError as error:
+        return CostResolution(None, [error.message])
+    unit = positive(pricing['purchase_unit_price'])
+    if unit is None:
+        return CostResolution(None, ['请在外购包材报价维护有效采购单价'])
+    if price.tax_mode == 'tax_exclusive':
+        # Explicit per-unit tax is authoritative when provided by the quote.
+        explicit_tax = pricing['tax_amount_per_purchase_unit']
+        unit += Decimal(explicit_tax) if explicit_tax is not None else unit * Decimal(price.tax_rate)
+    elif price.tax_mode != 'tax_inclusive':
+        return CostResolution(None, ['外购包材报价缺少明确的含税/未税口径'])
+    numerator, denominator = contract['purchase_basis'], contract['order_basis']
+    cost = (unit * numerator / denominator).quantize(Q, rounding=ROUND_HALF_UP)
+    if cost <= 0:
+        return CostResolution(None, ['采购单价及换算比例折算后成本低于入库精度，请核对后重试'])
+    return CostResolution(InventoryCostEstimate(cost, Decimal(0), Decimal(0), CONFIRMED_SOURCE, {
+        'algorithm_version': ALGORITHM, 'currency': 'CNY', 'tax_included': True,
+        'estimate_basis': 'current_supplier_quote_reference', 'cost_label': '供应商报价参考成本',
+        'product_id': product.id, 'product_version': product.version,
+        'supplier_id': contract['supplier'].id, 'supplier_version': contract['supplier'].version,
+        'external_product_id': contract['external_product'].id,
+        'external_product_version': contract['external_product'].version,
+        'price_version_id': price.id, 'price_snapshot': _price_snapshot(price, quantity=Decimal(0)),
+        'quote_as_of': beijing_today().isoformat(), 'purchase_unit': contract['purchase_unit'],
+        'purchase_unit_price': str(pricing['purchase_unit_price']),
+        'tax_amount_per_purchase_unit': str(pricing['tax_amount_per_purchase_unit']) if pricing['tax_amount_per_purchase_unit'] is not None else None,
+        'purchase_quantity_basis': str(numerator), 'order_quantity_basis': str(denominator),
+        'pricing_conversion': pricing['conversion'], 'pricing_basis': 'base_quote_without_order_tiers',
+        'formula': '当前含税采购单位参考价 × 采购数量基数 / 成品数量基数',
     }), [])
 
 

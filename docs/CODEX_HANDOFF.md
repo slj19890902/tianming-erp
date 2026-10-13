@@ -6237,3 +6237,6 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 - 2026-10-12 MAC-SERVER-HANDOFF-20261010：工厂Mac临时LAN入口 http://192.168.3.102:8000 已经8项只读检查及老板异机登录确认。老板确认10月10日后无新增业务，不重复数据同步；home门禁保留，192.168.3.80/正式激活/后台NAS验收未完成，旧机不得清空。见任务卡末节和NAS回执20261012-Mac工厂局域网登录验收完成.md。
 
 - 2026-10-13 INVENTORY-CLOSED-LOOP v0.22.626候选：地图发布承接、普通订单冻结身份、逐子件草稿抵扣及搜索位置；head eq1013oi（上游ep1010md），新增order_stock_identity_v1 reader。真实隔离快照升/降/升保持323张表原字段及1104个索引/触发器，新事实有损回退保护通过；正式库/地图/服务未改变，尚未发布。详见docs/tasks/INVENTORY_CLOSED_LOOP_20261013.md。
+# 2026-10-13 Mac 正式接管完成（最新事实）
+
+MAC-SERVER-HANDOFF-20261010 实际激活回执已发布并 ready=true；当前运行源码 61e5fafb，包 13f44140，v0.22.625/ep1010md 无 DDL，系统 UID 499 在 factory 模式 running、manual_stop=false。LAN http://192.168.3.80:8000/ 健康/完整页面一致，手机 http://172.16.0.87:8000/mobile/ 本轮老板确认“正常”。完整真实挂载 NAS 备份上传确认及本地独立恢复通过，NAS 自动备份按要求暂停。Mac 独立发布已实用，旧 Windows 不再承担服务或 DPAPI 签名；未执行旧机清理和实体重启测试。实际回执见 `/Users/kimiyf/ERP-Migration/evidence/mac-final-activation-20261013/COMPLETED.md` 与 NAS `04_开发记录/任务回执/20261013-Mac正式激活完成与独立发布-61e5fafb.md`；旧临时 .3.102 与历史未激活记录仅作历史。

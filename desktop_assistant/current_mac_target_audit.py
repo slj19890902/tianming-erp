@@ -32,6 +32,28 @@ def _current():
     return datetime.now(timezone.utc)
 
 
+def _service_ready(context_sha256, *, mounted=False):
+    """Mounted auditing preserves the root owner's real timer pause."""
+    from . import mac_system_service as system
+    if not mounted:
+        _require(system.management_service_state() ==
+            dict(registered=True,enabled=True,scheduled_backups=True))
+        return None
+    pause = system.BASE/'automatic-backup-paused.json'
+    present = os.path.lexists(pause)
+    raw = system.publication.read_record(pause) if present else None
+    if raw is not None:
+        value = system.bootstrap.decode(raw)
+        _require(set(value) == {'type','context_sha256','paused'}
+            and value['type'] == 'tianming.automatic-backup-pause.v1'
+            and value['context_sha256'] == context_sha256 and value['paused'] is True)
+    _require(system.management_service_state() ==
+        dict(registered=True,enabled=True,scheduled_backups=not present)
+        and os.path.lexists(pause) == present)
+    if present:_require(system.publication.read_record(pause) == raw)
+    return raw
+
+
 def _stopped(manager, state, execution, *, mounted=False):
     from . import factory_target_audit as old
     _require(state.get('current') == execution and state.get('manual_stop') is True
@@ -195,7 +217,10 @@ def verified_current_mac_backup(execution_package_sha256, monitor_package_sha256
         control_raw, control = record(system.CONTROL, base_lease, uid=0, gid=None, mode=0o644)
         _require(control == system.record_for(monitor_meta, True))
         plist_raw = system._installed_plist(monitor_meta)
-        _require(system.management_service_state() == dict(registered=True, enabled=True, scheduled_backups=True))
+        service_pause = _service_ready(context_sha256,mounted=mounted)
+        if mounted and service_pause is not None:
+            pause_item = pin(system.BASE/'automatic-backup-paused.json',base_lease,uid=0,gid=None,mode=0o644)
+            _require(_read_complete(pause_item,contract.LIMIT) == service_pause)
         system.verify_keychain(context)
         state_raw, state = record(root/'state.json', folders['root'])
         manager = old._TargetReader(root, public)
@@ -336,7 +361,7 @@ def verified_current_mac_backup(execution_package_sha256, monitor_package_sha256
                 approved(identity)
             _require(system.checked_control(monitor_meta)[0] == control_raw
                 and system._installed_plist(monitor_meta) == plist_raw
-                and system.management_service_state() == dict(registered=True, enabled=True, scheduled_backups=True))
+                and _service_ready(context_sha256,mounted=mounted) == service_pause)
             transport.check()
             if not mounted:
                 fresh_binding = stream_runtime.load_binding()

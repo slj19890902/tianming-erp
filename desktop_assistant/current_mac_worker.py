@@ -114,8 +114,8 @@ def authenticated(request,plan,*,script,executable):
         and boot.digest(control)==plan['system_control_sha256']
         and boot.digest(plist)==plan['system_plist_sha256'])
     for parent in (system.PLISTS,*system.PLISTS.parents):boot.protected(parent,directory=True)
-    require(system.publication.read_record(system.PLIST)==plist
-        and system.management_service_state()=={'registered':True,'enabled':True,'scheduled_backups':True})
+    require(system.publication.read_record(system.PLIST)==plist)
+    audit._service_ready(plan['context_sha256'],mounted=plan['type']==c.MOUNTED_PLAN)
     if plan['type']==c.MOUNTED_PLAN:
         from desktop_assistant import mounted_nas_proof as mounted
         require(type(caps.get(mounted.CAPABILITY)) is int and caps[mounted.CAPABILITY]==1
@@ -228,10 +228,14 @@ def run(request,*,script,executable,smb_broker_fd=None,mounted_fd=None):
     request=c.decode(c.canonical(request))
     with _plan(request) as (plan,plan_check,read):
         context,public,roles=authenticated(request,plan,script=script,executable=executable)
+        service_pause=(audit._service_ready(plan['context_sha256'],mounted=True)
+            if plan['type']==c.MOUNTED_PLAN else None)
         def check():
             plan_check()
             actual=authenticated(request,plan,script=script,executable=executable)
             require(actual[:2]==(context,public))
+            if plan['type']==c.MOUNTED_PLAN:
+                require(audit._service_ready(plan['context_sha256'],mounted=True)==service_pause)
         network_raw=read('network.json',plan['network_file_sha256'])
         network=factory_network.validate(c.decode(network_raw))
         require(v3.digest(network)==plan['network_sha256'])

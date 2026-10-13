@@ -72,6 +72,13 @@ def activate(attempt_id,preparation_raw,network_raw,restore_attempt,*,signer,ver
             item = stack.enter_context(root.Pin(path,mode=0o644,parent=base));raw = item.read()
             pins.append((item,raw));return raw
         mac_public = public(trust.MAC_PUBLIC);trust_raw = public(trust.RECORD)
+        pause_path = BASE/'automatic-backup-paused.json'
+        pause_raw = public(pause_path) if os.path.lexists(pause_path) else None
+        if pause_raw is not None:
+            pause = c.decode(pause_raw)
+            c.require(set(pause) == {'type','context_sha256','paused'}
+                and pause['type'] == 'tianming.automatic-backup-pause.v1'
+                and pause['context_sha256'] == prep['context_sha256'] and pause['paused'] is True)
         authority = trust.read_authority(expected_context_sha256=prep['context_sha256'],
             expected_legacy_anchor_sha256=prep['publisher_sha256'],
             expected_mac_publisher_sha256=trust.public_fingerprint(mac_public))
@@ -95,6 +102,7 @@ def activate(attempt_id,preparation_raw,network_raw,restore_attempt,*,signer,ver
         def check():
             base.check();instance.check();control.check();lock.check()
             c.require(verify_code() == approved_code and lock.read() == b'0')
+            c.require(os.path.lexists(pause_path) == (pause_raw is not None))
             if body is not None:c.require_install_window(body,now=datetime.now(timezone.utc))
             root._no_pending(instance);_pending(base,pending_name)
             state_raw,state = root._state(instance,499,499)

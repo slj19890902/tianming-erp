@@ -40,6 +40,10 @@ def make_package(path, key, *, metadata=None, additions=None, signature=None):
 
 @pytest.fixture
 def case(tmp_path,monkeypatch):
+    # This fixture models the legacy-only publication contract. It must never
+    # read an installed Mac-authority sidecar after a synthetic bad signature.
+    from desktop_assistant import mac_publisher_trust
+    monkeypatch.setattr(mac_publisher_trust,'_managed',lambda:False)
     root = tmp_path.resolve()
     base = root/'system';base.mkdir()
     for folder in ('instance','instance/shared',*(f'instance/shared/{n}' for n in m.MANAGED.values())):

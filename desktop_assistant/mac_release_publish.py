@@ -388,12 +388,10 @@ def worker(request):
         if digest(stream) != plan['package_sha256']: raise ValueError('签名原包摘要变化')
         raw, _, _ = inspect(stream)
         stream.seek(0)
-        with zipfile.ZipFile(stream) as archive: signature = archive.read('manifest.sig')
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-    key = serialization.load_pem_public_key(plan['public_key'].encode('ascii'))
-    if not isinstance(key, Ed25519PublicKey): raise ValueError('不是Ed25519发布身份')
-    key.verify(signature, raw)
+        with zipfile.ZipFile(stream) as archive:
+            from desktop_assistant.mac_publisher_trust import verify_manifest
+            verification=verify_manifest(archive,raw,archive.read('manifest.sig'),plan['public_key'].encode('ascii'))
+            verification['recheck']()
     if bootstrap.digest(raw) != plan['manifest_sha256']: raise ValueError('签名清单不符')
     for relative, folder in MANAGED.items():
         link = package.parent/'server'/relative

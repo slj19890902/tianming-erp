@@ -97,13 +97,12 @@ def safe_name(name: str) -> str:
 def signed_release_manifest(archive: Path, public_key: bytes) -> dict:
     with zipfile.ZipFile(archive) as zipped:
         raw = zipped.read('manifest.json')
-        key = serialization.load_pem_public_key(public_key)
-        if not isinstance(key, Ed25519PublicKey):
-            raise ValueError('发布公钥类型错误')
-        key.verify(zipped.read('manifest.sig'), raw)
+        from desktop_assistant.mac_publisher_trust import verify_manifest
+        verification = verify_manifest(zipped,raw,zipped.read('manifest.sig'),public_key)
         manifest = json.loads(raw)
         if manifest.get('type') != 'tianming.release.v1':
             raise ValueError('不是程序发布包')
+        verification['recheck']()
         return manifest
 
 
@@ -122,10 +121,8 @@ def extract_verified(archive: Path, target: Path, public_key: bytes | None = Non
             raise ValueError('恢复包超过100GB，请使用专项恢复流程')
         manifest_bytes = zipped.read('manifest.json')
         if public_key is not None:
-            key = serialization.load_pem_public_key(public_key)
-            if not isinstance(key, Ed25519PublicKey):
-                raise ValueError('发布公钥类型错误')
-            key.verify(zipped.read('manifest.sig'), manifest_bytes)
+            from desktop_assistant.mac_publisher_trust import verify_manifest
+            verification = verify_manifest(zipped,manifest_bytes,zipped.read('manifest.sig'),public_key)
         manifest = json.loads(manifest_bytes)
         files = manifest['files']
         expected = set(files) | {'manifest.json'} | ({'manifest.sig'} if public_key is not None else set())
@@ -148,6 +145,7 @@ def extract_verified(archive: Path, target: Path, public_key: bytes | None = Non
                 raise ValueError('文件校验失败：' + name)
             if name in executable_files and os.name != 'nt':
                 destination.chmod(0o755)
+        if public_key is not None: verification['recheck']()
         write_json(target / 'manifest.json', manifest)
         return manifest
 

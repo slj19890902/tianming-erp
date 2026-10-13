@@ -41,8 +41,8 @@ def inspect_package(package, public_bytes=None):
         files = manifest['files']
         expected = set(files) | {'manifest.json'}
         if public_bytes is not None:
-            key, _ = public_identity(public_bytes)
-            key.verify(archive.read('manifest.sig'), raw)
+            from desktop_assistant.mac_publisher_trust import verify_manifest
+            verification = verify_manifest(archive,raw,archive.read('manifest.sig'),public_bytes)
             expected.add('manifest.sig')
         if set(names) != expected:
             raise ValueError('发布包文件清单不一致')
@@ -52,6 +52,7 @@ def inspect_package(package, public_bytes=None):
                 actual = hashlib.file_digest(stream, 'sha256').hexdigest()
             if actual != expected_hash:
                 raise ValueError('发布文件哈希不一致：' + name)
+        if public_bytes is not None: verification['recheck']()
     return raw, manifest
 
 

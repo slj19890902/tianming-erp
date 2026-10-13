@@ -27,7 +27,7 @@ LIMIT = 65536
 EMPTY_PENDING_MANIFESTS = frozenset({'f7aa979050e0cd21086a8d7dd6a63576ef7e526b9efa7a685d64023edc46ee19'})
 FILES = ('app/__init__.py', 'app/core/__init__.py', 'app/core/mac_keychain.py',
          'app/core/mac_service_keychain.py', 'desktop_assistant/__init__.py',
-         'desktop_assistant/mac_service_identity.py', 'desktop_assistant/mac_keychain_install.py',
+         'desktop_assistant/mac_publisher_trust.py', 'desktop_assistant/mac_service_identity.py', 'desktop_assistant/mac_keychain_install.py',
          'desktop_assistant/mac_release_publish.py', 'desktop_assistant/mac_system_service.py',
          'desktop_assistant/mac_archive_contract.py', 'desktop_assistant/mac_archive_install.py',
          'desktop_assistant/mac_mount.py', 'desktop_assistant/factory_target_contract.py',

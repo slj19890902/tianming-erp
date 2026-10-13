@@ -37,12 +37,18 @@ def require_execution(manifest, *, activation_raw=None):
     if not EXECUTION_FILES <= manifest.get('files', {}).keys():
         raise ValueError('正式运行入口不完整')
     if activation_raw is not None:
-        _, _, current = _activation(activation_raw)
+        value, _, current = _activation(activation_raw)
         if current:
             capability = manifest.get('runtime_capabilities', {}).get(CURRENT_MAC_CAPABILITY)
             if (type(capability) is not int or capability != 1
                     or not CURRENT_MAC_FILES <= manifest.get('files', {}).keys()):
                 raise ValueError('程序缺少当前Mac业务的正式运行协议')
+            from desktop_assistant import owner_activation_contract as owner
+            if value['type'] == owner.TYPE:
+                capabilities = manifest.get('runtime_capabilities', {})
+                if (type(capabilities.get(owner.CAPABILITY)) is not int or capabilities[owner.CAPABILITY] != 1
+                        or not owner.FILES <= manifest.get('files', {}).keys()):
+                    raise ValueError('程序缺少负责人声明的Mac正式运行协议')
 
 
 def _activation(raw):
@@ -50,6 +56,10 @@ def _activation(raw):
     if value.get('type') == contract.TYPE:
         return value, contract.validate_record(value), False
     from desktop_assistant import current_mac_cutover_contract as current
+    from desktop_assistant import owner_activation_contract as owner
+    if value.get('type') == owner.TYPE:
+        value = owner.decode(raw)
+        return value, owner.validate_record(value), True
     if value.get('type') != current.TYPE:
         raise ValueError('未知正式激活记录类型')
     value = current.decode(raw)
@@ -135,7 +145,8 @@ def _configuration(root, package, public, *, authenticate_history=False):
     active = published.BASE/contract.NAME
     if not os.path.lexists(active):
         from desktop_assistant import current_mac_publication as gate
-        if any(os.path.lexists(published.BASE/name) for name in (gate.NAME,gate.FAILED)):
+        from desktop_assistant import owner_activation_contract as owner
+        if any(os.path.lexists(published.BASE/name) for name in (gate.NAME,gate.FAILED,owner.GATE_NAME,owner.FAILED)):
             raise ValueError('当前Mac接管事务未完成，拒绝回退为家庭模式')
         return None
     from desktop_assistant import mac_service_manage as manage
@@ -148,11 +159,17 @@ def _configuration(root, package, public, *, authenticate_history=False):
             limit=manage.STATE_LIMIT if path==root/'state.json' else contract.LIMIT
             return _read_complete(item,limit)
         raw=read(active);value,body,current=_activation(raw)
+        from desktop_assistant import owner_activation_contract as owner
+        owner_mode = value['type'] == owner.TYPE
         if current:
-            from desktop_assistant import current_mac_publication as gate
-            if os.path.lexists(published.BASE/gate.FAILED):
+            if owner_mode:
+                gate_name,gate_failed,gate_validate = owner.GATE_NAME,owner.FAILED,owner.validate_gate
+            else:
+                from desktop_assistant import current_mac_publication as gate
+                gate_name,gate_failed,gate_validate = gate.NAME,gate.FAILED,gate.validate
+            if os.path.lexists(published.BASE/gate_failed):
                 raise ValueError('当前Mac接管发布失败记录仍存在，拒绝正式运行')
-            gate.validate(contract.decode(read(published.BASE/gate.NAME)),activation_raw=raw,ready=True)
+            gate_validate(contract.decode(read(published.BASE/gate_name)),activation_raw=raw,ready=True)
         context_raw=read(keychain.CONTEXT);registry=published._record(read(published.REGISTRY));pinned=read(published.PUBLIC)
         request=value['request'];context_sha=boot.digest(context_raw)
         # The saved registry SHA describes the activation transaction. Approved
@@ -171,8 +188,24 @@ def _configuration(root, package, public, *, authenticate_history=False):
                 or request['target']!=protocol.local_target(root,context['installation_id'])):
             raise ValueError('正式激活与本机、身份、程序批准或发布公钥不符')
         if current:
-            from desktop_assistant import current_mac_cutover as codec
-            codec.verify_authorization(value['authorization'].encode(), pinned, request)
+            if owner_mode:
+                from desktop_assistant import owner_activation as codec,mac_publisher_trust as trust,mounted_nas_proof as mounted
+                mac_public = read(trust.MAC_PUBLIC);trust_raw = read(trust.RECORD)
+                authority = trust.read_authority(expected_context_sha256=context_sha,
+                    expected_legacy_anchor_sha256=request['publisher_sha256'],
+                    expected_mac_publisher_sha256=request['mac_publisher_sha256'])
+                if authority['mac_public'] != mac_public or authority['raw'] != trust_raw:
+                    raise ValueError('Mac本机发布身份读取期间变化')
+                codec.verify_authorization(value['authorization'].encode(),mac_public,request)
+                bound = mounted.load()
+                for path,record_raw in bound['raw'].items():
+                    if read(path) != record_raw:raise ValueError('挂载备份审计记录读取期间变化')
+                attempt = bound['contract']['checkpoint_attempt_id']
+                if attempt is None:raise ValueError('负责人激活必须使用当前完整checkpoint')
+                codec.verify_mount_authority(body['preparation'],bound,mounted.checkpoint_result(attempt))
+            else:
+                from desktop_assistant import current_mac_cutover as codec
+                codec.verify_authorization(value['authorization'].encode(), pinned, request)
         else:
             protocol.verify_authorization(value['authorization'].encode(),pinned,request)
         # activated_at was inside the signed installation window. Do not apply
@@ -200,7 +233,7 @@ def _configuration(root, package, public, *, authenticate_history=False):
         if state.get('current') != package:
             raise ValueError('正式实例当前程序身份不符')
         for item in held:item.check()
-        if current and os.path.lexists(published.BASE/gate.FAILED):
+        if current and os.path.lexists(published.BASE/gate_failed):
             raise ValueError('当前Mac接管发布失败记录仍存在，拒绝正式运行')
         return {'network':dict(value['network']),'activation_sha256':boot.digest(raw),
                 'package_sha256':package,'request_id':request['request_id']}

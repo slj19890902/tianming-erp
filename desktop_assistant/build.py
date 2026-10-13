@@ -91,6 +91,9 @@ def current_mac_capabilities(sources, *, stream_enabled):
     if type(stream_enabled) is not bool or not required <= sources.keys():
         raise ValueError('当前Mac接管协议源码不完整，不能声明能力')
     result = {worker.CAPABILITY: 1, audit.CAPABILITY: 1, CURRENT_MAC_CAPABILITY: 1, mounted.CAPABILITY: 1}
+    from desktop_assistant import owner_activation_contract as owner
+    if owner.FILES <= sources.keys():
+        result[owner.CAPABILITY] = 1
     if stream_enabled:
         from desktop_assistant.mac_smb_stream_runtime_contract import FILES
         if not FILES <= sources.keys():

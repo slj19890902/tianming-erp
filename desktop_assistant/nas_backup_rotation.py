@@ -140,7 +140,11 @@ def capture_verified_recovery(restored, receipt, receipt_sha, downloaded, raw_zi
     require(credentials.get('status') == 'restored' and manifest.get('credential_transfer') == 'credentials.tmencrypted',
             'actual credentials not restored')
     shared = {name: files[name] for name in observed}
-    map_names = [name for name in shared if name.startswith('shared/factory_twin_data/') or '/maps/' in name]
+    # Runtime/draft/history maps live under managed data; factory_twin_data
+    # is the separate legacy twin database directory, not the canonical layout.
+    map_prefixes=('shared/data/layout_runtime/','shared/data/layout_drafts/',
+        'shared/data/layout_backups/','shared/factory_twin_data/')
+    map_names = [name for name in shared if name.startswith(map_prefixes) or '/maps/' in name]
     report = {'type': RECOVERY, 'backup_sha256': receipt['sha256'], 'receipt_sha256': receipt_sha,
               'contract_sha256': receipt['contract_sha256'], 'raw_sha256': receipt['raw_sha256'],
               'manifest_sha256': digest(manifest), 'source_time': manifest['created'],

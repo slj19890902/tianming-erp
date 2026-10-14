@@ -16,11 +16,12 @@ from tests.desktop_assistant.test_credential_transfer import PASSWORD
 from tests.desktop_assistant import test_recovery as recovery_fixtures
 
 
-def restore_case(case):
+def restore_case(case, *, legacy_map=True):
     shared = case.manager.root / 'shared'
-    maps = shared / 'factory_twin_data'
-    maps.mkdir(exist_ok=True)
-    write_json(maps / 'layout.json', {'revision':'synthetic-map-v1','areas':[]})
+    if legacy_map:
+        maps = shared / 'factory_twin_data'
+        maps.mkdir(exist_ok=True)
+        write_json(maps / 'layout.json', {'revision':'synthetic-map-v1','areas':[]})
     source_attachment = shared / 'data/drawing.pdf'
     original_attachment = sha(source_attachment)
     backup = case.manager.backup(PASSWORD, case.nas)
@@ -95,3 +96,33 @@ def test_actual_restore_large_manifest_keeps_protected_report_compact(recovery_c
     report = assert_complete_report(case)
     assert report['shared']['source_count'] >= 2050
     assert len(json.dumps(report, sort_keys=True).encode()) < 65536
+
+
+CANONICAL_MAP_FILES=('data/layout_runtime/twin_layout_v1.json',
+    'data/layout_drafts/twin_layout_v1.draft.json',
+    'data/layout_backups/twin_layout_v1.previous.json')
+
+
+def canonical_restore(case):
+    for name in CANONICAL_MAP_FILES:
+        path=case.manager.root/'shared'/name;path.parent.mkdir(parents=True,exist_ok=True)
+        write_json(path,{'revision':'synthetic-canonical-map','areas':[]})
+    return restore_case(case,legacy_map=False)
+
+
+def test_canonical_maps_without_legacy_directory_have_exact_authenticated_coverage(recovery_case,host_store):
+    case=canonical_restore(recovery_case)
+    report=rotation.capture_verified_recovery(*case[:5])
+    assert report['maps']['source_count']==report['maps']['restored_count']==3
+    expected={'shared/'+name:sha(case[0].root/'shared'/name) for name in CANONICAL_MAP_FILES}
+    assert report['maps']['source_sha256']==report['maps']['restored_sha256']==rotation.digest(expected)
+    assert not (case[0].root/'shared/factory_twin_data').exists()
+    assert rotation.validate_recovery(report,case[1],case[2])==case[0].state['source_time']
+
+
+@pytest.mark.parametrize('name',CANONICAL_MAP_FILES)
+def test_canonical_map_content_change_still_rejects_recovery(recovery_case,host_store,name):
+    case=canonical_restore(recovery_case)
+    (case[0].root/'shared'/name).write_bytes(b'changed canonical map')
+    with pytest.raises(ValueError,match='digest/count coverage incomplete'):
+        rotation.capture_verified_recovery(*case[:5])

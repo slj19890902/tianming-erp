@@ -85,6 +85,57 @@ class CompletionResultRequest(BaseModel):
     expected_actor_id: int | None = Field(default=None,gt=0,strict=True)
 
 
+class FinishOutputRequest(BaseModel):
+    operation_key: str = Field(min_length=8,max_length=70)
+    job_id: int = Field(gt=0,strict=True)
+    job_version: int = Field(gt=0,strict=True)
+    output_lot_id: int = Field(gt=0,strict=True)
+    output_version: int = Field(gt=0,strict=True)
+    quantity: int = Field(gt=0,strict=True)
+    location_id: int = Field(gt=0,strict=True)
+    layout_version: int = Field(gt=0,strict=True)
+    confirm_finished: bool
+
+
+class FinishOutputResultRequest(BaseModel):
+    original_request: FinishOutputRequest
+
+
+@router.post('/stock-preparation/{receipt_id}/finish-output')
+def finish_preparation_output(receipt_id:int,body:FinishOutputRequest,
+                              db:Session=Depends(get_db),user:User=Depends(PermissionChecker('warehouse.execute'))):
+    from app.services.stock_preparation_finish import finish_output
+    try:
+        with db.no_autoflush:
+            _,item,_=service.source(db,receipt_id)
+            require_customer_access(item.customer_id,user,db)
+        with atomic_bom(db):
+            result=finish_output(db,receipt_id=receipt_id,payload=body.model_dump(),actor=user)
+        db.commit()
+        return result
+    except WarehouseInventoryError as exc:
+        db.rollback()
+        raise HTTPException(exc.status_code,str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post('/stock-preparation/{receipt_id}/finish-output-result')
+def finish_preparation_output_result(receipt_id:int,body:FinishOutputResultRequest,response:Response,
+                                     db:Session=Depends(get_db),user:User=Depends(PermissionChecker('warehouse.execute'))):
+    from app.services.stock_preparation_finish import checked_command
+    response.headers['Cache-Control']='no-store'
+    try:
+        with db.no_autoflush:
+            _,item,_=service.source(db,receipt_id)
+            require_customer_access(item.customer_id,user,db)
+            result=checked_command(db,receipt_id,body.original_request.model_dump(),user)
+            return {'status':'completed' if result else 'not_found','result':result}
+    except WarehouseInventoryError as exc:
+        raise HTTPException(exc.status_code,str(exc)) from exc
+
+
 def _completion_headers():
     return {'Cache-Control':'no-store','X-Production-Completion-Preserve':'1'}
 

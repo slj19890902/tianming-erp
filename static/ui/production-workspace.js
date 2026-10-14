@@ -126,12 +126,12 @@
      try{await axios.post('/api/production/stock-preparation/completions/'+encodeURIComponent(row.preparation_key)+'/revert',payload);if(auth!==this.authGeneration)return;await this.loadProductionHistory();this.showToast('备库误报已撤销，投入材料恢复待安排');}
      catch(e){if(auth===this.authGeneration)this.showToast('撤销失败：'+this.errorMessage(e),true);}finally{if(auth===this.authGeneration)this.productionBusy=false;}
     },
-    async openStockDialog(row,{completion=false,groupCompletion=false,assemblyCompletion=false}={}){this.reloadStockCompletionRecovery();if(['group_job','group_stock'].includes(row.entry_type)||groupCompletion){if(!this.reloadStockGroupRecovery){this.stockPrepError='整组恢复组件未加载，请刷新页面后再操作';return;}this.reloadStockGroupRecovery();}if(row.entry_type==='group_stock'&&!this.reloadStockAssembleRecovery){this.stockPrepError='组套恢复组件未加载，请刷新页面后再操作';return;}this.reloadStockAssembleRecovery?.();this.stockPrepError='';this.stockPrepDialog={row,completionActor:row.entry_type==='single_job'||completion?this.user?.id:null,groupCompletionActor:['group_job','group_stock'].includes(row.entry_type)||groupCompletion?this.user?.id:null,loading:true,error:'',sets:row.task?.remaining_sets||row.task?.group?.sets||row.plan?.available_sets||1,disposition:row.entry_type==='group_stock'&&row.task?.jobs?.some(j=>j.output_kind!=='semi')?'finished':'semi',keepKind:row.keep||'keep_raw',location:null,preview:null,jobs:[],job:row.job?{...row.job,_actual:row.job.expected_output}:null,inputQuantity:row.job?.input_quantity||row.available||0,actualOutput:row.processing_expected_output||0,quantity:row.available||0,view:'action',page:1,sources:[row]};
+    async openStockDialog(row,{completion=false,groupCompletion=false,assemblyCompletion=false}={}){this.reloadStockCompletionRecovery();if(['group_job','group_stock'].includes(row.entry_type)||groupCompletion){if(!this.reloadStockGroupRecovery){this.stockPrepError='整组恢复组件未加载，请刷新页面后再操作';return;}this.reloadStockGroupRecovery();}if(row.entry_type==='group_stock'&&!this.reloadStockAssembleRecovery){this.stockPrepError='组套恢复组件未加载，请刷新页面后再操作';return;}this.reloadStockAssembleRecovery?.();this.stockPrepError='';this.stockPrepDialog={row,completionActor:row.entry_type==='single_job'||completion?this.user?.id:null,groupCompletionActor:['group_job','group_stock'].includes(row.entry_type)||groupCompletion?this.user?.id:null,loading:true,error:'',sets:row.task?.remaining_sets||row.task?.group?.sets||row.plan?.available_sets||1,disposition:row.entry_type==='group_stock'&&row.task?.jobs?.some(j=>j.output_kind!=='semi')?'finished':'semi',keepKind:row.keep||'keep_raw',location:null,preview:null,jobs:[],job:row.job?{...row.job,_actual:row.job.expected_output}:null,inputQuantity:row.job?.input_quantity||row.available||0,actualOutput:row.processing_expected_output||0,quantity:row.available||0,confirmFinished:false,view:'action',page:1,sources:[row]};
      const dialog=this.stockPrepDialog;
      try {await this.ensureStockLocations({completion:completion||row.entry_type==='single_job',groupCompletion:groupCompletion||['group_job','group_stock'].includes(row.entry_type),assemblyCompletion:assemblyCompletion||row.entry_type==='group_stock'});if(this.stockPrepDialog!==dialog)return;dialog.location=this.stockLastLocation();
       if(row.entry_type==='kit')await this.previewStockGroup();
       if(['group_job','group_stock'].includes(row.entry_type)){dialog.location=dialog.location||row.task.group.planned_location?.id||null;dialog.jobs=row.task.jobs.map(j=>({...j,_actual:j.expected_output,_location:null}));}
-      if(['single_job','single_output'].includes(row.entry_type))dialog.location=row.job.output_location_id||dialog.location||row.job.product.planned_location?.id||null;
+      if(['single_job','single_output','single_finish'].includes(row.entry_type))dialog.location=row.job.output_location_id||dialog.location||row.job.product.planned_location?.id||null;
       this.restoreStockCompletionDialog(dialog);
       if(['group_job','group_stock'].includes(row.entry_type))this.restoreStockDialogRecovery(dialog);
      }catch(e){if(this.stockPrepDialog===dialog)dialog.error=this.errorMessage(e);}finally{dialog.loading=false;if(this.stockPrepDialog===dialog)this.$nextTick(()=>document.querySelector('.stock-production-dialog .toolbar button')?.focus());}
@@ -144,6 +144,21 @@
     async previewStockGroup(){const d=this.stockPrepDialog;if(!d||!Number.isInteger(Number(d.sets))||d.sets<=0)return;const sequence=++this.stockDialogSequence;d.loading=true;d.error='';d.preview=null;
      try {const {data}=await axios.get('/api/production/stock-preparation/groups/'+d.row.plan.recipe.parent_id+'/preview',{params:{sets:d.sets}});if(this.stockPrepDialog===d&&sequence===this.stockDialogSequence)d.preview=data;}
      catch(e){if(this.stockPrepDialog===d&&sequence===this.stockDialogSequence)d.error=this.errorMessage(e);}finally{if(this.stockPrepDialog===d&&sequence===this.stockDialogSequence)d.loading=false;}
+    },
+    async finishStockOutput(){
+     const d=this.stockPrepDialog;if(!d||d.loading||d.row.entry_type!=='single_finish'||!this.hasPermission('warehouse.execute'))return;
+     const job=d.row.job,quantity=Number(d.quantity),location=this.stockLocations.find(l=>l.id===Number(d.location));
+     if(!Number.isInteger(quantity)||quantity<1||quantity>job.output_available||!location||!d.confirmFinished){d.error='请核对实际成品数量、可用库存及真实货位，并确认实物已完工';return;}
+     const payload={job_id:job.id,job_version:job.version,output_lot_id:job.output_lot_id,output_version:job.output_version,quantity,location_id:location.id,layout_version:location.layout_version,confirm_finished:true};
+     const signature=JSON.stringify(payload);if(d.finishAttempt?.signature!==signature)d.finishAttempt={signature,key:this.stockOperationKey()};payload.operation_key=d.finishAttempt.key;
+     const url='/api/production/stock-preparation/'+job.receipt_item_id+'/finish-output',auth=this.authGeneration;
+     d.loading=true;d.error='';
+     try{await axios.post(url,payload);if(auth!==this.authGeneration)return;this.stockPrepDialog=null;this.rememberStockLocation(location.id);await this.loadStockPreparation(this.stockPrepPage);this.showToast('已转成品；原半成品按本次数量扣减');}
+     catch(e){
+      if(auth!==this.authGeneration)return;
+      try{const {data}=await axios.post(url+'-result',{original_request:payload});if(data.status==='completed'){this.stockPrepDialog=null;await this.loadStockPreparation(this.stockPrepPage);this.showToast('已查到原转换结果，成品已入库');return;}d.error=this.errorMessage(e);}
+      catch(checkError){d.error='原转换结果暂无法核对；请保留当前内容并用同一请求重试，不要另建一笔。'+this.errorMessage(checkError);}
+     }finally{d.loading=false;}
     },
     async saveStockDialog(action){const d=this.stockPrepDialog;if(!d||d.loading)return;d.error='';if(this.stockPrepBusy){d.error='列表正在刷新，请稍后重试';return;}
      if(['group_job','group_stock'].includes(d.row.entry_type)){if(!this.reloadStockGroupRecovery){d.error='整组恢复组件未加载，请刷新页面后再操作';return;}this.reloadStockGroupRecovery();this.reloadStockAssembleRecovery?.();if(this.groupStockLocked(d.row)){d.error=this.stockGroupError||'原整组结果待核对，请先查原结果';return;}}

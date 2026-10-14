@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.632"
-APP_VERSION_NAME = "研光已加工半成品补库识别"
+APP_VERSION = "v0.22.633"
+APP_VERSION_NAME = "已加工半成品员工转成品"
 APP_BUILD_DATE = "2026-10-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6139,3 +6139,15 @@ APP_VERIFICATION_STEPS = [
     "点击已加工半成品进入产品库存位置，确认原收料仍为 2500 张、半成品 10000 片、成品库存仍为 3200 只；勿重复盘点入库。",
 ]
 APP_CHANGELOG = [*(f"v0.22.632：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "已完成备库加工的单件半成品，员工可在生产历史中按实际数量转成品，选择真实货位并确认全部工序已完成；可分批转换，余数留在原批次。",
+    "转成品在同一事务扣半成品、生成成品批次与双向流水，继承原批次成本并保留审计；重复请求、版本过期、预占数量、身份不符或无权限均拒绝重复入账。",
+    "本版不自动转换研光 80011965 的正式 10000 片，由有权限的员工核对实物后操作；无数据库结构迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "以有仓库执行权限的员工账号进入生产历史，找到研光 80011965 的备库加工记录，确认可见‘转成品’和半成品来源批次可用数。",
+    "确认实物、填写本次转换数量与实际成品货位后保存；核对原半成品减少相同数量、成品增加相同数量，库存流水及成本来源可追溯。",
+    "重新打开记录确认余数仍可继续转换，已预占的半成品不得被扣；刷新首页确认成品库存预警按实际成品数量更新。",
+]
+APP_CHANGELOG = [*(f"v0.22.633：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -107,7 +107,7 @@ def track_entries(session, _context):
     from app.models.warehouse_inventory import InventoryLot
     ids = session.info.setdefault('new_inventory_entry_ids', set())
     for row in session.new:
-        if isinstance(row, InventoryLot) and (row.source_type not in {'transfer', 'delivery_return'} or row.source_ref_type in {'bom_assembly', 'subkit_conversion', 'stock_preparation_assembly', 'physical_kit_correction_20261014'}):
+        if isinstance(row, InventoryLot) and (row.source_type not in {'transfer', 'delivery_return'} or row.source_ref_type in {'bom_assembly', 'subkit_conversion', 'stock_preparation_assembly', 'stock_preparation_finish', 'physical_kit_correction_20261014'}):
             ids.add(row.id)
 
 

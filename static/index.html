@@ -25,7 +25,7 @@
     <script src="/static/ui/stock-replenishment-save-recovery.js?v=f7c4b6c25c37"></script>
     <script src="/static/ui/delivery-dispatch-recovery.js?v=ca08d87efb56"></script>
     <script src="/static/ui/stock-preparation-assembly-recovery.js?v=a11f3ee39242"></script>
-    <script src="/static/ui/production-workspace.js?v=fe58b8dee03a"></script>
+    <script src="/static/ui/production-workspace.js?v=finish-output-20261014"></script>
     <script src="/static/ui/production-desk.js?v=round-experience-d2"></script>
     <link rel="stylesheet" href="/static/ui/production-desk.css?v=20260922-map-return">
     <script src="/static/ui/finance-workspace.js?v=cd4faaf69c46"></script>
@@ -4906,7 +4906,7 @@
                     <div v-if="source.source_trace?.received_at">收料 {{formatDateTime(source.source_trace.received_at)}} <info-note>补库单 {{source.order_number}} · {{source.source_trace?.supplier||''}} · 报料 {{formatDateTime(source.source_trace?.ordered_at)}} · 原批次 {{source.lot_number}}</info-note></div>
                   </div>
                   <template v-if="stockPrepDialog.view==='history'">
-                    <div v-for="job in (stockPrepDialog.row.jobs||[]).slice((stockPrepDialog.page-1)*3,stockPrepDialog.page*3)" :key="job.id" class="stock-history-line"><strong>{{job.product.name}} · {{job.status==='completed'?'已产出 '+job.actual_output+' '+(job.output_unit || '单位待完善'):job.status==='cancelled'?'已取消':'待生产'}}</strong><div>投入 {{job.input_quantity}} 张 · 剩余成品 {{job.output_remaining}} {{job.output_unit || "单位待完善"}} · {{job.output_location||stockPrepDialog.row.location}}</div><button v-if="canAdmin && job.output_kind==='semi' && job.output_available>0" class="btn small" @click="openStockDialog({...stockPrepDialog.row,entry_type:'single_output',receipt_item_id:job.receipt_item_id,job,available:job.output_available,unit:job.output_unit,location:job.output_location,name:job.product.name,code:job.product.code})">存放</button><info-note>{{job.output_lot_number||''}}<span v-if="job.product.preparation_group"> · 整组 {{job.product.preparation_group.key}}</span></info-note></div>
+                    <div v-for="job in (stockPrepDialog.row.jobs||[]).slice((stockPrepDialog.page-1)*3,stockPrepDialog.page*3)" :key="job.id" class="stock-history-line"><strong>{{job.product.name}} · {{job.status==='completed'?'已产出 '+job.actual_output+' '+(job.output_unit || '单位待完善'):job.status==='cancelled'?'已取消':'待生产'}}</strong><div>投入 {{job.input_quantity}} 张 · 剩余可用 {{job.output_available}} {{job.output_unit || "单位待完善"}} · {{job.output_location||stockPrepDialog.row.location}}</div><button v-if="canAdmin && job.output_kind==='semi' && job.output_available>0" class="btn small" @click="openStockDialog({...stockPrepDialog.row,entry_type:'single_output',receipt_item_id:job.receipt_item_id,job,available:job.output_available,unit:job.output_unit,location:job.output_location,name:job.product.name,code:job.product.code})">存放</button><button v-if="hasPermission('warehouse.execute') && job.status==='completed' && job.output_kind==='semi' && job.output_available>0 && !job.product.preparation_group" class="btn small" @click="openStockDialog({...stockPrepDialog.row,entry_type:'single_finish',receipt_item_id:job.receipt_item_id,job,available:job.output_available,unit:job.output_unit,location:job.output_location,name:job.product.name,code:job.product.code})">转成品</button><info-note>{{job.output_lot_number||''}}<span v-if="job.product.preparation_group"> · 整组 {{job.product.preparation_group.key}}</span></info-note></div>
                     <pager :page="stockPrepDialog.page" :total="stockPrepDialog.row.jobs?.length||0" :page-size="3" @change="stockPrepDialog.page=$event"></pager>
                     <details><summary>库存流水与安排记录</summary><div v-for="entry in [...(stockPrepDialog.row.movements||[]),...(stockPrepDialog.row.history||[])].slice((stockPrepDialog.page-1)*4,stockPrepDialog.page*4)">{{formatDateTime(entry.at)}} · {{entry.reason||stockPrepActionLabel(entry.action)}} {{entry.quantity??''}} {{entry.unit||''}}<span v-if="entry.available_after!==undefined"> · 可用 {{entry.available_before}} → {{entry.available_after}}</span></div><pager :page="stockPrepDialog.page" :total="(stockPrepDialog.row.movements?.length||0)+(stockPrepDialog.row.history?.length||0)" :page-size="4" @change="stockPrepDialog.page=$event"></pager></details>
                   </template>
@@ -4922,6 +4922,14 @@
                       <div v-for="source in stockPrepDialog.row.children" :key="source.key" class="stock-source-summary">{{source.name}} · {{source.available}} {{source.unit}} · {{source.location}} <button class="btn small" @click="openStockDialog({...source,entry_type:'receipt'})">存放</button></div>
                       <div v-for="missing in stockPrepDialog.preview?.shortages||[]" class="status orange">{{missing.name}} 还缺 {{missing.missing}} 个</div>
                       <button class="btn primary" :disabled="!canAdmin||stockPrepDialog.loading||!stockPrepDialog.preview||stockPrepDialog.preview.shortages.length" @click="saveStockDialog('plan')">转待生产</button>
+                    </template>
+                    <template v-else-if="stockPrepDialog.row.entry_type==='single_finish'">
+                      <div>来源批次 {{stockPrepDialog.row.job.output_lot_number}} · 可用 {{stockPrepDialog.row.job.output_available}} 片 · {{stockPrepDialog.row.job.output_location}}</div>
+                      <label>本次已完成并转成品数量 <input class="input compact-input" type="number" min="1" :max="stockPrepDialog.row.job.output_available" v-model.number="stockPrepDialog.quantity" :disabled="stockPrepDialog.loading" /> 只</label>
+                      <div class="stock-location-field"><label>成品实际货位</label><location-picker v-model="stockPrepDialog.location" :locations="stockLocations" :disabled="stockPrepDialog.loading"></location-picker></div>
+                      <label><input type="checkbox" v-model="stockPrepDialog.confirmFinished" :disabled="stockPrepDialog.loading" /> 我已核对这批实物完成全部工序，可按 1 片转 1 只成品</label>
+                      <button class="btn primary" :disabled="stockPrepDialog.loading||!stockPrepDialog.confirmFinished||!stockPrepDialog.location" @click="finishStockOutput">确认转成品并入库</button>
+                      <info-note>只扣本次填写的可用片数；已有订单预占的数量不会被扣除。保存后可在库存流水中追溯原批次。</info-note>
                     </template>
                     <template v-else>
                       <template v-if="['group_job','single_job','group_stock'].includes(stockPrepDialog.row.entry_type)">
@@ -20932,7 +20940,7 @@
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           stockPrepLabels() { return {arrange:'已到材料',pending:'待加工',waiting:'待来料',keep:'材料留库',stock:'已入库',history:'加工记录'}; },
-          stockPrepActionLabel(action) { return {keep_raw:'保留原料备货',keep_semi:'保留半成品备货',plan:'安排生产',complete:'确认产出入库',cancel:'取消生产安排'}[action] || action; },
+          stockPrepActionLabel(action) { return {keep_raw:'保留原料备货',keep_semi:'保留半成品备货',plan:'安排生产',complete:'确认产出入库',finish_output:'已加工半成品转成品',cancel:'取消生产安排'}[action] || action; },
           async loadStockPreparation(page=1) { return this.loadStockWorkspace(page); },
           async stockPrepAction(row,action,job=null) {
             if(this.stockPrepBusy) return;

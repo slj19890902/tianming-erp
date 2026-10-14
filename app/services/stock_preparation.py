@@ -137,6 +137,7 @@ def _job_dict(db, job):
         output_location=" / ".join(dict.fromkeys(location_name(db,lot) for lot in outputs if lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged)) if output else None,
         output_remaining=sum(lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged for lot in outputs),
         output_available=output.quantity_available if output else 0,output_version=output.version if output else 0,
+        output_lot_id=output.id if output else None,
         output_locations=locations,
         output_kind='semi' if output and output.inventory_type=='semi_finished' else 'finished',
         output_location_id=locations[0]['location_id'] if len({v['location_id'] for v in locations}) == 1 else None)

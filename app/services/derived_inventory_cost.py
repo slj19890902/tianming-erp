@@ -81,6 +81,43 @@ def derived_cost(db, lot, visited):
             if abs(calculated-total)>Decimal('.01') or abs(total/qty-Decimal(str(lot.estimated_unit_cost_snapshot)))>Decimal('.0001'):
                 return None, {'validation_issue':'备库组套成本不守恒'}
             return total/qty,dict(**{k:detail[k] for k in ('assembly_standard','standard_labour_unit_cost','standard_labour_missing','product_unit') if k in detail},currency='CNY',cost_label='备库组套继承成本',quantity=qty,total_cost=str(total),inputs=evidence,basis='inherited_entry_cost_not_new_purchase')
+        if lot.cost_snapshot_source == 'stock_preparation_finish':
+            from app.models.stock_preparation import StockPreparationCommand, StockPreparationJob
+            from app.services.finished_stock_identity import matches_stock_identity
+            origin = db.get(InventoryLot, detail['source_lot_id'])
+            qty = int(detail['output_quantity'])
+            candidates = db.scalars(select(StockPreparationCommand).where(
+                StockPreparationCommand.result_json.contains('"output_lot_id":'+str(lot.id)))).all()
+            pairs = [(c, json.loads(c.result_json)) for c in candidates]
+            pairs = [(c, r) for c, r in pairs if r.get('action') == 'finish_output' and r.get('output_lot_id') == lot.id]
+            if len(pairs) != 1 or not origin or not lot.finished_detail or qty <= 0:
+                return None, {'validation_issue':'半成品转成品来源不唯一'}
+            command, result = pairs[0]
+            request = json.loads(command.request_json)
+            job = db.get(StockPreparationJob, result['job_id'])
+            movement = db.scalar(select(InventoryMovement).where(
+                InventoryMovement.idempotency_key == detail['movement_key']))
+            if (not job or job.output_lot_id != origin.id or job.status != 'completed'
+                    or origin.id != lot.source_ref_id or origin.source_ref_type != 'stock_preparation'
+                    or result['source_lot_id'] != origin.id or result['quantity'] != qty
+                    or result['product_id'] != lot.finished_detail.product_id
+                    or result['customer_id'] != lot.finished_detail.owner_customer_id
+                    or request.get('quantity') != qty or request.get('output_lot_id') != origin.id
+                    or request.get('operation_key') != command.operation_key
+                    or not movement or movement.inventory_lot_id != origin.id
+                    or movement.movement_type != 'consume' or movement.quantity != qty
+                    or not matches_stock_identity(lot.finished_detail.physical_basis_json, detail['physical_basis'])):
+                return None, {'validation_issue':'半成品转成品身份或消耗流水不一致'}
+            unit, evidence = frozen_cost(origin, db, visited)
+            stored = Decimal(str(origin.estimated_unit_cost_snapshot)) if origin.estimated_unit_cost_snapshot is not None else None
+            total = Decimal(detail['total_cost'])
+            if (unit is None or stored is None or abs(unit - stored) > Decimal('.0001')
+                    or abs(stored * qty - total) > Decimal('.01')
+                    or abs(total / qty - Decimal(str(lot.estimated_unit_cost_snapshot))) > Decimal('.0001')):
+                return None, {'validation_issue':'半成品转成品成本不守恒'}
+            return total / qty, dict(currency='CNY', cost_label='半成品转成品继承成本',
+                source_lot_id=origin.id, source_evidence=evidence, quantity=qty,
+                total_cost=str(total), basis='inherited_entry_cost_not_new_purchase')
         if lot.cost_snapshot_source in {'bom_assembly', 'subkit_conversion'}:
             if lot.cost_snapshot_source == 'bom_assembly':
                 from app.models.multilevel_bom import BomAssembly as Assembly, BomAssemblyInput as AssemblyInput

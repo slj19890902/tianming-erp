@@ -2,7 +2,7 @@
 import json
 from decimal import Decimal
 from sqlalchemy import select
-from app.models.warehouse_inventory import InventoryLot, InventoryMovement, InventoryReservation
+from app.models.warehouse_inventory import InventoryLot, InventoryLotTransfer, InventoryMovement, InventoryReservation
 
 
 def derived_cost(db, lot, visited):
@@ -84,12 +84,60 @@ def derived_cost(db, lot, visited):
         if lot.cost_snapshot_source == 'stock_preparation_finish':
             from app.models.stock_preparation import StockPreparationCommand, StockPreparationJob
             from app.services.finished_stock_identity import matches_stock_identity
+            from app.services.warehouse_inventory import _transfer_key
             origin = db.get(InventoryLot, detail['source_lot_id'])
             qty = int(detail['output_quantity'])
-            candidates = db.scalars(select(StockPreparationCommand).where(
-                StockPreparationCommand.result_json.contains('"output_lot_id":'+str(lot.id)))).all()
-            pairs = [(c, json.loads(c.result_json)) for c in candidates]
-            pairs = [(c, r) for c, r in pairs if r.get('action') == 'finish_output' and r.get('output_lot_id') == lot.id]
+            # A partial location move creates a new lot, while the employee's
+            # conversion command correctly continues to name the original lot.
+            # Follow only recorded transfer edges; never infer ancestry from
+            # copied cost JSON or product codes alone.
+            output = lot
+            lineage = set()
+            pairs = []
+            for _ in range(30):
+                if output.id in lineage:
+                    break
+                lineage.add(output.id)
+                candidates = db.scalars(select(StockPreparationCommand).where(
+                    StockPreparationCommand.result_json.contains('"output_lot_id":'+str(output.id)))).all()
+                pairs = [(c, json.loads(c.result_json)) for c in candidates]
+                pairs = [(c, r) for c, r in pairs if r.get('action') == 'finish_output' and r.get('output_lot_id') == output.id]
+                if pairs:
+                    break
+                edges = db.scalars(select(InventoryLotTransfer).where(
+                    InventoryLotTransfer.target_lot_id == output.id,
+                    InventoryLotTransfer.source_lot_id != output.id)).all()
+                if len(edges) != 1 or output.source_type != 'transfer':
+                    break
+                edge = edges[0]
+                parent = db.get(InventoryLot, edge.source_lot_id)
+                target_move = db.scalar(select(InventoryMovement).where(
+                    InventoryMovement.idempotency_key == _transfer_key('location-transfer', edge.idempotency_key, 'target')))
+                source_move = db.scalar(select(InventoryMovement).where(
+                    InventoryMovement.idempotency_key == _transfer_key('location-transfer', edge.idempotency_key, 'source')))
+                if (not parent or not parent.finished_detail or not output.finished_detail
+                        or edge.quantity <= 0 or edge.available_quantity + edge.reserved_quantity != edge.quantity
+                        or not source_move or source_move.inventory_lot_id != parent.id
+                        or source_move.movement_type != 'location_transfer' or source_move.quantity != edge.quantity
+                        or (source_move.before_available + source_move.before_reserved
+                            - source_move.after_available - source_move.after_reserved) != edge.quantity
+                        or not target_move or target_move.inventory_lot_id != output.id
+                        or target_move.movement_type != 'location_transfer' or target_move.quantity != edge.quantity
+                        or target_move.before_available != 0 or target_move.before_reserved != 0
+                        or target_move.after_available != edge.available_quantity
+                        or target_move.after_reserved != edge.reserved_quantity
+                        or output.source_ref_type != parent.source_ref_type
+                        or output.source_ref_id != parent.source_ref_id
+                        or output.cost_snapshot_source != parent.cost_snapshot_source
+                        or output.cost_snapshot_detail_json != parent.cost_snapshot_detail_json
+                        or output.estimated_unit_cost_snapshot != parent.estimated_unit_cost_snapshot
+                        or output.cost_snapshot_at != parent.cost_snapshot_at
+                        or output.unit != parent.unit
+                        or output.finished_detail.product_id != parent.finished_detail.product_id
+                        or output.finished_detail.owner_customer_id != parent.finished_detail.owner_customer_id
+                        or output.finished_detail.physical_basis_json != parent.finished_detail.physical_basis_json):
+                    break
+                output = parent
             if len(pairs) != 1 or not origin or not lot.finished_detail or qty <= 0:
                 return None, {'validation_issue':'半成品转成品来源不唯一'}
             command, result = pairs[0]
@@ -99,6 +147,7 @@ def derived_cost(db, lot, visited):
                 InventoryMovement.idempotency_key == detail['movement_key']))
             if (not job or job.output_lot_id != origin.id or job.status != 'completed'
                     or origin.id != lot.source_ref_id or origin.source_ref_type != 'stock_preparation'
+                    or output.id != result['output_lot_id']
                     or result['source_lot_id'] != origin.id or result['quantity'] != qty
                     or result['product_id'] != lot.finished_detail.product_id
                     or result['customer_id'] != lot.finished_detail.owner_customer_id

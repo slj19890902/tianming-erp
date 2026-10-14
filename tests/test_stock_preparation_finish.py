@@ -6,7 +6,7 @@ from test_stock_processing_auto import completion, receive, row, stock_replenish
 from app.api.stock_preparation import router
 from app.models.stock_preparation import StockPreparationCommand
 from app.models.user import User
-from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+from app.models.warehouse_inventory import InventoryLot, InventoryLotTransfer, InventoryMovement
 from app.models.warehouse_goods import WarehouseGoodsProfile
 
 
@@ -120,3 +120,45 @@ def test_identity_cost_and_permission_fail_closed(stock_replenishment_app):
             actor.role = 'sales'
             db.commit()
         assert client.post(url, json=body).status_code == 403
+
+
+def test_converted_finished_stock_can_move_partial_and_again(stock_replenishment_app):
+    app, factory = stock_replenishment_app
+    app.include_router(router, prefix='/api/production')
+    with TestClient(app) as client:
+        receipt_id, _, body = prepared(client)
+        response = client.post(f'/api/production/stock-preparation/{receipt_id}/finish-output', json=body)
+        assert response.status_code == 200, response.text
+        output_id = response.json()['output_lot_id']
+    from app.services.inventory_valuation import frozen_cost
+    from app.services.warehouse_inventory import transfer_finished_lot_between_locations
+    with factory() as db:
+        output = db.get(InventoryLot, output_id)
+        original_cost = frozen_cost(output, db)[0]
+        first = transfer_finished_lot_between_locations(db, lot_id=output.id,
+            expected_version=output.version, quantity=2, location_id=8,
+            operator_id=1, idempotency_key='finish-move-partial', expected_target_layout_version=1)
+        db.commit()
+        child = db.get(InventoryLot, first.target_lot.id)
+        assert child.id != output_id and frozen_cost(child, db)[0] == original_cost
+        assert (db.get(InventoryLot, output_id).quantity_available, child.quantity_available) == (1, 2)
+        repeated = transfer_finished_lot_between_locations(db, lot_id=output_id,
+            expected_version=1, quantity=2, location_id=8, operator_id=1,
+            idempotency_key='finish-move-partial', expected_target_layout_version=1)
+        assert repeated.target_lot.id == child.id
+        second = transfer_finished_lot_between_locations(db, lot_id=child.id,
+            expected_version=child.version, quantity=1, location_id=7,
+            operator_id=1, idempotency_key='finish-move-partial-again', expected_target_layout_version=1)
+        db.commit()
+        grandchild = db.get(InventoryLot, second.target_lot.id)
+        assert grandchild.id not in {output_id, child.id}
+        assert frozen_cost(grandchild, db)[0] == original_cost
+        assert sum(db.get(InventoryLot, lid).quantity_available for lid in (output_id, child.id, grandchild.id)) == 3
+        assert len(list(db.scalars(select(InventoryLotTransfer).where(
+            InventoryLotTransfer.target_lot_id == grandchild.id)))) == 1
+        edge = db.scalar(select(InventoryLotTransfer).where(InventoryLotTransfer.target_lot_id == grandchild.id))
+        edge.quantity += 1
+        edge.available_quantity += 1
+        db.flush()
+        assert frozen_cost(grandchild, db)[0] is None
+        db.rollback()

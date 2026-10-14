@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.633"
-APP_VERSION_NAME = "已加工半成品员工转成品"
+APP_VERSION = "v0.22.634"
+APP_VERSION_NAME = "转成品批次移货来源修复"
 APP_BUILD_DATE = "2026-10-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6151,3 +6151,14 @@ APP_VERIFICATION_STEPS = [
     "重新打开记录确认余数仍可继续转换，已预占的半成品不得被扣；刷新首页确认成品库存预警按实际成品数量更新。",
 ]
 APP_CHANGELOG = [*(f"v0.22.633：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "修复已加工半成品转成品后，部分移货生成新批次时成本校验误认来源不唯一、整批提交失败的问题；沿正式移货流水核对唯一原转换批次。",
+    "移货仍保持原有库存数量、位置流水、成本快照和幂等规则；缺失或损坏的移货来源继续拒绝入账。本版无数据库结构迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库页面，找到已转成品的研光 80011965 批次，选择真实目标货位，按原数量重新提交移货草稿。",
+    "核对原位置减少、目标位置增加同样数量，半成品和成品总量没有重复变化；再次打开移货记录，确认成本来源和原转成品流水可追溯。",
+    "若本次同时完成地图区域绑定恢复，刷新待入库与加工记录，核对可选位置来自同一正式地图；仍不允许选未发布货位。",
+]
+APP_CHANGELOG = [*(f"v0.22.634：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

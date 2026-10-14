@@ -75,3 +75,17 @@ owned child 复现000204手工预占100张通过、实际生产消费被材质�
 12:09 双应急外层闭环：整合无订单组套5f4674dc，根专用41项通过。外层真实managed task-20e75a8a78c748d79b35e6805ce16e06仅子副本提交两笔：原154版本4→5→6、状态pending；000120父套1433/拆下盖1432，上下盖各余160，旧下盖160仍NULL basis。保留其他26条当前及历史行、9782/10552取消事实、旧1027 planned分配。确认组套与片料生产的新批均经过真实entry guard；建新明细前和最后审计后故障均全库回滚；两个更正同key重放全库无增量，换key/换review及损坏空result回执拒绝。首轮task-e1fe失败仅因UAT缺隔离customer-document-review，之后从本候选静态证据复制原bytes到owned目录后通过，没有用空资料伪装客户单据正确。额外最新204专项task-3597c58亦通过，所有新增副本按原进程检查retained。
 
 独立Astra复审41项通过后追加发现未来拆/移typed边数量与真实movement可不一致仍认可成本；Sol正在只修该证据闭合，当前初次组套路径成功不冒称全部后续场景已完成。正式健康http200/ok=true，Mac数据卷156GiB使用、276GiB可用；没有本轮正式停服、备份或业务写入。
+
+## 12:34 业务整合通过及发布可用性收尾
+
+有限组套 typed 移库证据修正03565725/96ebf3f5已整合；数量、可用及预占分量分别绑定真实流水，合法部分/整批移库和元数据版本变化保持。Astra原20→19反例及14项独立复核通过，根最终55项组套专项通过。
+
+有限地图恢复0de20be0/2ee80523实际代码SHA为6c7cf40eeb34467995d494db02a8296fa53839195fa2cf84f150700cc734b619。最初实际副本发现30个合法功能位address_area_id为NULL，新校验错误要求非空；改为原floor+area规则并固定30位置ID/address_version/完整signature，不补FK、不改库位。新增严格地堆几何预览、不依赖后续审计豁免。managed task-03422e83c7fb4ce1b2b799b482261d59实际23策略/4待入库区/10地堆位置通过，三处故障全库回滚，真实收料resolver可取404，重放零增量且地图raw bytes不变。
+
+全组合managed task-92281de7548143a5ac264d1b11347b59在单一外层事务执行地图、000204、无订单000120、另一聊天确认的605/606采购撤销；最后commit故障全库回滚、实际child提交后四项重放零增量。680可用104、666/1421各160、1430原应急批0，送货154仍pending/v6、26条其他明细和9781/9782取消状态不变。605/606行voided；209使用原整单作废合同，表头voided且623原数量保留作历史，不将行active误判为仍有效采购。首轮task-50f08c63仅根断言误将两种撤销的存储形态混为一谈，未据此修改产品合同。组合输出incoming数组因worker查错id键为空，不作为sr44/45/46已验通过的依据；实际404 resolver证据独立有效。
+
+业务集成边界17个专项文件共302 passed / 155.81秒，结果final-business-tests.xml，非全仓库全绿声明。包括订单片料/BOM、消费、C架、地图、送货恢复协议、来源搜索、来料预检和采购；不重测无关基线失败。
+
+NAS候选3936043f/a4f3596b/bfbfb9ff/497691a7已整合为cae8e2b5/25cd9ff8/fc5488ca/3ce4cf1b。63项模块测试及另一聊天独立复审已完成，但生产manager/worker hooks尚未接通，不能宣称自动两份已生效或历史733.74GB已删除。阶段文件所有权移交Sol新分支codex/nas-worker-integration-20261014：manager、local_code_update、stream receipt/target/runtime/contract、nightly及mac_service_manage必要调用段与新worker；根不并发写。
+
+Astra发布复审发现原monitor升级在NEW plist与OLD disabled control之间失败时现有enable拒绝不一致。为避免再次停工，只补既有计划/失败证据钉住的有限split恢复：原激活、current、state不改，原锁/进程/签名/CAS/UID canary全部保持。Astra新独立monitor-recovery工作区独占其新模块/contract及必要closed CODE_FILES/build改动；旧dispatch工作区测试复制文件保留。自动备份root pause在整个发布及bootstrap期间保持，避免start后监护60秒再次冷备。此必要收尾尚未完成，当前没有正式发布、库存写入、服务控制或新备份。

@@ -277,6 +277,13 @@ def main():
             runtime_metadata['runtime_capabilities']['local_code_update_v1'] = 1
         elif local_update_files & sources.keys():
             raise ValueError('本地程序切换协议源码不完整')
+        if 'desktop_assistant/local_backup_only.py' in sources:
+            local_backup_files = local_update_files | {
+                'desktop_assistant/manager.py', 'desktop_assistant/nightly.py',
+                'desktop_assistant/mac_service_manage.py'}
+            if not local_backup_files <= sources.keys():
+                raise ValueError('本地单份备份协议源码不完整')
+            runtime_metadata['runtime_capabilities']['local_backup_only_v1'] = 1
         if stream_wheels is not None:
             rotation_files = {'desktop_assistant/nas_backup_rotation_worker.py',
                               'desktop_assistant/nas_backup_rotation.py',

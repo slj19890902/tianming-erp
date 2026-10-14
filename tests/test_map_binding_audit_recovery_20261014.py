@@ -96,10 +96,11 @@ def scene(tmp_path,monkeypatch):
         staging_ids=tuple(a.id for a in staging)
         audit_hash=recovery._hash(list(audits.values()))
         plan_id=plan.id
+        expected_staging_pins=staging_pins(db,staging_ids)
     for key,value in dict(SOURCE_SHA=source_sha,SOURCE_REVISION=old['revision'],BINDING_SHA=binding_sha,
         BINDING_REVISION=binding,CURRENT_SHA=sha256(runtime.read_bytes()).hexdigest(),CURRENT_REVISION=new['revision'],
         DRAFT_SHA=sha256(draft.read_bytes()).hexdigest(),HISTORICAL_AUDIT_SHA=audit_hash,POLICY_PINS=pins,
-        STAGING_AREA_IDS=staging_ids,GROUND_PLAN_ID=plan_id,RETIRED_RACK_IDS=rack_ids).items():monkeypatch.setattr(recovery,key,value)
+        STAGING_AREA_IDS=staging_ids,STAGING_LOCATION_PINS=expected_staging_pins,GROUND_PLAN_ID=plan_id,RETIRED_RACK_IDS=rack_ids).items():monkeypatch.setattr(recovery,key,value)
     yield dict(factory=factory,source=source_bytes,runtime=runtime,draft=draft,old=old,new=new,staging_ids=staging_ids)
     factory.kw['bind'].dispose()
 
@@ -304,3 +305,73 @@ def test_replay_releases_transaction_and_does_not_accept_changed_source(scene):
 @pytest.mark.parametrize('raw',[b'{"a":1,"a":2}',b'{"value":NaN}',b'{"value":Infinity}'])
 def test_strict_source_parser_rejects_ambiguous_or_nonfinite_json(raw):
     with pytest.raises(WarehouseAreaActivationError):recovery._read(raw,sha256(raw).hexdigest())
+
+
+def staging_pins(db,area_ids):
+    result={}
+    for aid in area_ids:
+        area=db.get(WarehouseArea,aid)
+        locs=list(db.scalars(select(WarehouseLocation).where(WarehouseLocation.warehouse_floor==1,
+            WarehouseLocation.area_code==area.area_code,WarehouseLocation.is_active.is_(True)).order_by(WarehouseLocation.id)))
+        result[aid]=tuple((l.id,l.address_version,location_signature(l,l.floor3_layout)) for l in locs)
+    return result
+
+
+def test_exact_legacy_null_address_uses_formal_floor_area_without_inventing_fk(scene,monkeypatch):
+    with scene['factory']() as db:
+        for aid in scene['staging_ids']:
+            area=db.get(WarehouseArea,aid)
+            for loc in db.scalars(select(WarehouseLocation).where(WarehouseLocation.area_code==area.area_code)):
+                loc.address_area_id=None;loc.address_version=2
+        db.commit()
+        monkeypatch.setattr(recovery,'STAGING_LOCATION_PINS',staging_pins(db,scene['staging_ids']),raising=False)
+        before=all_facts(db)
+        invoke(db,scene)
+        assert all_facts(db)['warehouse_locations']==before['warehouse_locations']
+        assert all(l.address_area_id is None for l in db.scalars(select(WarehouseLocation).where(WarehouseLocation.address_kind=='functional')))
+
+
+def test_boss_cannot_bypass_existing_map_admin_only_contract(scene):
+    with scene['factory']() as db:
+        db.scalar(select(User)).role='boss';db.commit()
+        before=all_facts(db)
+        with pytest.raises(WarehouseAreaActivationError):invoke(db,scene)
+        assert all_facts(db)==before
+
+
+def test_preview_strictly_checks_current_ground_geometry_even_if_old_receipt_matches(scene,monkeypatch):
+    from app.services.warehouse_floor1_candidate_planner import validate_capacity_layout_slots_for_zone
+    with scene['factory']() as db:
+        before=all_facts(db)
+        def obstacle(floor,**kwargs):
+            assert kwargs['allow_spatial_conflicts'] is False
+            measured=deepcopy(floor)
+            measured['features'].append(dict(id='new-obstacle',feature_kind='no_go',
+                subtype='door_clearance',points=[[2100,2900],[3300,2900],[3300,3900],[2100,3900]]))
+            return validate_capacity_layout_slots_for_zone(measured,**kwargs)
+        monkeypatch.setattr(recovery,'validate_capacity_layout_slots_for_zone',obstacle,raising=False)
+        with pytest.raises(WarehouseAreaActivationError,match='严格几何'):
+            recovery.preview(db,actor=db.scalar(select(User)),source_bytes=scene['source'])
+        assert all_facts(db)==before
+
+
+@pytest.mark.parametrize('field,value', [('address_version',2),('warehouse_type','shared'),
+    ('remarks','changed'),('location_code','CHANGED-LOCATION'),('source_version','LEGACY'),
+    ('address_kind','ground_slot')])
+def test_any_staging_position_field_drift_invalidates_reviewed_preview(scene,field,value):
+    with scene['factory']() as db:
+        actor=db.scalar(select(User));plan=recovery.preview(db,actor=actor,source_bytes=scene['source'])
+        location=db.scalar(select(WarehouseLocation).where(WarehouseLocation.address_kind=='functional'))
+        setattr(location,field,value);db.commit();before=all_facts(db)
+        with pytest.raises(WarehouseAreaActivationError):invoke(db,scene,plan)
+        assert all_facts(db)==before
+
+
+def test_wrong_nonnull_staging_fk_is_rejected_even_with_an_independent_signature(scene,monkeypatch):
+    with scene['factory']() as db:
+        loc=db.scalar(select(WarehouseLocation).where(WarehouseLocation.address_kind=='functional'))
+        loc.address_area_id=scene['staging_ids'][1];db.commit()
+        monkeypatch.setattr(recovery,'STAGING_LOCATION_PINS',staging_pins(db,scene['staging_ids']))
+        before=all_facts(db)
+        with pytest.raises(WarehouseAreaActivationError,match='不是原正式功能位'):invoke(db,scene)
+        assert all_facts(db)==before

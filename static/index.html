@@ -10,7 +10,7 @@
     <link rel="stylesheet" href="/static/ui/home-workbench.css?v=20261010-stock-alert3" />
     <script src="/static/ui/home-workbench.js?v=5e31af5338b09535"></script>
     <link rel="stylesheet" href="/static/ui/product-workbench.css?v=dbd8b4a62a34" />
-    <script src="/static/ui/product-workbench.js?v=6907ff23797a"></script>
+    <script src="/static/ui/product-workbench.js?v=902a32bc5f41"></script>
     <script src="/static/ui/order-context.js?v=round-experience-d1b"></script>
     <script src="/static/ui/workspace.js?v=71e4c13edadc"></script>
     <script src="/static/ui/workflow-continuity.js?v=7ef70dee3ee7"></script>
@@ -23,7 +23,7 @@
     <script src="/static/ui/stock-preparation-completion-recovery.js?v=20261010-completion1"></script>
     <script src="/static/ui/stock-preparation-group-recovery.js?v=72b124d276b5"></script>
     <script src="/static/ui/stock-replenishment-save-recovery.js?v=f7c4b6c25c37"></script>
-    <script src="/static/ui/delivery-dispatch-recovery.js?v=cabbe6fcb1a5"></script>
+    <script src="/static/ui/delivery-dispatch-recovery.js?v=ca08d87efb56"></script>
     <script src="/static/ui/stock-preparation-assembly-recovery.js?v=a11f3ee39242"></script>
     <script src="/static/ui/production-workspace.js?v=fe58b8dee03a"></script>
     <script src="/static/ui/production-desk.js?v=round-experience-d2"></script>
@@ -32,6 +32,7 @@
     <script src="/static/ui/desktop-delivery-margin.js?v=20260926-dashboard-cost"></script>
     <script src="/static/ui/entry-product-editor.js?v=20261013-http-recovery"></script>
     <script src="/static/ui/demand-stock.js?v=20261012"></script>
+    <script src="/static/ui/manual-sheet-deduction.js?v=12c4e210d462"></script>
     <script src="/static/ui/manual-replenishment-entry.js?v=fb1a07910498"></script>
     <link rel="stylesheet" href="/static/ui/demand-stock.css?v=20261012">
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
@@ -4342,7 +4343,7 @@
                 <table><thead><tr><th>主操作</th><th></th><th>客户订单号</th><th class="erp-order-no">ERP订单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
                   <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><order-reference :row="row" :secondary="false"></order-reference></td><td class="erp-order-no">{{ row.order_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ row.business_delivery_progress?.delivered_quantity || 0 }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><status-tag :value="orderDisplayStatusKey(row)"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
-                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="canViewSalesAmounts ? 14 : 13"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格mm</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">客户销售单价</th><th v-if="canViewCosts" class="cost-sensitive">预计成本</th><th v-if="canViewCosts" class="cost-sensitive">预计利润</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div v-if="orderBomDemandSaveState.outcomeUncertain && Number(orderBomDemandSaveState.itemId)===Number(item.id)" class="notice warning" style="margin:6px 0">上次组件数量保存结果暂不确定，请点击上方“刷新”核对后再操作。</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" @click="saveOrderBomComponentDemand(item,component)">{{ orderBomDemandSaveState.saving && Number(orderBomDemandSaveState.itemId)===Number(item.id) && Number(orderBomDemandSaveState.componentId)===Number(component.id) ? "保存中…" : "保存本订单需求" }}</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ orderSpecificationText(item.snapshot_spec) }}</td><td>{{ item.quantity }}<details v-if="item.replenishment_supply && item.replenishment_supply.sources && item.replenishment_supply.sources.length" class="order-replenishment-supply" style="margin-top:4px;white-space:normal;font-size:12px" @click.stop><summary>{{ orderReplenishmentSupplyText(item) }}</summary><div v-if="item.replenishment_supply.total_coverable_finished_quantity != null" class="muted">含补库可覆盖合计 {{ item.replenishment_supply.total_coverable_finished_quantity }}{{ item.replenishment_supply.unit_label }}</div><div v-for="(source,supplyIndex) in item.replenishment_supply.sources" :key="supplyIndex" class="muted">{{ source.product_name || source.product_code }}：覆盖用料 {{ source.covered_piece_quantity }}片 · {{ orderReplenishmentSupplyStage(source.stage) }}<div>{{ source.order_number }}</div></div></details><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="orderReplenishmentWaitingStatus(item)"></status-tag></td><td><status-tag :value="item.requisition_display_status || item.requisition_status" :title="item.requisition_display_hint"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.unit_price) }}</td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong><div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin-top:3px">{{ item.estimated_cost_health_label }}</div></td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit !== null && item.total_estimated_gross_profit !== undefined ? money(item.total_estimated_gross_profit) : "-" }}</strong><div v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined" class="muted">{{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</div></td><td class="toolbar-group"><button v-if="hasBomComponents(item) && hasPermission('warehouse.view')" class="btn small" @click="openOrderBomStockReview(item)">BOM库存核对</button><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
+                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="canViewSalesAmounts ? 14 : 13"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格mm</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">客户销售单价</th><th v-if="canViewCosts" class="cost-sensitive">预计成本</th><th v-if="canViewCosts" class="cost-sensitive">预计利润</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div v-if="orderBomDemandSaveState.outcomeUncertain && Number(orderBomDemandSaveState.itemId)===Number(item.id)" class="notice warning" style="margin:6px 0">上次组件数量保存结果暂不确定，请点击上方“刷新”核对后再操作。</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" @click="saveOrderBomComponentDemand(item,component)">{{ orderBomDemandSaveState.saving && Number(orderBomDemandSaveState.itemId)===Number(item.id) && Number(orderBomDemandSaveState.componentId)===Number(component.id) ? "保存中…" : "保存本订单需求" }}</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ orderSpecificationText(item.snapshot_spec) }}</td><td>{{ item.quantity }}<details v-if="item.replenishment_supply && item.replenishment_supply.sources && item.replenishment_supply.sources.length" class="order-replenishment-supply" style="margin-top:4px;white-space:normal;font-size:12px" @click.stop><summary>{{ orderReplenishmentSupplyText(item) }}</summary><div v-if="item.replenishment_supply.total_coverable_finished_quantity != null" class="muted">含补库可覆盖合计 {{ item.replenishment_supply.total_coverable_finished_quantity }}{{ item.replenishment_supply.unit_label }}</div><div v-for="(source,supplyIndex) in item.replenishment_supply.sources" :key="supplyIndex" class="muted">{{ source.product_name || source.product_code }}：覆盖用料 {{ source.covered_piece_quantity }}片 · {{ orderReplenishmentSupplyStage(source.stage) }}<div>{{ source.order_number }}</div></div></details><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="orderReplenishmentWaitingStatus(item)"></status-tag></td><td><status-tag :value="item.requisition_display_status || item.requisition_status" :title="item.requisition_display_hint"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.unit_price) }}</td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong><div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin-top:3px">{{ item.estimated_cost_health_label }}</div></td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit !== null && item.total_estimated_gross_profit !== undefined ? money(item.total_estimated_gross_profit) : "-" }}</strong><div v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined" class="muted">{{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</div></td><td class="toolbar-group"><template v-if="canWarehouseReserve" v-for="target in manualSheetTargetsForItem(item)" :key="target.key"><div class="muted">{{ target.label }}</div><manual-sheet-deduction :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" :order-item-id="target.order_item_id" :snapshot-id="target.bom_snapshot_id || 0" :component-type="target.component_type" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualSheetOrder(item,$event,row.id)"></manual-sheet-deduction></template><button v-if="hasBomComponents(item) && hasPermission('warehouse.view')" class="btn small" @click="openOrderBomStockReview(item)">BOM库存核对</button><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
                   <tr>
@@ -4475,36 +4476,36 @@
                 <span>{{ requisitionVoidActionState.action ? requisitionVoidActionLabel() : (requisitionVoidActionState.committed ? '报料已经作废或撤销，但页面刷新失败，请先核对状态，不要重复操作。' : '上次报料作废结果暂不确定，请先核对状态，不要重复操作。') }}</span>
                 <button class="btn small" type="button" :disabled="!!requisitionVoidActionState.action" @click="refreshRequisitionVoidState">核对报料状态</button>
               </div>
-              <fieldset :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" style="border:0;padding:0;margin:0;min-width:0">
+              <fieldset :disabled="requisitionInventoryBaseActionBlocked() || requisitionVoidActionBlocked()" style="border:0;padding:0;margin:0;min-width:0">
               <div v-if="requisitionTab==='pending'" class="supplier-priority-bar">
-                <button v-if="canAdmin && canRequisition" class="btn" :disabled="requisitionPendingLoading" @click="openRawPurchase(false)">采购方案调整</button>
-                <button v-if="canAdmin && canRequisition" class="btn" @click="openRawPurchase(true)">原片方案记录</button>
+                <button v-if="canAdmin && canRequisition" class="btn" :disabled="(requisitionPendingLoading) || manualSheetParentControlsBlocked()" @click="openRawPurchase(false)">采购方案调整</button>
+                <button v-if="canAdmin && canRequisition" class="btn" @click="openRawPurchase(true)" :disabled="manualSheetParentControlsBlocked()">原片方案记录</button>
                 <strong>供应商优先选择</strong>
-                <button :class="['btn','small','supplier-count-button',{active:!requisitionSupplierFilter}]" :disabled="requisitionPendingLoading" @click="selectRequisitionSupplierFilter('')">全部供应商（{{ requisitionPendingOverallTotal }}）</button>
+                <button :class="['btn','small','supplier-count-button',{active:!requisitionSupplierFilter}]" :disabled="(requisitionPendingLoading) || manualSheetParentControlsBlocked()" @click="selectRequisitionSupplierFilter('')">全部供应商（{{ requisitionPendingOverallTotal }}）</button>
                 <button v-for="row in requisitionSupplierCounts" :key="row.supplier_name"
                   :class="['btn','small','supplier-count-button',{active:requisitionSupplierFilter===row.supplier_name}]"
-                  :disabled="requisitionPendingLoading"
+                  :disabled="(requisitionPendingLoading) || manualSheetParentControlsBlocked()"
                   @click="selectRequisitionSupplierFilter(row.supplier_name)">{{ row.supplier_name }}（{{ row.count }}）</button>
               </div>
               <div v-if="requisitionTab==='pending' && requisitionPendingLoading" class="muted" style="margin:8px 0">正在读取当前页待报料…</div>
               <div v-if="requisitionTab==='pending' && requisitionPendingError" class="status orange" style="display:flex;align-items:center;gap:8px;white-space:normal;margin:8px 0">
                 <span>{{ requisitionPendingError }}</span>
-                <button class="btn small" type="button" :disabled="requisitionPendingLoading" @click="retryRequisitionPendingPage">重试</button>
+                <button class="btn small" type="button" :disabled="(requisitionPendingLoading) || manualSheetParentControlsBlocked()" @click="retryRequisitionPendingPage">重试</button>
               </div>
               <div v-if="requisitionTab==='pending' && filteredRequisitionPending.some(row => row.is_composite_bom)" class="bom-requisition-components" style="margin:8px 0">
                 <div v-for="row in filteredRequisitionPending.filter(item => item.is_composite_bom)" :key="`bom-components-${row.item_id}`" class="bom-requisition-component">
                   <div class="toolbar-group" style="justify-content:space-between">
-                    <button v-if="!row.suppress_parent_requisition" class="btn small success" type="button" @click="markPendingCompositeParentVirtual(row)">父件只计整套数量和价格</button>
+                    <button v-if="!row.suppress_parent_requisition" class="btn small success" type="button" @click="markPendingCompositeParentVirtual(row)" :disabled="manualSheetParentControlsBlocked()">父件只计整套数量和价格</button>
                     <strong>{{ displayOrderNumber(row) }}｜{{ row.product_code }}｜{{ row.product_name }}</strong>
-                    <button class="btn small" type="button" @click="requisitionComponentExpanded[row.item_id] = !requisitionComponentExpanded[row.item_id]">{{ requisitionComponentExpanded[row.item_id] ? '收起明细' : `展开父件与组件（${compositeRequisitionSources(row).length}）` }}</button>
+                    <button class="btn small" type="button" @click="requisitionComponentExpanded[row.item_id] = !requisitionComponentExpanded[row.item_id]" :disabled="manualSheetParentControlsBlocked()">{{ requisitionComponentExpanded[row.item_id] ? '收起明细' : `展开父件与组件（${compositeRequisitionSources(row).length}）` }}</button>
                   </div>
                   <div v-if="requisitionComponentExpanded[row.item_id]" class="order-detail-box" style="margin-top:8px">
                     <table><thead><tr><th>选择</th><th>父订单</th><th>来源</th><th>父件 / 组件</th><th>订单专用需求 / 库存 / 剩余 / 理论报料</th><th>开料方式</th><th>每张产出</th><th>报料尺寸</th><th>操作</th></tr></thead><tbody>
                       <tr v-for="source in compositeRequisitionSources(row)" :key="source.source_key" :class="{muted:!source.can_requisition}">
-                        <td><span v-if="source.source_kind==='parent'">随订单</span><input v-else type="checkbox" :checked="isBomSnapshotSelected(source)" :disabled="!source.can_requisition" @change="toggleBomSnapshot(row,source,$event.target.checked)" /></td>
+                        <td><span v-if="source.source_kind==='parent'">随订单</span><input v-else type="checkbox" :checked="isBomSnapshotSelected(source)" :disabled="(!source.can_requisition) || manualSheetParentControlsBlocked()" @change="toggleBomSnapshot(row,source,$event.target.checked)" /></td>
                         <td>{{ displayOrderNumber(row) }}</td><td>{{ source.source_kind==='parent' ? '父件' : source.component_type === 'cover' ? '组件·盖' : source.component_type === 'base' ? '组件·底' : '组件' }}</td>
                         <td><strong>{{ source.product_code || '-' }}｜{{ source.product_name || '-' }}</strong><span v-if="source.already_requisitioned" class="status green">已报料</span><div class="muted">{{ supplierDisplayName(source.supplier_name || '未设置供应商') }}｜{{ source.material || '-' }} / {{ fluteDisplay(source.flute_type) }}</div></td>
-                        <td class="requisition-demand-cell"><template v-if="source.source_kind==='component'"><div>需求：{{ source.required_piece_quantity || 0 }} 片</div><div class="semi-deducted">成品库存：{{ source.finished_component_reserved_piece_qty || 0 }} 片</div><div class="semi-deducted">半成品库存：{{ source.semi_finished_reserved_piece_qty || 0 }} 片</div><div class="remaining-demand">剩余：{{ source.remaining_required_piece_qty || 0 }} 片</div><div class="purchase-demand">理论报料：{{ source.requisition_qty || 0 }} 张</div></template><template v-else><div>需求：{{ source.required_piece_quantity || 0 }} 片</div><div class="purchase-demand">理论报料：{{ source.requisition_qty || 0 }} 张</div></template></td><td>{{ source.cutting_mode || '一开一' }}</td><td>{{ source.yield_per_sheet || source.cutting_factor || 1 }} 片</td><td>{{ source.report_length_mm || '-' }} × {{ source.report_width_mm || '-' }}</td><td><div class="toolbar-group"><button v-if="source.source_kind==='component' && !source.already_requisitioned" class="btn small" type="button" @click="openRequisitionMaterialChange(row,source)">更换供应商/材质</button><button v-if="source.source_kind==='component' && source.can_requisition && Number(source.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="source._auto_cover_loading" @click="autoCoverBomComponent(row,source)">{{ source._auto_cover_loading ? '正在使用库存…' : '自动使用可匹配库存' }}</button></div><div v-if="source._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ source._auto_cover_error }}</div></td>
+                        <td class="requisition-demand-cell"><template v-if="source.source_kind==='component'"><div>需求：{{ source.required_piece_quantity || 0 }} 片</div><div class="semi-deducted">成品库存：{{ source.finished_component_reserved_piece_qty || 0 }} 片</div><div class="semi-deducted">半成品库存：{{ source.semi_finished_reserved_piece_qty || 0 }} 片</div><div class="remaining-demand">剩余：{{ source.remaining_required_piece_qty || 0 }} 片</div><div class="purchase-demand">理论报料：{{ source.requisition_qty || 0 }} 张</div></template><template v-else><div>需求：{{ source.required_piece_quantity || 0 }} 片</div><div class="purchase-demand">理论报料：{{ source.requisition_qty || 0 }} 张</div></template></td><td>{{ source.cutting_mode || '一开一' }}</td><td>{{ source.yield_per_sheet || source.cutting_factor || 1 }} 片</td><td>{{ source.report_length_mm || '-' }} × {{ source.report_width_mm || '-' }}</td><td><div class="toolbar-group"><button v-if="source.source_kind==='component' && !source.already_requisitioned" class="btn small" type="button" @click="openRequisitionMaterialChange(row,source)" :disabled="manualSheetParentControlsBlocked()">更换供应商/材质</button><button v-if="source.source_kind==='component' && source.can_requisition && Number(source.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="(source._auto_cover_loading) || manualSheetParentControlsBlocked()" @click="autoCoverBomComponent(row,source)">{{ source._auto_cover_loading ? '正在使用库存…' : '自动使用可匹配库存' }}</button><manual-sheet-deduction :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" v-if="canWarehouseReserve && source.source_kind==='component'" :snapshot-id="Number(source.snapshot_id || source.bom_snapshot_id)" :component-type="source.component_type || 'whole'" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualBomSheetDeduction(source,$event)"></manual-sheet-deduction></div><div v-if="source._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ source._auto_cover_error }}</div></td>
                       </tr>
                     </tbody></table>
                   </div>
@@ -4512,54 +4513,54 @@
               </div>
               <div v-if="requisitionTab==='waiting'" class="list-filterbar">
                 <search-select v-model="requisitionHoldFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true" @change="pages.requisitionHolds=1; loadRequisitionHolds()"></search-select>
-                <input class="input" v-model.trim="requisitionHoldFilters.product_code" placeholder="存货编码" @keyup.enter="pages.requisitionHolds=1; loadRequisitionHolds()" />
-                <input class="input" v-model.trim="requisitionHoldFilters.product_name" placeholder="产品名称" @keyup.enter="pages.requisitionHolds=1; loadRequisitionHolds()" />
-                <select class="select" v-model="requisitionHoldFilters.status" @change="pages.requisitionHolds=1; loadRequisitionHolds()"><option value="">全部状态</option><option value="waiting">等候中</option><option value="due">已到期</option><option value="anomaly">异常</option></select>
+                <input class="input" v-model.trim="requisitionHoldFilters.product_code" placeholder="存货编码" @keyup.enter="pages.requisitionHolds=1; loadRequisitionHolds()" / :disabled="manualSheetParentControlsBlocked()">
+                <input class="input" v-model.trim="requisitionHoldFilters.product_name" placeholder="产品名称" @keyup.enter="pages.requisitionHolds=1; loadRequisitionHolds()" / :disabled="manualSheetParentControlsBlocked()">
+                <select class="select" v-model="requisitionHoldFilters.status" @change="pages.requisitionHolds=1; loadRequisitionHolds()" :disabled="manualSheetParentControlsBlocked()"><option value="">全部状态</option><option value="waiting">等候中</option><option value="due">已到期</option><option value="anomaly">异常</option></select>
                 <span class="muted">预计恢复日期</span>
-                <input class="input" type="date" title="预计恢复开始日期" aria-label="预计恢复开始日期" v-model="requisitionHoldFilters.date_from" @change="pages.requisitionHolds=1; loadRequisitionHolds()" />
-                <input class="input" type="date" title="预计恢复结束日期" aria-label="预计恢复结束日期" v-model="requisitionHoldFilters.date_to" @change="pages.requisitionHolds=1; loadRequisitionHolds()" />
-                <button class="btn" @click="pages.requisitionHolds=1; loadRequisitionHolds()">查询</button>
-                <button class="btn" @click="resetRequisitionHoldFilters()">清空</button>
+                <input class="input" type="date" title="预计恢复开始日期" aria-label="预计恢复开始日期" v-model="requisitionHoldFilters.date_from" @change="pages.requisitionHolds=1; loadRequisitionHolds()" / :disabled="manualSheetParentControlsBlocked()">
+                <input class="input" type="date" title="预计恢复结束日期" aria-label="预计恢复结束日期" v-model="requisitionHoldFilters.date_to" @change="pages.requisitionHolds=1; loadRequisitionHolds()" / :disabled="manualSheetParentControlsBlocked()">
+                <button class="btn" @click="pages.requisitionHolds=1; loadRequisitionHolds()" :disabled="manualSheetParentControlsBlocked()">查询</button>
+                <button class="btn" @click="resetRequisitionHoldFilters()" :disabled="manualSheetParentControlsBlocked()">清空</button>
               </div>
               <div v-if="requisitionTab==='submitted'" class="list-filterbar reported-filterbar">
                 <div class="reported-filter-fields">
                   <search-select v-model="reportedFilters.customer_id" :options="reportedCustomerOptions" label-key="label" value-key="id" placeholder="客户（名称/编码）" :allow-empty="true"></search-select>
-                  <input class="input reported-size-filter" type="number" step="0.01" min="1" v-model="reportedFilters.report_length_mm" placeholder="报料长" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
-                  <input class="input reported-size-filter" type="number" step="0.01" min="1" v-model="reportedFilters.report_width_mm" placeholder="报料宽" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
-                  <button class="btn" @click="pages.requisitionReported=1; loadReportedDocuments()">查询</button>
-                  <button class="btn" @click="reportedAdvancedVisible=!reportedAdvancedVisible">{{ reportedAdvancedVisible ? '收起详细查找' : '详细查找' }}</button>
-                  <button class="btn" @click="resetReportedFilters()">清空</button>
+                  <input class="input reported-size-filter" type="number" step="0.01" min="1" v-model="reportedFilters.report_length_mm" placeholder="报料长" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" / :disabled="manualSheetParentControlsBlocked()">
+                  <input class="input reported-size-filter" type="number" step="0.01" min="1" v-model="reportedFilters.report_width_mm" placeholder="报料宽" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" / :disabled="manualSheetParentControlsBlocked()">
+                  <button class="btn" @click="pages.requisitionReported=1; loadReportedDocuments()" :disabled="manualSheetParentControlsBlocked()">查询</button>
+                  <button class="btn" @click="reportedAdvancedVisible=!reportedAdvancedVisible" :disabled="manualSheetParentControlsBlocked()">{{ reportedAdvancedVisible ? '收起详细查找' : '详细查找' }}</button>
+                  <button class="btn" @click="resetReportedFilters()" :disabled="manualSheetParentControlsBlocked()">清空</button>
                 </div>
                 <div class="reported-item-toolbar">
                   <info-note label="打印选择说明">只打印已勾选的明细。</info-note>
                   <span class="reported-item-selection-summary">已选 <strong>{{ reportedSelectedItems().length }}</strong> 条</span>
-                  <button class="btn small" type="button" :disabled="reportedItemPrintBusy || !reportedSelectedItems().length" @click="clearReportedItemSelections">清空已选</button>
-                  <button class="btn small primary" type="button" :disabled="reportedItemPrintBusy || !reportedSelectedItems().length" @click="prepareReportedItemTaskPrint">{{ reportedItemPrintBusy ? '正在核验…' : '打印待来料任务单' }}</button>
-                  <button class="btn small success" type="button" :disabled="reportedItemPrintBusy || !reportedSelectedItems().length" @click="openReportedItemLabels">{{ reportedItemPrintBusy ? '正在核验标签…' : '打印产品标签' }}</button>
-                  <button class="btn small" type="button" :disabled="reportedItemLoading || reportedItemVoidSaving()" @click="refreshReportedItems">{{ reportedItemLoading ? '刷新中…' : '刷新' }}</button>
+                  <button class="btn small" type="button" :disabled="(reportedItemPrintBusy || !reportedSelectedItems().length) || manualSheetParentControlsBlocked()" @click="clearReportedItemSelections">清空已选</button>
+                  <button class="btn small primary" type="button" :disabled="(reportedItemPrintBusy || !reportedSelectedItems().length) || manualSheetParentControlsBlocked()" @click="prepareReportedItemTaskPrint">{{ reportedItemPrintBusy ? '正在核验…' : '打印待来料任务单' }}</button>
+                  <button class="btn small success" type="button" :disabled="(reportedItemPrintBusy || !reportedSelectedItems().length) || manualSheetParentControlsBlocked()" @click="openReportedItemLabels">{{ reportedItemPrintBusy ? '正在核验标签…' : '打印产品标签' }}</button>
+                  <button class="btn small" type="button" :disabled="(reportedItemLoading || reportedItemVoidSaving()) || manualSheetParentControlsBlocked()" @click="refreshReportedItems">{{ reportedItemLoading ? '刷新中…' : '刷新' }}</button>
                 </div>
                 <pager :page="pages.requisitionReported" :total="requisitionReportedTotal" :page-size="reportedItemPageSize()" :always="true" :compact="true" :order-layout="true" @change="pages.requisitionReported=$event; loadReportedDocuments()"></pager>
               </div>
               <div v-if="requisitionTab==='submitted' && reportedAdvancedVisible" class="list-filterbar reported-advanced-filters">
-                <input class="input" v-model.trim="reportedFilters.material_code" placeholder="材质代码（支持 +）" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
-                <input class="input" v-model.trim="reportedFilters.flute_type" placeholder="楞型" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
-                <input class="input" v-model.trim="reportedFilters.product_code" placeholder="存货编码" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
-                <input class="input" v-model.trim="reportedFilters.product_name" placeholder="产品名称" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
-                <input class="input" v-model.trim="reportedFilters.document_number" placeholder="报料单号" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
-                <input class="input" v-model.trim="reportedFilters.order_number" placeholder="订单号" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
-                <input class="input" v-model.trim="reportedFilters.supplier_name" placeholder="供应商" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
-                <select class="select" v-model="reportedFilters.source_type"><option value="">全部来源</option><option value="supplier_order">正式供应商采购</option><option value="stock_replenishment">库存补库</option><option value="composite_bom_requisition">组合 BOM</option><option value="legacy_material_requisition">旧报料</option></select>
-                <select class="select" v-model="reportedFilters.status"><option value="">全部状态</option><option value="active">有效</option><option value="voided">已撤销</option></select>
-                <input class="input" type="date" v-model="reportedFilters.date_from" />
-                <input class="input" type="date" v-model="reportedFilters.date_to" />
+                <input class="input" v-model.trim="reportedFilters.material_code" placeholder="材质代码（支持 +）" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" / :disabled="manualSheetParentControlsBlocked()">
+                <input class="input" v-model.trim="reportedFilters.flute_type" placeholder="楞型" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" / :disabled="manualSheetParentControlsBlocked()">
+                <input class="input" v-model.trim="reportedFilters.product_code" placeholder="存货编码" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" / :disabled="manualSheetParentControlsBlocked()">
+                <input class="input" v-model.trim="reportedFilters.product_name" placeholder="产品名称" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" / :disabled="manualSheetParentControlsBlocked()">
+                <input class="input" v-model.trim="reportedFilters.document_number" placeholder="报料单号" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" / :disabled="manualSheetParentControlsBlocked()">
+                <input class="input" v-model.trim="reportedFilters.order_number" placeholder="订单号" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" / :disabled="manualSheetParentControlsBlocked()">
+                <input class="input" v-model.trim="reportedFilters.supplier_name" placeholder="供应商" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" / :disabled="manualSheetParentControlsBlocked()">
+                <select class="select" v-model="reportedFilters.source_type" :disabled="manualSheetParentControlsBlocked()"><option value="">全部来源</option><option value="supplier_order">正式供应商采购</option><option value="stock_replenishment">库存补库</option><option value="composite_bom_requisition">组合 BOM</option><option value="legacy_material_requisition">旧报料</option></select>
+                <select class="select" v-model="reportedFilters.status" :disabled="manualSheetParentControlsBlocked()"><option value="">全部状态</option><option value="active">有效</option><option value="voided">已撤销</option></select>
+                <input class="input" type="date" v-model="reportedFilters.date_from" / :disabled="manualSheetParentControlsBlocked()">
+                <input class="input" type="date" v-model="reportedFilters.date_to" / :disabled="manualSheetParentControlsBlocked()">
               </div>
               <div v-if="requisitionTab==='submitted' && reportedItemPrintErrors.length" class="status orange reported-item-print-errors" aria-live="polite"><div v-for="error in reportedItemPrintErrors" :key="error">{{ error }}</div></div>
-              <div v-if="requisitionTab==='submitted' && reportedItemVoidBlocked()" class="status orange reported-item-print-errors">逐明细撤销正在处理或结果待核对；系统会复用原幂等键。普通刷新不会生成新撤销请求。 <button class="btn small" type="button" :disabled="reportedItemVoidSaving()" @click="retryReportedItemVoidAttempt">重试核对</button></div>
+              <div v-if="requisitionTab==='submitted' && reportedItemVoidBlocked()" class="status orange reported-item-print-errors">逐明细撤销正在处理或结果待核对；系统会复用原幂等键。普通刷新不会生成新撤销请求。 <button class="btn small" type="button" :disabled="(reportedItemVoidSaving()) || manualSheetParentControlsBlocked()" @click="retryReportedItemVoidAttempt">重试核对</button></div>
               <div v-if="requisitionTab==='submitted' && reportedLabelRecoveryUrls.length" class="status green reported-item-print-errors"><div v-for="item in reportedLabelRecoveryUrls" :key="item.url">标签已核验；若没有看到标签页，请点击 <a :href="item.url" target="_blank" rel="noopener">{{ item.document_number || '打开标签页' }}</a>。</div></div>
               <div v-if="requisitionTab==='submitted' && productionPrintBatchError" class="status orange reported-item-print-errors">{{ productionPrintBatchError }}</div>
               <div v-if="requisitionTab==='submitted' && productionPrintRecoveryUrl" class="status green reported-item-print-errors">批量打印包已经生成。若浏览器阻止了新窗口，请点击 <a :href="productionPrintRecoveryUrl" target="_blank" rel="noopener">打开本次冻结打印包</a>；不要重复生成。</div>
               <div v-if="requisitionTab==='pending'" class="workflow-list-note">已勾选 {{ selectedPendingKeys.length }} 项；全选只作用于当前页，正式采购量以确认草稿为准。</div>
-              <data-panel v-if="requisitionTab==='pending'" :empty="!filteredRequisitionPending.length"><table class="requisition-pending-table"><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选本页</th><th>订单号</th><th>客户</th><th>存货编码 / 产品</th><th>报料尺寸 / 压线</th><th>供应商 / 材质</th><th>订单数量</th><th>成品库存抵扣</th><th>需生产数量</th><th>需求 / 客户备料 / 采购</th><th>交期</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRequisitionPending" :key="pendingRowKey(row)" :data-workflow-row="'purchase:'+pendingRowKey(row)" tabindex="0" :class="{ 'workflow-current':workflowRowSelected('purchase:'+pendingRowKey(row)), 'requisition-selected': selectedPendingKeys.includes(pendingRowKey(row)), 'warning-row': row.is_merge_group }"><td><input type="checkbox" :checked="selectedPendingKeys.includes(pendingRowKey(row))" @change="togglePendingRow(row, $event.target.checked)" :disabled="!isPendingRowSelectable(row)" /></td><td><span v-if="row.is_merge_group" class="status blue">合并组</span><br><span v-if="row.source_type==='stock_replenishment'" class="status blue">补库 {{ row.order_number }}</span><order-reference v-else-if="!row.is_merge_group" :row="row"></order-reference><div v-if="row.is_merge_group" class="erp-order-no">{{ (row.order_numbers || []).join(' / ') }}</div></td><td>{{ row.customer_name }}</td><td><template v-if="row.is_merge_group"><strong>{{ (row.product_codes || []).join(' / ') }}</strong><br><span class="muted">{{ row.specification }}</span><div><button class="btn small" @click="requisitionMergeExpanded[row.merge_group_id] = !requisitionMergeExpanded[row.merge_group_id]">{{ requisitionMergeExpanded[row.merge_group_id] ? '收起来源' : '展开来源' }}</button></div><div v-if="requisitionMergeExpanded[row.merge_group_id]" class="muted" style="margin-top:4px;white-space:normal"><div v-for="m in row.members" :key="m.item_id"><order-reference :row="m"></order-reference>｜{{ m.product_code }}｜{{ m.product_name }} × {{ m.quantity }}</div></div></template><template v-else><strong>{{ plainProductText(row.product_code) }}</strong><br>{{ plainProductText(row.product_name) }}<br><span class="muted">{{ row.specification }}</span><div class="toolbar-group" style="margin-top:4px"><a v-if="row.drawing_path" :href="row.drawing_path" class="btn small" target="_blank" rel="noopener">{{ row.drawing_source || '图纸' }}</a><button v-if="row.product_id && !commonBoxReadiness(row).ready && canEditProducts" type="button" class="btn small" :disabled="orderContextOpening" @click.stop="openRequisitionContextProduct(row)">补齐常用箱</button></div></template></td><td style="font-size:12px;white-space:nowrap"><template v-if="row.is_merge_group && row.sheet_cutting_snapshot"><strong>{{ row.report_length_mm }} × {{ row.report_width_mm }}</strong><div class="muted" style="white-space:normal">{{ sheetCuttingSummary(row.sheet_cutting_snapshot) }}</div><button class="btn small" type="button" @click="openSupplierRequisitionDraft([row])">修改开料并报料</button></template><template v-else-if="row.is_merge_group"><div class="merge-size-editor"><input class="input merge-size-input" type="number" step="0.01" min="1" v-model.number="row.report_length_mm" /> <span>×</span> <input class="input merge-size-input" type="number" step="0.01" min="1" v-model.number="row.report_width_mm" /></div><div class="inline-input"><span>一开</span><input class="input merge-cutter-select" type="number" min="1" step="1" :value="cuttingModeFactor(row.cutting_mode)" :disabled="!hasAuthoritativeMergedCuttingBase(row)" title="历史合并组缺少原始单片尺寸时不能切换一开数" @change="applyMergedRequisitionCuttingPlan(row,$event.target.value)" /></div><div v-if="row._cutting_plan_error" class="status red" style="white-space:normal">{{ row._cutting_plan_error }}</div><div v-else class="muted" style="white-space:normal">{{ mergedRequisitionCuttingPlanSummary(row) }}</div></template><template v-else>{{ formatReportDims(row) }}<br>{{ formatCrease(row) }}</template><div v-for="warning in row.dimension_warnings || []" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><template v-if="row.is_merge_group"><select class="select merge-supplier-select" v-model="row.supplier_name" @focus="ensureRequisitionMaterials()"><option value="">请选择供应商</option><option v-if="row.supplier_name && !materialSupplierSelectOptions.includes(row.supplier_name)" :value="row.supplier_name" disabled>{{ supplierDisplayName(row.supplier_name) }}（历史值）</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select><br><span class="muted">{{ row.material_display || "-" }}</span></template><template v-else>{{ supplierDisplayName(row.snapshot_supplier_name || "未设置供应商") }}<br><span class="muted">{{ row.material || "-" }} / {{ fluteDisplay(row.flute_type) }}</span></template></td><td>{{ row.quantity }}{{ row.procurement_mode==='external_purchase' ? ' '+(row.external_purchase_unit || '') : row.source_type==='stock_replenishment' ? ' 张' : ' '+orderLineUnitLabel(row) }}</td><td><strong>{{ row.finished_inventory_reserved_qty || 0 }}</strong><template v-if="row.can_auto_use_late_finished_inventory"><div class="status green" style="display:block;white-space:normal;margin-top:4px">后来可用 {{ row.late_finished_inventory_reservable_qty || 0 }} {{ orderLineUnitLabel(row) }}</div><div v-for="location in row.late_finished_inventory_locations || []" :key="location.location_id || location.location_code" class="muted" style="white-space:normal">{{ inventoryLocation(location) }} {{ location.available_quantity || 0 }}</div></template></td><td><span v-if="row.procurement_mode==='external_purchase'">外购，无需生产</span><strong v-else>{{ row.production_required_qty }}</strong><div v-if="row.fully_covered_by_finished_inventory" class="status green">成品库存已全额抵扣</div></td><td class="requisition-demand-cell"><div v-if="row.procurement_mode==='external_purchase'">外购实物需求：{{ row.external_purchase_quantity }} {{ row.external_purchase_unit }}</div><template v-else><div>需求：{{ row.required_piece_qty || 0 }} 片</div><div class="semi-deducted">客户备料已预占：{{ row.semi_finished_reserved_piece_qty || 0 }} 片</div><div class="remaining-demand">仍需生产：{{ row.remaining_required_piece_qty || 0 }} 片</div><div class="purchase-demand">本次只需报：{{ row.requisition_qty || 0 }} 张</div></template></td><td>{{ row.delivery_date || "-" }}</td><td><template v-if="row.is_merge_group"><input class="input merge-remark-input" v-model.trim="row.remark" placeholder="备注" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" @click="updateMergeGroup(row)">保存合并组</button></div></template><template v-else><button v-if="row.can_auto_use_late_finished_inventory && canWarehouseReserve" class="btn small success" :disabled="row._late_finished_loading" @click="autoUseLateFinishedInventory(row)">{{ row._late_finished_loading ? '正在预占…' : '使用成品，剩余再报' }}</button><template v-if="!row.can_auto_use_late_finished_inventory"><div v-if="row.can_auto_use_customer_board_preparation && canWarehouseReserve" class="status green" style="display:block;white-space:normal;margin-bottom:6px">可用客户专用纸板备料 {{ row.customer_board_preparation_available_sheet_qty || 0 }} 张</div><button v-if="row.can_auto_use_customer_board_preparation && canWarehouseReserve" class="btn small success" :disabled="row._board_preparation_loading" @click="autoUseCustomerBoardPreparation(row)">{{ row._board_preparation_loading ? '正在预占…' : '使用备料，只报差额' }}</button></template><template v-if="row.source_type==='stock_replenishment' && row.procurement_mode==='external_purchase'"><button v-if="canAdmin && canViewCosts && canRequisition" class="btn small primary" :disabled="row._externalBuying" @click="confirmStockExternalDraft(row)">{{ row._externalBuying ? '处理中…' : '预览并确认外购' }}</button><span v-else class="muted">待管理员确认外购</span></template><span v-else-if="row.source_type==='stock_replenishment'" class="muted">勾选后统一采购</span><button v-else class="btn small" @click="openRequisitionMaterialChange(row)">更换供应商/材质</button><button v-if="row.source_type==='stock_replenishment' && row.source_snapshot?.source_type==='stock_warning' && row.stock_replenishment_can_void && canRequisition" class="btn small danger" type="button" :disabled="!!stockReplenishmentVoidState.orderId || stockReplenishmentVoidUncertain(row) || row._externalBuying || requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="voidPendingStockReplenishment(row)">{{ stockReplenishmentVoidBusy(row) ? '撤销中…' : stockReplenishmentVoidUncertain(row) ? '请刷新核对' : '撤销并返回库存预警' }}</button></template></td></tr></tbody></table></data-panel>
+              <data-panel v-if="requisitionTab==='pending'" :empty="!filteredRequisitionPending.length"><table class="requisition-pending-table"><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" / :disabled="manualSheetParentControlsBlocked()"> 全选本页</th><th>订单号</th><th>客户</th><th>存货编码 / 产品</th><th>报料尺寸 / 压线</th><th>供应商 / 材质</th><th>订单数量</th><th>成品库存抵扣</th><th>需生产数量</th><th>需求 / 客户备料 / 采购</th><th>交期</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRequisitionPending" :key="pendingRowKey(row)" :data-workflow-row="'purchase:'+pendingRowKey(row)" tabindex="0" :class="{ 'workflow-current':workflowRowSelected('purchase:'+pendingRowKey(row)), 'requisition-selected': selectedPendingKeys.includes(pendingRowKey(row)), 'warning-row': row.is_merge_group }"><td><input type="checkbox" :checked="selectedPendingKeys.includes(pendingRowKey(row))" @change="togglePendingRow(row, $event.target.checked)" :disabled="(!isPendingRowSelectable(row)) || manualSheetParentControlsBlocked()" /></td><td><span v-if="row.is_merge_group" class="status blue">合并组</span><br><span v-if="row.source_type==='stock_replenishment'" class="status blue">补库 {{ row.order_number }}</span><order-reference v-else-if="!row.is_merge_group" :row="row"></order-reference><div v-if="row.is_merge_group" class="erp-order-no">{{ (row.order_numbers || []).join(' / ') }}</div></td><td>{{ row.customer_name }}</td><td><template v-if="row.is_merge_group"><strong>{{ (row.product_codes || []).join(' / ') }}</strong><br><span class="muted">{{ row.specification }}</span><div><button class="btn small" @click="requisitionMergeExpanded[row.merge_group_id] = !requisitionMergeExpanded[row.merge_group_id]" :disabled="manualSheetParentControlsBlocked()">{{ requisitionMergeExpanded[row.merge_group_id] ? '收起来源' : '展开来源' }}</button></div><div v-if="requisitionMergeExpanded[row.merge_group_id]" class="muted" style="margin-top:4px;white-space:normal"><div v-for="m in row.members" :key="m.item_id"><order-reference :row="m"></order-reference>｜{{ m.product_code }}｜{{ m.product_name }} × {{ m.quantity }}</div></div></template><template v-else><strong>{{ plainProductText(row.product_code) }}</strong><br>{{ plainProductText(row.product_name) }}<br><span class="muted">{{ row.specification }}</span><div class="toolbar-group" style="margin-top:4px"><a v-if="row.drawing_path" :href="row.drawing_path" class="btn small" target="_blank" rel="noopener">{{ row.drawing_source || '图纸' }}</a><button v-if="row.product_id && !commonBoxReadiness(row).ready && canEditProducts" type="button" class="btn small" :disabled="(orderContextOpening) || manualSheetParentControlsBlocked()" @click.stop="openRequisitionContextProduct(row)">补齐常用箱</button></div></template></td><td style="font-size:12px;white-space:nowrap"><template v-if="row.is_merge_group && row.sheet_cutting_snapshot"><strong>{{ row.report_length_mm }} × {{ row.report_width_mm }}</strong><div class="muted" style="white-space:normal">{{ sheetCuttingSummary(row.sheet_cutting_snapshot) }}</div><button class="btn small" type="button" @click="openSupplierRequisitionDraft([row])" :disabled="manualSheetParentControlsBlocked()">修改开料并报料</button></template><template v-else-if="row.is_merge_group"><div class="merge-size-editor"><input class="input merge-size-input" type="number" step="0.01" min="1" v-model.number="row.report_length_mm" / :disabled="manualSheetParentControlsBlocked()"> <span>×</span> <input class="input merge-size-input" type="number" step="0.01" min="1" v-model.number="row.report_width_mm" / :disabled="manualSheetParentControlsBlocked()"></div><div class="inline-input"><span>一开</span><input class="input merge-cutter-select" type="number" min="1" step="1" :value="cuttingModeFactor(row.cutting_mode)" :disabled="(!hasAuthoritativeMergedCuttingBase(row)) || manualSheetParentControlsBlocked()" title="历史合并组缺少原始单片尺寸时不能切换一开数" @change="applyMergedRequisitionCuttingPlan(row,$event.target.value)" /></div><div v-if="row._cutting_plan_error" class="status red" style="white-space:normal">{{ row._cutting_plan_error }}</div><div v-else class="muted" style="white-space:normal">{{ mergedRequisitionCuttingPlanSummary(row) }}</div></template><template v-else>{{ formatReportDims(row) }}<br>{{ formatCrease(row) }}</template><div v-for="warning in row.dimension_warnings || []" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><template v-if="row.is_merge_group"><select class="select merge-supplier-select" v-model="row.supplier_name" @focus="ensureRequisitionMaterials()" :disabled="manualSheetParentControlsBlocked()"><option value="">请选择供应商</option><option v-if="row.supplier_name && !materialSupplierSelectOptions.includes(row.supplier_name)" :value="row.supplier_name" disabled>{{ supplierDisplayName(row.supplier_name) }}（历史值）</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select><br><span class="muted">{{ row.material_display || "-" }}</span></template><template v-else>{{ supplierDisplayName(row.snapshot_supplier_name || "未设置供应商") }}<br><span class="muted">{{ row.material || "-" }} / {{ fluteDisplay(row.flute_type) }}</span></template></td><td>{{ row.quantity }}{{ row.procurement_mode==='external_purchase' ? ' '+(row.external_purchase_unit || '') : row.source_type==='stock_replenishment' ? ' 张' : ' '+orderLineUnitLabel(row) }}</td><td><strong>{{ row.finished_inventory_reserved_qty || 0 }}</strong><template v-if="row.can_auto_use_late_finished_inventory"><div class="status green" style="display:block;white-space:normal;margin-top:4px">后来可用 {{ row.late_finished_inventory_reservable_qty || 0 }} {{ orderLineUnitLabel(row) }}</div><div v-for="location in row.late_finished_inventory_locations || []" :key="location.location_id || location.location_code" class="muted" style="white-space:normal">{{ inventoryLocation(location) }} {{ location.available_quantity || 0 }}</div></template></td><td><span v-if="row.procurement_mode==='external_purchase'">外购，无需生产</span><strong v-else>{{ row.production_required_qty }}</strong><div v-if="row.fully_covered_by_finished_inventory" class="status green">成品库存已全额抵扣</div></td><td class="requisition-demand-cell"><div v-if="row.procurement_mode==='external_purchase'">外购实物需求：{{ row.external_purchase_quantity }} {{ row.external_purchase_unit }}</div><template v-else><div>需求：{{ row.required_piece_qty || 0 }} 片</div><div class="semi-deducted">客户备料已预占：{{ row.semi_finished_reserved_piece_qty || 0 }} 片</div><div class="remaining-demand">仍需生产：{{ row.remaining_required_piece_qty || 0 }} 片</div><div class="purchase-demand">本次只需报：{{ row.requisition_qty || 0 }} 张</div></template></td><td>{{ row.delivery_date || "-" }}</td><td><template v-if="row.is_merge_group"><input class="input merge-remark-input" v-model.trim="row.remark" placeholder="备注" / :disabled="manualSheetParentControlsBlocked()"><div class="toolbar-group" style="margin-top:6px"><button class="btn small" @click="updateMergeGroup(row)" :disabled="manualSheetParentControlsBlocked()">保存合并组</button></div></template><template v-else><button v-if="row.can_auto_use_late_finished_inventory && canWarehouseReserve" class="btn small success" :disabled="(row._late_finished_loading) || manualSheetParentControlsBlocked()" @click="autoUseLateFinishedInventory(row)">{{ row._late_finished_loading ? '正在预占…' : '使用成品，剩余再报' }}</button><template v-if="!row.can_auto_use_late_finished_inventory"><div v-if="row.can_auto_use_customer_board_preparation && canWarehouseReserve" class="status green" style="display:block;white-space:normal;margin-bottom:6px">可用客户专用纸板备料 {{ row.customer_board_preparation_available_sheet_qty || 0 }} 张</div><button v-if="row.can_auto_use_customer_board_preparation && canWarehouseReserve" class="btn small success" :disabled="(row._board_preparation_loading) || manualSheetParentControlsBlocked()" @click="autoUseCustomerBoardPreparation(row)">{{ row._board_preparation_loading ? '正在预占…' : '使用备料，只报差额' }}</button></template><template v-if="row.source_type==='stock_replenishment' && row.procurement_mode==='external_purchase'"><button v-if="canAdmin && canViewCosts && canRequisition" class="btn small primary" :disabled="(row._externalBuying) || manualSheetParentControlsBlocked()" @click="confirmStockExternalDraft(row)">{{ row._externalBuying ? '处理中…' : '预览并确认外购' }}</button><span v-else class="muted">待管理员确认外购</span></template><span v-else-if="row.source_type==='stock_replenishment'" class="muted">勾选后统一采购</span><button v-else class="btn small" @click="openRequisitionMaterialChange(row)" :disabled="manualSheetParentControlsBlocked()">更换供应商/材质</button><button v-if="row.source_type==='stock_replenishment' && row.source_snapshot?.source_type==='stock_warning' && row.stock_replenishment_can_void && canRequisition" class="btn small danger" type="button" :disabled="(!!stockReplenishmentVoidState.orderId || stockReplenishmentVoidUncertain(row) || row._externalBuying || requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()) || manualSheetParentControlsBlocked()" @click="voidPendingStockReplenishment(row)">{{ stockReplenishmentVoidBusy(row) ? '撤销中…' : stockReplenishmentVoidUncertain(row) ? '请刷新核对' : '撤销并返回库存预警' }}</button><manual-sheet-deduction :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" v-if="canWarehouseReserve && !row.is_composite_bom && row.source_type!=='stock_replenishment' && row.procurement_mode!=='external_purchase'" :order-item-id="Number(row.item_id || row.order_item_id)" :component-type="row.component_type || 'whole'" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualBomSheetDeduction(row,$event)"></manual-sheet-deduction></template></td></tr></tbody></table></data-panel>
               <data-panel v-if="requisitionTab==='waiting'" :empty="!requisitionHolds.length">
                 <table class="requisition-hold-table">
                   <thead><tr><th>客户 / 订单</th><th>存货编码 / 产品</th><th>订单 / 当前报料需求</th><th>等候条件</th><th>状态</th><th>操作</th></tr></thead>
@@ -4569,26 +4570,26 @@
                     <td><div class="requisition-hold-demand"><strong>{{ requisitionHoldDemandText(row) }}</strong><div v-for="component in row.component_requirements || []" :key="component.component_type" class="requisition-hold-demand-component">{{ requisitionHoldComponentText(component) }}</div><div v-if="row.quantity_note" class="muted">{{ row.quantity_note }}</div><div v-if="row.requirement_warning" class="status red" style="display:block;white-space:normal">{{ row.requirement_warning }}</div></div></td>
                     <td><div class="requisition-hold-two-lines">{{ requisitionHoldConditionText(row) }}<br><span class="muted">{{ row.specification || row.specification_snapshot || '' }}</span></div></td>
                     <td><span :class="['status',requisitionHoldIsAnomaly(row) ? 'red' : requisitionHoldIsDue(row) ? 'orange' : 'blue']">{{ requisitionHoldStatusText(row) }}</span><div class="muted" style="margin-top:4px">已等候 {{ row.waiting_days || 0 }} 天</div></td>
-                    <td><div class="requisition-hold-actions"><button v-if="canRequisition" class="btn small success" :disabled="row._busy || row.can_restore_to_pending === false" :title="row.can_restore_to_pending === false ? (row.requirement_warning || '订单资料异常，暂不能恢复') : ''" @click="releaseRequisitionHold(row)">恢复待报料</button><button v-if="canRequisition" class="btn small" :disabled="row._busy" @click="openRequisitionHoldEdit(row)">修改</button></div></td>
+                    <td><div class="requisition-hold-actions"><button v-if="canRequisition" class="btn small success" :disabled="(row._busy || row.can_restore_to_pending === false) || manualSheetParentControlsBlocked()" :title="row.can_restore_to_pending === false ? (row.requirement_warning || '订单资料异常，暂不能恢复') : ''" @click="releaseRequisitionHold(row)">恢复待报料</button><button v-if="canRequisition" class="btn small" :disabled="(row._busy) || manualSheetParentControlsBlocked()" @click="openRequisitionHoldEdit(row)">修改</button></div></td>
                   </tr></tbody>
                 </table>
               </data-panel>
               <div v-if="requisitionTab==='submitted' && reportedItemLoading" class="muted" style="margin:8px 0">正在读取已报料逐明细…</div>
               <div v-if="requisitionTab==='submitted' && reportedItemError" class="status orange" style="display:flex;align-items:center;gap:8px;white-space:normal;margin:8px 0">
-                <span>{{ reportedItemError }}</span><button class="btn small" type="button" :disabled="reportedItemLoading" @click="loadReportedDocuments">重试</button>
+                <span>{{ reportedItemError }}</span><button class="btn small" type="button" :disabled="(reportedItemLoading) || manualSheetParentControlsBlocked()" @click="loadReportedDocuments">重试</button>
               </div>
               <data-panel v-if="requisitionTab==='submitted' && requisitionItems.length" class="reported-item-table-wrap">
                 <table class="reported-item-table" aria-label="已报料逐明细紧凑表格">
                   <thead><tr>
-                    <th class="reported-item-select-column"><input type="checkbox" :checked="reportedCurrentPageAllSelected()" @change="toggleReportedCurrentPage($event.target.checked)" /> 序号</th>
-                    <th class="reported-item-dimension"><button :class="['reported-item-sort',{active:reportedSort.by==='report_length_mm'}]" @click="setReportedSort('report_length_mm')">报料长 {{ reportedSortArrow('report_length_mm') }}</button></th>
+                    <th class="reported-item-select-column"><input type="checkbox" :checked="reportedCurrentPageAllSelected()" @change="toggleReportedCurrentPage($event.target.checked)" / :disabled="manualSheetParentControlsBlocked()"> 序号</th>
+                    <th class="reported-item-dimension"><button :class="['reported-item-sort',{active:reportedSort.by==='report_length_mm'}]" @click="setReportedSort('report_length_mm')" :disabled="manualSheetParentControlsBlocked()">报料长 {{ reportedSortArrow('report_length_mm') }}</button></th>
                     <th class="reported-item-multiply">×</th>
-                    <th class="reported-item-dimension"><button :class="['reported-item-sort',{active:reportedSort.by==='report_width_mm'}]" @click="setReportedSort('report_width_mm')">报料宽 {{ reportedSortArrow('report_width_mm') }}</button></th>
+                    <th class="reported-item-dimension"><button :class="['reported-item-sort',{active:reportedSort.by==='report_width_mm'}]" @click="setReportedSort('report_width_mm')" :disabled="manualSheetParentControlsBlocked()">报料宽 {{ reportedSortArrow('report_width_mm') }}</button></th>
                     <th style="width:130px">压线尺寸 / 净毛</th>
-                    <th style="width:110px"><button :class="['reported-item-sort',{active:reportedSort.by==='requisition_qty'}]" @click="setReportedSort('requisition_qty')">采购数量 {{ reportedSortArrow('requisition_qty') }}</button></th>
+                    <th style="width:110px"><button :class="['reported-item-sort',{active:reportedSort.by==='requisition_qty'}]" @click="setReportedSort('requisition_qty')" :disabled="manualSheetParentControlsBlocked()">采购数量 {{ reportedSortArrow('requisition_qty') }}</button></th>
                     <th style="width:135px">材质 / 楞型</th>
                     <th style="width:220px">客户简称 / 存货编码</th>
-                    <th class="reported-item-times"><button :class="['reported-item-sort',{active:reportedSort.by==='reported_at'}]" @click="setReportedSort('reported_at')">报料日期 {{ reportedSortArrow('reported_at') }}</button></th>
+                    <th class="reported-item-times"><button :class="['reported-item-sort',{active:reportedSort.by==='reported_at'}]" @click="setReportedSort('reported_at')" :disabled="manualSheetParentControlsBlocked()">报料日期 {{ reportedSortArrow('reported_at') }}</button></th>
                     <th class="reported-item-supplier">供应商</th>
                     <th class="reported-item-status">状态</th>
                   </tr></thead>
@@ -4597,7 +4598,7 @@
                     <td colspan="11"><div class="reported-composite-parent">
                       <div class="reported-composite-parent-main">
                         <label v-if="row.composite_fulfillment_mode==='parent_delivery'" class="reported-composite-parent-label-choice" :title="row.composite_parent_label_enabled ? '父件标签按父件常用箱当前设置打印；下方子件仍分别生产' : '父件常用箱尚未启用产品标签'">
-                          <input type="checkbox" :disabled="!row.composite_parent_label_enabled" :checked="reportedCompositeGroupSelected(row)" @change="toggleReportedCompositeGroup(row,$event.target.checked)" />
+                          <input type="checkbox" :disabled="(!row.composite_parent_label_enabled) || manualSheetParentControlsBlocked()" :checked="reportedCompositeGroupSelected(row)" @change="toggleReportedCompositeGroup(row,$event.target.checked)" />
                           {{ reportedCompositeGroupSelected(row) ? '已选择父件标签' : (row.composite_parent_label_enabled ? '选择父件标签' : '父件未启用标签') }}
                         </label>
                         <strong>组合父件：{{ row.composite_parent_product_code || '-' }}｜{{ row.composite_parent_product_name || '-' }}</strong>
@@ -4605,20 +4606,20 @@
                         <span>{{ row.composite_parent_set_quantity || 0 }} 套</span>
                         <span class="muted">{{ row.composite_fulfillment_mode==='parent_delivery' ? '勾选父件将整组子件用于父件标签；报料仍按下方子件数量' : '父件不进入送货单与标签，下方子件分别交付、打印和入库' }}</span>
                       </div>
-                      <button v-if="row.composite_group_can_void" class="btn small danger" type="button" @click="voidReportedCompositeRequisition(row)">撤销整组报料</button>
+                      <button v-if="row.composite_group_can_void" class="btn small danger" type="button" @click="voidReportedCompositeRequisition(row)" :disabled="manualSheetParentControlsBlocked()">撤销整组报料</button>
                     </div></td>
                   </tr>
                   <tr :class="{'row-voided':row.status==='voided'}">
-                    <td class="reported-item-select-column"><input type="checkbox" :checked="reportedItemSelected(row)" @change="toggleReportedItemSelection(row,$event.target.checked)" /> {{ row.sequence }}</td>
+                    <td class="reported-item-select-column"><input type="checkbox" :checked="reportedItemSelected(row)" @change="toggleReportedItemSelection(row,$event.target.checked)" / :disabled="manualSheetParentControlsBlocked()"> {{ row.sequence }}</td>
                     <td class="reported-item-dimension" :title="String(row.report_length_mm || '-')">{{ row.report_length_mm || '-' }}</td>
                     <td class="reported-item-multiply">×</td>
                     <td class="reported-item-dimension" :title="String(row.report_width_mm || '-')">{{ row.report_width_mm || '-' }}</td>
                     <td :title="row.crease_display || '-'">{{ row.crease_display || '-' }}</td>
                     <td><strong>{{ row.requisition_qty || 0 }}</strong> {{ row.unit || '张' }}</td>
                     <td :title="`${row.material_code || '-'} / ${row.flute_type || '-'}`">{{ row.material_code || '-' }} / {{ fluteDisplay(row.flute_type) }}</td>
-                    <td><button class="reported-item-customer" type="button" @click="openReportedItemDetail(row)" :title="`${row.customer_name || '-'}｜${row.product_code || '-'}`">{{ row.customer_short_name || row.customer_name || '-' }}｜{{ row.product_code || '-' }}</button></td>
+                    <td><button class="reported-item-customer" type="button" @click="openReportedItemDetail(row)" :title="`${row.customer_name || '-'}｜${row.product_code || '-'}`" :disabled="manualSheetParentControlsBlocked()">{{ row.customer_short_name || row.customer_name || '-' }}｜{{ row.product_code || '-' }}</button></td>
                     <td :title="formatDateTime(row.reported_at)">{{ formatDateTime(row.reported_at) }}</td>
-                    <td class="reported-item-supplier"><button class="reported-item-customer" @click="openPurchaseReview(row)">{{ supplierDisplayName(row.supplier_name || '-') }}</button></td>
+                    <td class="reported-item-supplier"><button class="reported-item-customer" @click="openPurchaseReview(row)" :disabled="manualSheetParentControlsBlocked()">{{ supplierDisplayName(row.supplier_name || '-') }}</button></td>
                     <td><span :class="['status',reportedItemStatusClass(row)]">{{ reportedItemStatusText(row) }}</span></td>
                   </tr></template></tbody>
                 </table>
@@ -4626,16 +4627,16 @@
               <div v-if="requisitionTab==='submitted' && requisitionReportedLoaded && !requisitionItems.length && !reportedItemLoading" class="empty">当前条件下没有已报料明细。</div>
               <div v-if="purchaseReview" class="workspace-dialog-mask" @click.self="purchaseReview=null" @keydown.esc.stop="purchaseReview=null">
                 <section class="workspace-dialog" role="dialog" aria-modal="true" aria-label="供应商采购单明细">
-                  <div class="toolbar"><strong>{{supplierDisplayName(purchaseReview.row.supplier_name)}} · {{purchaseReview.row.document_number}}</strong><button class="btn small" @click="purchaseReview=null">关闭</button></div>
+                  <div class="toolbar"><strong>{{supplierDisplayName(purchaseReview.row.supplier_name)}} · {{purchaseReview.row.document_number}}</strong><button class="btn small" @click="purchaseReview=null" :disabled="manualSheetParentControlsBlocked()">关闭</button></div>
                   <data-panel :loading="purchaseReview.loading" :error="purchaseReview.error" :empty="!purchaseReview.items.length" @retry="openPurchaseReview(purchaseReview.row,purchaseReview.page)">
-                    <table class="line-items"><thead><tr><th>存货编码 / 产品</th><th>尺寸 / 压线</th><th>材质 / 楞型</th><th>采购数量</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="line in purchaseReview.items" :key="line.stable_id"><td><strong>{{line.product_code}}</strong><div>{{line.product_name}}</div><small>{{line.customer_short_name||line.customer_name}}</small></td><td>{{line.report_length_mm}} × {{line.report_width_mm}} mm<div>{{line.crease_display}}</div></td><td>{{line.material_code}} / {{line.flute_type}}</td><td>{{line.requisition_qty}} {{line.unit}}</td><td><span :class="['status',reportedItemStatusClass(line)]">{{reportedItemStatusText(line)}}</span></td><td><button v-if="line.can_void_item" class="btn small danger" :disabled="reportedItemVoidBusy(line)" @click="voidPurchaseReviewItem(line)">{{reportedItemVoidButtonText(line)}}</button><info-note v-else>该来源或当前状态不支持独立撤销。已收料、共用来源或已有下游的明细需按原流程处理。</info-note></td></tr></tbody></table>
+                    <table class="line-items"><thead><tr><th>存货编码 / 产品</th><th>尺寸 / 压线</th><th>材质 / 楞型</th><th>采购数量</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="line in purchaseReview.items" :key="line.stable_id"><td><strong>{{line.product_code}}</strong><div>{{line.product_name}}</div><small>{{line.customer_short_name||line.customer_name}}</small></td><td>{{line.report_length_mm}} × {{line.report_width_mm}} mm<div>{{line.crease_display}}</div></td><td>{{line.material_code}} / {{line.flute_type}}</td><td>{{line.requisition_qty}} {{line.unit}}</td><td><span :class="['status',reportedItemStatusClass(line)]">{{reportedItemStatusText(line)}}</span></td><td><button v-if="line.can_void_item" class="btn small danger" :disabled="(reportedItemVoidBusy(line)) || manualSheetParentControlsBlocked()" @click="voidPurchaseReviewItem(line)">{{reportedItemVoidButtonText(line)}}</button><info-note v-else>该来源或当前状态不支持独立撤销。已收料、共用来源或已有下游的明细需按原流程处理。</info-note></td></tr></tbody></table>
                   </data-panel>
-                  <div class="toolbar-group"><button class="btn small" @click="openReportedItemDocument(purchaseReview.row)">原采购单</button><pager :page="purchaseReview.page" :total="purchaseReview.total" :page-size="Math.min(8,screenPageSize(8))" :always="true" @change="openPurchaseReview(purchaseReview.row,$event)"></pager></div>
+                  <div class="toolbar-group"><button class="btn small" @click="openReportedItemDocument(purchaseReview.row)" :disabled="manualSheetParentControlsBlocked()">原采购单</button><pager :page="purchaseReview.page" :total="purchaseReview.total" :page-size="Math.min(8,screenPageSize(8))" :always="true" @change="openPurchaseReview(purchaseReview.row,$event)"></pager></div>
                 </section>
               </div>
               <div v-if="reportedItemDetail" class="reported-item-drawer-backdrop" @click="closeReportedItemDetail"></div>
               <aside v-if="reportedItemDetail" class="reported-item-drawer" aria-label="已报料明细详情" @click.stop>
-                <div class="toolbar" style="justify-content:space-between"><div><strong>已报料明细详情</strong><div class="muted">{{ reportedItemDetail.document_number || '-' }}｜第 {{ reportedItemDetail.line_order || '-' }} 行</div></div><button class="btn" type="button" @click="closeReportedItemDetail">关闭</button></div>
+                <div class="toolbar" style="justify-content:space-between"><div><strong>已报料明细详情</strong><div class="muted">{{ reportedItemDetail.document_number || '-' }}｜第 {{ reportedItemDetail.line_order || '-' }} 行</div></div><button class="btn" type="button" @click="closeReportedItemDetail" :disabled="manualSheetParentControlsBlocked()">关闭</button></div>
                 <dl class="reported-item-drawer-grid">
                   <dt>客户</dt><dd>{{ reportedItemDetail.customer_name || '-' }}（{{ reportedItemDetail.customer_short_name || '-' }}）</dd>
                   <dt>订单 / 编码</dt><dd><order-reference :row="reportedItemDetail"></order-reference>｜{{ reportedItemDetail.product_code || '-' }}</dd>
@@ -4648,11 +4649,18 @@
                   <dt>报料日期</dt><dd>{{ formatDateTime(reportedItemDetail.reported_at) }}</dd>
                   <dt>状态</dt><dd>{{ reportedItemStatusText(reportedItemDetail) }}<template v-if="reportedItemDetail.voided_at">｜{{ formatDateTime(reportedItemDetail.voided_at) }}</template></dd>
                 </dl>
+                <section v-if="canWarehouseReserve && Number(reportedItemDetail.order_item_id)>0" class="reported-manual-sheet-entry" style="margin-top:12px">
+                  <strong>本用途使用库存片料</strong><div class="muted">已合并或已收料部分会保留原承诺；内部未合并余量可填写采用张数。</div>
+                  <div v-if="reportedItemDetail._manual_sheet_loading">正在核对原单据用途…</div>
+                  <div v-if="reportedItemDetail._manual_sheet_error" class="status orange">{{ reportedItemDetail._manual_sheet_error }}</div>
+                  <template v-for="target in reportedItemDetail._manual_sheet_targets || []" :key="target.key"><div>{{ target.label }}</div><manual-sheet-deduction :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" :order-item-id="target.order_item_id" :snapshot-id="target.bom_snapshot_id || 0" :component-type="target.component_type" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualReportedSheetDeduction(reportedItemDetail,$event)"></manual-sheet-deduction></template>
+                  <button class="btn small" :disabled="(reportedItemDetail._manual_sheet_loading || manualSheetDeductionDisabled()) || manualSheetParentControlsBlocked()" @click="loadManualReportedSheetTargets()">重新核对用途</button>
+                </section>
                 <div class="toolbar-group" style="margin-top:18px;flex-wrap:wrap">
-                  <button class="btn primary" type="button" @click="openReportedItemDocument(reportedItemDetail)">{{ reportedItemDetail.can_view_supplier_order ? '查看采购单并定位本行' : '查看原单据' }}</button>
-                  <button v-if="reportedItemDetail.stock_replenishment_can_void" class="btn danger" type="button" :disabled="stockReplenishmentVoidBusy(reportedItemDetail) || stockReplenishmentVoidUncertain(reportedItemDetail)" @click="voidReportedReplenishment(reportedItemDetail)">{{ stockReplenishmentVoidBusy(reportedItemDetail) ? '撤销中…' : (stockReplenishmentVoidUncertain(reportedItemDetail) ? '请刷新核对' : '撤销补库报料') }}</button>
-                  <button v-if="reportedItemDetail.composite_group_can_void" class="btn danger" type="button" @click="voidReportedCompositeRequisition(reportedItemDetail)">撤销整组 BOM 报料</button>
-                  <button v-if="reportedItemDetail.can_void_item" class="btn danger" type="button" :disabled="reportedItemVoidBusy(reportedItemDetail)" @click="voidReportedItem(reportedItemDetail)">{{ reportedItemVoidButtonText(reportedItemDetail) }}</button>
+                  <button class="btn primary" type="button" @click="openReportedItemDocument(reportedItemDetail)" :disabled="manualSheetParentControlsBlocked()">{{ reportedItemDetail.can_view_supplier_order ? '查看采购单并定位本行' : '查看原单据' }}</button>
+                  <button v-if="reportedItemDetail.stock_replenishment_can_void" class="btn danger" type="button" :disabled="(stockReplenishmentVoidBusy(reportedItemDetail) || stockReplenishmentVoidUncertain(reportedItemDetail)) || manualSheetParentControlsBlocked()" @click="voidReportedReplenishment(reportedItemDetail)">{{ stockReplenishmentVoidBusy(reportedItemDetail) ? '撤销中…' : (stockReplenishmentVoidUncertain(reportedItemDetail) ? '请刷新核对' : '撤销补库报料') }}</button>
+                  <button v-if="reportedItemDetail.composite_group_can_void" class="btn danger" type="button" @click="voidReportedCompositeRequisition(reportedItemDetail)" :disabled="manualSheetParentControlsBlocked()">撤销整组 BOM 报料</button>
+                  <button v-if="reportedItemDetail.can_void_item" class="btn danger" type="button" :disabled="(reportedItemVoidBusy(reportedItemDetail)) || manualSheetParentControlsBlocked()" @click="voidReportedItem(reportedItemDetail)">{{ reportedItemVoidButtonText(reportedItemDetail) }}</button>
                 </div>
               </aside>
               </fieldset>
@@ -8840,7 +8848,7 @@
             </div>
             <div v-else-if="modal.type === 'orderDetail' && orderDetail">
               <p v-if="costPanelReturnContext" class="cost-basis">已定位提醒对应明细并展开成本依据。处理完成后点“返回成本提醒”，保留原筛选和页码。</p>
-              <p id="erp-order-detail-description" class="muted" style="margin:0 0 12px">只读查看订单事实；按 Esc 可关闭，Tab 只在本对话框内移动。</p>
+              <p id="erp-order-detail-description" class="muted" style="margin:0 0 12px">查看订单事实和本单片料安排；按 Esc 可关闭，Tab 只在本对话框内移动。</p>
               <div class="form-grid">
                 <div class="field"><label class="sys-num">系统单号</label><div class="sys-num">{{ orderDetail.order_number }}</div></div>
                 <div class="field"><label>客户</label><div>{{ orderDetail.customer_name }}</div></div>
@@ -8852,7 +8860,7 @@
               <div v-if="canViewSalesAmounts" class="field sensitive-price"><label>订单金额</label><div>¥ {{ money(orderDetail.total_amount) }}</div></div>
                 <div class="field wide"><label>备注</label><div>{{ orderDetail.remark || "-" }}</div></div>
               </div>
-              <div class="section-title">只读订单详情</div>
+              <div class="section-title">订单详情与片料安排</div>
               <div class="table-wrap order-read-detail-wrap"><table class="order-read-detail-table"><thead><tr>
                 <th>明细系统单号</th><th>存货编码</th><th>产品名称</th><th>规格mm</th>
                 <th>材质</th><th>生产说明</th><th>订单数量</th><th>成品抵扣</th><th>需生产</th>
@@ -8888,9 +8896,9 @@
                   </template>
                   <span v-else class="muted">-</span>
                 </td>
-              </tr><tr v-if="canViewCosts || hasBomComponents(item)" class="order-read-basis-row" :class="{'cost-review-focus':Number(item.id)===costReviewFocusItemId}"><td :colspan="canViewSalesAmounts ? 14 : 12"><div class="order-read-basis" :aria-label="'明细 '+(item.snapshot_product_code || item.item_order_number)+' 的依据'">
+              </tr><tr v-if="canViewCosts || hasBomComponents(item) || canWarehouseReserve" class="order-read-basis-row" :class="{'cost-review-focus':Number(item.id)===costReviewFocusItemId}"><td :colspan="canViewSalesAmounts ? 14 : 12"><div class="order-read-basis" :aria-label="'明细 '+(item.snapshot_product_code || item.item_order_number)+' 的依据'">
                   <div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div>
-                  <div v-if="canViewCosts" class="material-cost-compact cost-sensitive">
+                  <section v-if="canWarehouseReserve" class="order-manual-sheet-entry"><strong>本订单片料安排</strong><div class="muted">采用只预占填写张数；内部未合并需求同次修订。</div><template v-if="canWarehouseReserve" v-for="target in manualSheetTargetsForItem(item)" :key="target.key"><div class="muted">{{ target.label }}</div><manual-sheet-deduction :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" :order-item-id="target.order_item_id" :snapshot-id="target.bom_snapshot_id || 0" :component-type="target.component_type" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualSheetOrder(item,$event,orderDetail.id)"></manual-sheet-deduction></template></section><div v-if="canViewCosts" class="material-cost-compact cost-sensitive">
                     <strong>{{ item.estimated_total_cost_status === 'calculated' ? `预计总成本 ¥ ${money(item.estimated_order_total_cost)}` : (item.estimated_total_cost_status_label || '预计总成本待完善') }}</strong>
                     <div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin:3px 0">{{ item.estimated_cost_health_label }}<span v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined"> · 预计毛利率 {{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</span></div>
                     <div class="muted">{{ item.estimated_cost_health_basis_label || '按订单录入售价试算，预计而非实际利润' }}</div>
@@ -9271,7 +9279,7 @@
                 <span>{{ requisitionInventoryActionState.action ? requisitionInventoryActionLabel() : (requisitionInventoryActionState.committed ? '库存已经使用，但草稿刷新失败，请先核对状态。' : '上次库存操作结果暂不确定，请先核对状态。') }}</span>
                 <button class="btn small" type="button" :disabled="!!requisitionInventoryActionState.action" @click="refreshRequisitionInventoryState">核对待报料库存状态</button>
               </div>
-              <fieldset :disabled="requisitionInventoryActionBlocked() || supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed || supplierRequisitionSaveState.uncertain" style="border:0;padding:0;margin:0;min-width:0">
+              <fieldset :disabled="requisitionInventoryBaseActionBlocked() || supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed || supplierRequisitionSaveState.uncertain" style="border:0;padding:0;margin:0;min-width:0">
               <div class="muted" style="margin-bottom:10px">当前只是报料草稿，点击保存后才正式生成供应商采购报料单。</div>
               <div style="margin-bottom:10px;padding:10px 12px;border:1px solid #93c5fd;border-radius:8px;background:#eff6ff;white-space:normal">
                 <strong>报料防错检查</strong>
@@ -9280,7 +9288,7 @@
               <div v-if="supplierDraftExactSemiOptions().length" style="margin-bottom:10px;padding:10px 12px;border:2px solid #16a34a;border-radius:8px;background:#f0fdf4;color:#166534;white-space:normal">
                 <strong>发现同规格可合并抵扣库存</strong>
                 <div>点击确认后使用库存，自动减少报料数量。</div>
-                <button class="btn small success" type="button" :disabled="requisitionInventoryActionBlocked()" @click="reserveDraftExactSemiInventory()">一键抵扣全部同尺寸安全组</button>
+                <button class="btn small success" type="button" :disabled="(requisitionInventoryActionBlocked()) || manualSheetParentControlsBlocked()" @click="reserveDraftExactSemiInventory()">一键抵扣全部同尺寸安全组</button>
               </div>
               <div v-if="supplierDraftLateFinishedSources().length" style="margin-bottom:10px;padding:10px 12px;border:2px solid #16a34a;border-radius:8px;background:#f0fdf4;color:#166534;white-space:normal">
                 <strong>发现 {{ supplierDraftLateFinishedSources().length }} 条后来入库的客户专用成品</strong>
@@ -9300,25 +9308,25 @@
                   <tbody>
                     <tr v-for="source in group.stock_sources || []" :key="'stock-'+source.stock_replenishment_item_id"><td>补库需求 {{ source.order_number }}</td><td>{{ source.customer_name }} / {{ source.product_name }}</td><td>{{ source.material }} {{ source.flute_type }} / {{ source.report_length_mm }} × {{ source.report_width_mm }}</td><td>{{ source.quantity }}</td><td>0</td><td>{{ source.quantity }}</td><td>补库用途</td></tr>
                     <tr v-for="(line,index) in group.bom_lines || []" :key="'bom-'+index"><td>组合部件 {{ line.order_number || line.order_item_id }}</td><td>{{ line.customer_name }} / {{ line.product_name }}</td><td>{{ line.material_display }} / {{ line.cardboard_len }} × {{ line.cardboard_width }} / {{ line.crease_type }}
-                      <div v-if="line.sheet_cutting_snapshot" class="sheet-cutting-summary"><small>{{ sheetCuttingSummary(line.sheet_cutting_snapshot) }}</small><button class="btn small" type="button" @click="beginSupplierSheetCuttingEdit(line)">修改开料</button>
-                        <div v-if="line._sheet_cutting_edit" class="sheet-cutting-inputs"><label>长向 <input class="input" type="number" min="1" step="1" v-model.number="line._sheet_cutting_edit.length_parts" /></label><label>宽向 <input class="input" type="number" min="1" step="1" v-model.number="line._sheet_cutting_edit.width_parts" /></label><button class="btn small" type="button" :disabled="supplierRequisitionPreviewLoading" @click="applySupplierSheetCuttingEdit(line)">应用</button><button class="btn small" type="button" @click="line._sheet_cutting_edit=null">取消</button></div><div class="status orange" v-if="line._sheet_cutting_error">{{ line._sheet_cutting_error }}</div></div></td><td><input class="input" type="number" min="1" step="1" v-model.number="line.purchase_total_sheet_qty" @change="onPurchasePurposeTotalChanged(line)" /></td><td><input class="input" type="number" min="0" step="1" v-model.number="line.order_purpose_sheet_qty" @change="onPurchasePurposePartChanged(line)" /></td><td><input class="input" type="number" min="0" step="1" v-model.number="line.stock_purpose_sheet_qty" @change="onPurchasePurposePartChanged(line)" /></td><td><div>成品：{{ line.finished_inventory_reserved_qty || 0 }}</div><div>半成品：{{ line.semi_finished_reserved_piece_qty || 0 }}</div><button v-if="line.is_composite_component && !line.is_composite_component_group && Number(line.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="line._auto_cover_loading || requisitionInventoryActionBlocked()" @click="autoCoverCompositeDraftLine(line)">{{ line._auto_cover_loading ? '正在匹配…' : '自动使用匹配库存' }}</button><div v-if="line._auto_cover_error" class="status orange">{{ line._auto_cover_error }}</div></td></tr>
+                      <div v-if="line.sheet_cutting_snapshot" class="sheet-cutting-summary"><small>{{ sheetCuttingSummary(line.sheet_cutting_snapshot) }}</small><button class="btn small" type="button" @click="beginSupplierSheetCuttingEdit(line)" :disabled="manualSheetParentControlsBlocked()">修改开料</button>
+                        <div v-if="line._sheet_cutting_edit" class="sheet-cutting-inputs"><label>长向 <input class="input" type="number" min="1" step="1" v-model.number="line._sheet_cutting_edit.length_parts" / :disabled="manualSheetParentControlsBlocked()"></label><label>宽向 <input class="input" type="number" min="1" step="1" v-model.number="line._sheet_cutting_edit.width_parts" / :disabled="manualSheetParentControlsBlocked()"></label><button class="btn small" type="button" :disabled="(supplierRequisitionPreviewLoading) || manualSheetParentControlsBlocked()" @click="applySupplierSheetCuttingEdit(line)">应用</button><button class="btn small" type="button" @click="line._sheet_cutting_edit=null" :disabled="manualSheetParentControlsBlocked()">取消</button></div><div class="status orange" v-if="line._sheet_cutting_error">{{ line._sheet_cutting_error }}</div></div></td><td><input class="input" type="number" min="1" step="1" v-model.number="line.purchase_total_sheet_qty" @change="onPurchasePurposeTotalChanged(line)" / :disabled="manualSheetParentControlsBlocked()"></td><td><input class="input" type="number" min="0" step="1" v-model.number="line.order_purpose_sheet_qty" @change="onPurchasePurposePartChanged(line)" / :disabled="manualSheetParentControlsBlocked()"></td><td><input class="input" type="number" min="0" step="1" v-model.number="line.stock_purpose_sheet_qty" @change="onPurchasePurposePartChanged(line)" / :disabled="manualSheetParentControlsBlocked()"></td><td><div>成品：{{ line.finished_inventory_reserved_qty || 0 }}</div><div>半成品：{{ line.semi_finished_reserved_piece_qty || 0 }}</div><button v-if="line.is_composite_component && !line.is_composite_component_group && Number(line.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="(line._auto_cover_loading || requisitionInventoryActionBlocked()) || manualSheetParentControlsBlocked()" @click="autoCoverCompositeDraftLine(line)">{{ line._auto_cover_loading ? '正在匹配…' : '自动使用匹配库存' }}</button><template v-if="canWarehouseReserve" v-for="manualSource in manualSheetDraftSources(line)" :key="`manual:${manualSource.bom_snapshot_id}:${manualSource.component_type}`"><manual-sheet-deduction v-if="Number(manualSource.bom_snapshot_id)>0" :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" :snapshot-id="Number(manualSource.bom_snapshot_id)" :component-type="manualSource.component_type || 'whole'" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualBomSheetDeduction(manualSource,$event,line)"></manual-sheet-deduction></template><div v-if="line._auto_cover_error" class="status orange">{{ line._auto_cover_error }}</div></td></tr>
                   </tbody>
                 </table>
-                <div class="field" style="width:320px"><label>供应商</label><select class="select" v-model="group.supplier_name" @focus="ensureRequisitionMaterials()"><option value="">请选择供应商</option><option v-if="group.supplier_name && !materialSupplierSelectOptions.includes(group.supplier_name)" :value="group.supplier_name">{{ supplierDisplayName(group.supplier_name) }}</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
+                <div class="field" style="width:320px"><label>供应商</label><select class="select" v-model="group.supplier_name" @focus="ensureRequisitionMaterials()" :disabled="manualSheetParentControlsBlocked()"><option value="">请选择供应商</option><option v-if="group.supplier_name && !materialSupplierSelectOptions.includes(group.supplier_name)" :value="group.supplier_name">{{ supplierDisplayName(group.supplier_name) }}</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
                 <div class="draft-purchase-scroll"><table class="draft-purchase-table">
                   <thead><tr><th>报料长 × 宽（mm）</th><th>压线（mm）</th><th>材质／楞型</th><th>库存抵扣</th><th>本次报料（张）</th><th>备注</th></tr></thead>
                   <tbody>
                     <template v-for="line in draftGroupLines(group)" :key="line.line_key || line.source_type + '-' + line.report_length_mm + '-' + line.report_width_mm">
                       <tr>
                         <td><strong class="draft-board-size">{{ line.report_length_mm }} × {{ line.report_width_mm }}</strong>
-                          <button class="btn small" type="button" @click="line._expanded = !line._expanded" :aria-expanded="!!line._expanded">{{ line._expanded ? '收起明细' : '来源与高级调整' }}</button>
+                          <button class="btn small" type="button" @click="line._expanded = !line._expanded" :aria-expanded="!!line._expanded" :disabled="manualSheetParentControlsBlocked()">{{ line._expanded ? '收起明细' : '来源与高级调整' }}</button>
                           <div v-if="line.sheet_cutting_snapshot" class="sheet-cutting-summary">
                             <small>{{ sheetCuttingSummary(line.sheet_cutting_snapshot) }}</small>
-                            <button class="btn small" type="button" :disabled="supplierRequisitionPreviewLoading" @click="beginSupplierSheetCuttingEdit(line)">修改开料</button>
+                            <button class="btn small" type="button" :disabled="(supplierRequisitionPreviewLoading) || manualSheetParentControlsBlocked()" @click="beginSupplierSheetCuttingEdit(line)">修改开料</button>
                             <div v-if="line._sheet_cutting_edit" class="sheet-cutting-inputs">
-                              <label>长向 <input class="input" type="number" min="1" step="1" v-model.number="line._sheet_cutting_edit.length_parts" /></label>
-                              <label>宽向 <input class="input" type="number" min="1" step="1" v-model.number="line._sheet_cutting_edit.width_parts" /></label>
-                              <button class="btn small" type="button" :disabled="supplierRequisitionPreviewLoading" @click="applySupplierSheetCuttingEdit(line)">应用</button><button class="btn small" type="button" @click="line._sheet_cutting_edit=null">取消</button>
+                              <label>长向 <input class="input" type="number" min="1" step="1" v-model.number="line._sheet_cutting_edit.length_parts" / :disabled="manualSheetParentControlsBlocked()"></label>
+                              <label>宽向 <input class="input" type="number" min="1" step="1" v-model.number="line._sheet_cutting_edit.width_parts" / :disabled="manualSheetParentControlsBlocked()"></label>
+                              <button class="btn small" type="button" :disabled="(supplierRequisitionPreviewLoading) || manualSheetParentControlsBlocked()" @click="applySupplierSheetCuttingEdit(line)">应用</button><button class="btn small" type="button" @click="line._sheet_cutting_edit=null" :disabled="manualSheetParentControlsBlocked()">取消</button>
                             </div>
                             <div class="status orange" v-if="line._sheet_cutting_error">{{ line._sheet_cutting_error }}</div>
                           </div>
@@ -9329,28 +9337,28 @@
                         <td>
                           <div v-if="Number(line.semi_finished_reserved_piece_qty)>0">已抵 {{ line.semi_finished_reserved_piece_qty }} 片</div>
                           <div v-if="Number(line.finished_inventory_reserved_qty || line.inventory_deducted_qty)>0">成品已抵 {{ line.finished_inventory_reserved_qty || line.inventory_deducted_qty }} 只</div>
-                          <button v-if="draftLineInventoryPool(line).allocated > 0" class="btn small success" type="button" :disabled="requisitionInventoryActionBlocked()" @click="reserveDraftExactSemiInventory(line)">一键抵扣 {{ draftLineInventoryPool(line).allocated }} 片</button>
+                          <button v-if="draftLineInventoryPool(line).allocated > 0" class="btn small success" type="button" :disabled="(requisitionInventoryActionBlocked()) || manualSheetParentControlsBlocked()" @click="reserveDraftExactSemiInventory(line)">一键抵扣 {{ draftLineInventoryPool(line).allocated }} 片</button>
                           <div v-else-if="!Number(line.semi_finished_reserved_piece_qty)" class="muted">暂无可自动抵扣库存</div>
-                          <button class="btn small" type="button" @click="line._inventory_expanded = !line._inventory_expanded" :aria-expanded="!!line._inventory_expanded">{{ line._inventory_expanded ? '收起库存' : '查看库存／其他尺寸' }}</button>
+                          <button class="btn small" type="button" @click="line._inventory_expanded = !line._inventory_expanded" :aria-expanded="!!line._inventory_expanded" :disabled="manualSheetParentControlsBlocked()">{{ line._inventory_expanded ? '收起库存' : '查看库存／其他尺寸' }}</button>
                         </td>
-                        <td><input class="input draft-purchase-quantity" aria-label="本次报料张数" type="number" min="1" step="1" v-model.number="line.purchase_total_sheet_qty" @input="onPurchasePurposeTotalChanged(line)" />
+                        <td><input class="input draft-purchase-quantity" aria-label="本次报料张数" type="number" min="1" step="1" v-model.number="line.purchase_total_sheet_qty" @input="onPurchasePurposeTotalChanged(line)" / :disabled="manualSheetParentControlsBlocked()">
                           <div class="muted">{{ draftPurchaseQuantityHint(line) }}</div>
                           <div v-if="purchasePurposeValidationError(line)" class="status red" style="white-space:normal">{{ purchasePurposeValidationError(line) }}</div>
                         </td>
-                        <td><input class="input merge-remark-input" aria-label="报料备注" v-model.trim="line.remark" /></td>
+                        <td><input class="input merge-remark-input" aria-label="报料备注" v-model.trim="line.remark" / :disabled="manualSheetParentControlsBlocked()"></td>
                       </tr>
                       <tr v-if="line._inventory_expanded || draftLineLateFinishedSources(line).length" class="draft-inventory-detail">
                         <td colspan="6">
                           <div v-for="source in draftLineLateFinishedSources(line)" :key="`late-finished-${source.order_item_id}`" style="margin-top:6px;padding:6px;border:1px solid #16a34a;border-radius:6px;background:#f0fdf4;white-space:normal">
                             <strong>后来可用客户专用成品 {{ source.late_finished_inventory.reservable_quantity }} 个</strong>
                             <div class="muted">{{ source.order_number }}｜{{ source.product_code }}｜{{ (source.late_finished_inventory.locations || []).map(location => `${inventoryLocation(location)} ${location.available_quantity || 0}`).join('；') }}</div>
-                            <button class="btn small success" type="button" :disabled="source._late_finished_loading" @click="confirmDraftLateFinishedInventory(source)">{{ source._late_finished_loading ? '正在预占…' : '使用成品，剩余再报' }}</button>
+                            <button class="btn small success" type="button" :disabled="(source._late_finished_loading) || manualSheetParentControlsBlocked()" @click="confirmDraftLateFinishedInventory(source)">{{ source._late_finished_loading ? '正在预占…' : '使用成品，剩余再报' }}</button>
                           </div>
 
                           <div class="draft-stock-panel" v-if="draftLineInventoryPool(line).lots.length">
                             <strong>本组库存汇总 · {{ line.report_length_mm }} × {{ line.report_width_mm }} · {{ line.material_display }}</strong>
                             <p>合并尚需 {{ draftLineInventoryPool(line).demand }} 片 · 合格库存 {{ draftLineInventoryPool(line).stock }} 张 · 可抵扣 {{ draftLineInventoryPool(line).allocated }} 片 · 剩余需求 {{ draftLineInventoryPool(line).shortfall }} 片</p>
-                            <button class="btn success" type="button" :disabled="requisitionInventoryActionBlocked()" @click="reserveDraftExactSemiInventory(line)">按合并总量一键抵扣</button>
+                            <button class="btn success" type="button" :disabled="(requisitionInventoryActionBlocked()) || manualSheetParentControlsBlocked()" @click="reserveDraftExactSemiInventory(line)">按合并总量一键抵扣</button>
                             <p class="muted">不需要逐订单、逐栈板采用。系统按订单录入先后分配；剩余需求按开料方式计入采购，明确备库数量保留。已印刷库存只用于其适用存货编码；不同组如共用同批库存，最终以后台统一分配后的数量为准。</p>
                             <details><summary>查看 {{ draftLineInventoryPool(line).lots.length }} 批库存及位置（只读）</summary>
                               <div v-for="stock in draftLineInventoryPool(line).lots" :key="stock.lot_id">{{ stock.internal_name || '片料' }} · {{ inventoryLocation(stock) }} · 可用 {{ stock.available_stock_quantity }} 张</div>
@@ -9358,8 +9366,8 @@
                           </div>
                           <details><summary>其他尺寸与需核对片料（按适用产品查看）</summary>
                           <section v-for="option in draftLineSemiInventoryOptions(line)" :key="`late-semi-${option.order_item_id}-${option.component_type}`" class="draft-stock-panel">
-                            <div class="draft-stock-heading"><div><strong>{{ option.product_code }} · {{ componentLabel(option.component_type) || '片料' }}</strong><div class="muted">{{ option.order_number }} · 尚需 {{ option.remaining_requirement_quantity }} 片 · 已预占 {{ option.reserved_piece_quantity }} 片</div></div>
-                              <button class="btn small" type="button" :disabled="option._manual_loading" @click="queryDraftOtherSemiInventory(option)">{{ option._manual_loading ? '正在查询…' : '查询其他尺寸片料' }}</button>
+                            <div class="draft-stock-heading"><div><strong>{{ option.product_code }} · {{ componentLabel(option.component_type) || '片料' }}</strong><manual-sheet-deduction :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" v-if="canWarehouseReserve" :order-item-id="Number(option.order_item_id)" :component-type="option.component_type || 'whole'" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualBomSheetDeduction(option,$event)"></manual-sheet-deduction><div class="muted">{{ option.order_number }} · 尚需 {{ option.remaining_requirement_quantity }} 片 · 已预占 {{ option.reserved_piece_quantity }} 片</div></div>
+                              <button class="btn small" type="button" :disabled="(option._manual_loading) || manualSheetParentControlsBlocked()" @click="queryDraftOtherSemiInventory(option)">{{ option._manual_loading ? '正在查询…' : '查询其他尺寸片料' }}</button>
                             </div>
                             <p class="muted">仅查询和查看不会占用库存；需分切的片料在此确认用料和分切方案后才预占，库存全额覆盖时会转入生产且不生成零张采购单。仅供查看的库存须先取得适用授权。</p>
                             <div v-if="option._manual_error" role="alert" class="status orange">{{ option._manual_error }}</div>
@@ -9373,13 +9381,13 @@
                                   <td><strong>{{ candidate.available_stock_quantity }} 张</strong><div>可抵 {{ candidate.deductible_requirement_quantity }} 片</div></td>
                                   <td>{{ inventoryLocation(candidate) }}</td>
                                   <td><span :class="['status', candidate.selectable === false ? 'orange' : (candidate.match_kind==='other_dimension_cut' ? 'orange' : 'green')]">{{ candidate.selectable === false ? '仅供查看' : (candidate.match_kind==='other_dimension_cut' ? '需确认分切' : '同尺寸可抵扣') }}</span><div v-if="candidate.signature_differences?.length">核对：{{ draftSemiDifferenceLabel(candidate.signature_differences) }}</div><div>{{ candidate.match_reason }}</div><details v-if="candidate.warning_messages?.length"><summary>匹配说明</summary><div v-for="warning in candidate.warning_messages" :key="warning" class="muted">{{ warning }}</div></details>
-                                    <div v-if="candidate.warning_codes?.includes('REVERSE_CREASE_ADMIN_OVERRIDE') && (canAdmin || user.role==='boss')"><label><input type="checkbox" v-model="candidate._reverse_crease_override" /> 管理员特批已压线库存反向使用</label><input class="input" maxlength="300" v-model.trim="candidate._reverse_crease_reason" placeholder="必填特批原因（至少4字）" /></div>
+                                    <div v-if="candidate.warning_codes?.includes('REVERSE_CREASE_ADMIN_OVERRIDE') && (canAdmin || user.role==='boss')"><label><input type="checkbox" v-model="candidate._reverse_crease_override" / :disabled="manualSheetParentControlsBlocked()"> 管理员特批已压线库存反向使用</label><input class="input" maxlength="300" v-model.trim="candidate._reverse_crease_reason" placeholder="必填特批原因（至少4字）" / :disabled="manualSheetParentControlsBlocked()"></div>
                                   </td>
-                                  <td><span v-if="candidate.safe_group_eligible" class="muted">已纳入整组库存，无需逐批采用</span><template v-else><input class="input" type="number" min="1" step="1" :max="Math.min(option.remaining_requirement_quantity,candidate.deductible_requirement_quantity)" :value="candidate._deduct_quantity ?? Math.min(option.remaining_requirement_quantity,candidate.deductible_requirement_quantity)" @input="candidate._deduct_quantity=$event.target.value" :aria-label="'本批抵扣片数 ' + candidate.internal_name" :disabled="candidate.selectable === false" /><button :class="['btn','small',candidate.match_kind==='other_dimension_cut' ? 'warning' : 'success']" type="button" :disabled="candidate.selectable === false || requisitionInventoryActionBlocked()" @click="confirmDraftSemiInventory(option, candidate)">{{ candidate.match_kind==='other_dimension_cut' ? '确认分切并抵扣' : '采用本批并重算' }}</button></template></td>
+                                  <td><span v-if="candidate.safe_group_eligible" class="muted">已纳入整组库存，无需逐批采用</span><template v-else><input class="input" type="number" min="1" step="1" :max="Math.min(option.remaining_requirement_quantity,candidate.deductible_requirement_quantity)" :value="candidate._deduct_quantity ?? Math.min(option.remaining_requirement_quantity,candidate.deductible_requirement_quantity)" @input="candidate._deduct_quantity=$event.target.value" :aria-label="'本批抵扣片数 ' + candidate.internal_name" :disabled="(candidate.selectable === false) || manualSheetParentControlsBlocked()" /><button :class="['btn','small',candidate.match_kind==='other_dimension_cut' ? 'warning' : 'success']" type="button" :disabled="(candidate.selectable === false || requisitionInventoryActionBlocked()) || manualSheetParentControlsBlocked()" @click="confirmDraftSemiInventory(option, candidate)">{{ candidate.match_kind==='other_dimension_cut' ? '确认分切并抵扣' : '采用本批并重算' }}</button></template></td>
                                 </tr><tr v-if="!draftSemiInventoryCandidates(option).length"><td colspan="7" class="muted">当前范围未发现同楞同尺寸库存；可主动查询其他尺寸片料，或直接保存本次报料。</td></tr></tbody>
                               </table>
                             </div>
-                            <div v-if="option._manual_page" class="draft-stock-heading"><span class="muted">其他查询结果 · 第 {{ option._manual_page }} 页 / 共 {{ Math.max(1, Math.ceil(option._manual_total / 10)) }} 页（客户推荐仍保留）</span><div><button class="btn small" type="button" :disabled="option._manual_loading || option._manual_page <= 1" @click="queryDraftOtherSemiInventory(option,option._manual_page-1)">上一页</button><button class="btn small" type="button" :disabled="option._manual_loading || option._manual_page*10 >= option._manual_total" @click="queryDraftOtherSemiInventory(option,option._manual_page+1)">下一页</button></div></div>
+                            <div v-if="option._manual_page" class="draft-stock-heading"><span class="muted">其他查询结果 · 第 {{ option._manual_page }} 页 / 共 {{ Math.max(1, Math.ceil(option._manual_total / 10)) }} 页（客户推荐仍保留）</span><div><button class="btn small" type="button" :disabled="(option._manual_loading || option._manual_page <= 1) || manualSheetParentControlsBlocked()" @click="queryDraftOtherSemiInventory(option,option._manual_page-1)">上一页</button><button class="btn small" type="button" :disabled="(option._manual_loading || option._manual_page*10 >= option._manual_total) || manualSheetParentControlsBlocked()" @click="queryDraftOtherSemiInventory(option,option._manual_page+1)">下一页</button></div></div>
                           </section>
                           </details>
                           <div v-if="!draftLineSemiInventoryOptions(line).length" class="muted">当前行无待抵扣片料需求。</div>
@@ -9389,11 +9397,11 @@
                         <td colspan="6">
                           <div class="draft-advanced-grid">
                             <div><strong>需求换算</strong><strong>订单 {{ line.production_required_qty ?? line.quantity ?? 0 }} {{ orderLineUnitLabel(line) }}</strong><div class="muted">每箱 {{ line.source_items?.[0]?.pieces_per_box || 1 }} 片｜{{ line.sheet_cutting_snapshot ? sheetCuttingSummary(line.sheet_cutting_snapshot) : line.cutting_mode || '一开一' }}</div><div class="muted">理论 {{ line.theoretical_requisition_qty ?? line.requisition_qty ?? 0 }} 张</div></div>
-                            <div v-if="!line.sheet_cutting_snapshot"><strong>旧每张产出</strong><div class="inline-input"><span>一开</span><input class="input merge-cutter-select" type="number" min="1" step="1" :value="cuttingModeFactor(line.cutting_mode)" @change="changeSupplierDraftCuttingMode(line,$event.target.value)" /></div><div v-if="isMergedRequisitionCuttingLine(line) && line._cutting_plan_error" class="status red" style="white-space:normal">{{ line._cutting_plan_error }}</div><div v-else-if="isMergedRequisitionCuttingLine(line)" class="muted" style="white-space:normal">{{ mergedRequisitionCuttingPlanSummary(line) }}</div></div>
+                            <div v-if="!line.sheet_cutting_snapshot"><strong>旧每张产出</strong><div class="inline-input"><span>一开</span><input class="input merge-cutter-select" type="number" min="1" step="1" :value="cuttingModeFactor(line.cutting_mode)" @change="changeSupplierDraftCuttingMode(line,$event.target.value)" / :disabled="manualSheetParentControlsBlocked()"></div><div v-if="isMergedRequisitionCuttingLine(line) && line._cutting_plan_error" class="status red" style="white-space:normal">{{ line._cutting_plan_error }}</div><div v-else-if="isMergedRequisitionCuttingLine(line)" class="muted" style="white-space:normal">{{ mergedRequisitionCuttingPlanSummary(line) }}</div></div>
                             <div><strong>订单用途（自动）</strong><div>{{ line.order_purpose_sheet_qty }} 张</div></div>
                             <div><strong>材料备库（自动）</strong><div>{{ line.stock_purpose_sheet_qty }} 张</div></div>
                           </div>
-                          <details v-if="!line.sheet_cutting_snapshot && (canAdmin || user.role==='boss')"><summary>调整采购规格</summary><p class="muted">调整后重新核对压线和库存；已预占库存不会随尺寸修改而变更。</p><div class="draft-advanced-grid"><label>报料长（mm）<input class="input merge-size-input" type="number" step="0.01" min="1" v-model.number="line.report_length_mm" :disabled="Number(line.semi_finished_reserved_piece_qty)>0 || Number(line.finished_inventory_reserved_qty)>0" @input="onDraftDimensionsChanged(line)" /><div v-if="supplierDraftLineIsSwapped(line)" class="status red" style="white-space:normal;margin-top:4px">疑似长宽填反</div></label><label>报料宽（mm）<input class="input merge-size-input" type="number" step="0.01" min="1" v-model.number="line.report_width_mm" :disabled="Number(line.semi_finished_reserved_piece_qty)>0 || Number(line.finished_inventory_reserved_qty)>0" @input="onDraftDimensionsChanged(line)" /><div v-if="supplierDraftLineIsSwapped(line)" class="muted" style="white-space:normal">推荐 {{ supplierDraftExpectedLength(line) }}×{{ supplierDraftExpectedWidth(line) }}</div><label v-if="supplierDraftLineIsSwapped(line) && (canAdmin || user.role==='boss')" style="display:block;margin-top:4px"><input type="checkbox" v-model="line.dimension_override_acknowledged" /> 按人工尺寸继续</label></label></div></details>
+                          <details v-if="!line.sheet_cutting_snapshot && (canAdmin || user.role==='boss')"><summary>调整采购规格</summary><p class="muted">调整后重新核对压线和库存；已预占库存不会随尺寸修改而变更。</p><div class="draft-advanced-grid"><label>报料长（mm）<input class="input merge-size-input" type="number" step="0.01" min="1" v-model.number="line.report_length_mm" :disabled="(Number(line.semi_finished_reserved_piece_qty)>0 || Number(line.finished_inventory_reserved_qty)>0) || manualSheetParentControlsBlocked()" @input="onDraftDimensionsChanged(line)" /><div v-if="supplierDraftLineIsSwapped(line)" class="status red" style="white-space:normal;margin-top:4px">疑似长宽填反</div></label><label>报料宽（mm）<input class="input merge-size-input" type="number" step="0.01" min="1" v-model.number="line.report_width_mm" :disabled="(Number(line.semi_finished_reserved_piece_qty)>0 || Number(line.finished_inventory_reserved_qty)>0) || manualSheetParentControlsBlocked()" @input="onDraftDimensionsChanged(line)" /><div v-if="supplierDraftLineIsSwapped(line)" class="muted" style="white-space:normal">推荐 {{ supplierDraftExpectedLength(line) }}×{{ supplierDraftExpectedWidth(line) }}</div><label v-if="supplierDraftLineIsSwapped(line) && (canAdmin || user.role==='boss')" style="display:block;margin-top:4px"><input type="checkbox" v-model="line.dimension_override_acknowledged" / :disabled="manualSheetParentControlsBlocked()"> 按人工尺寸继续</label></label></div></details>
                           <div class="muted" style="white-space:normal">
                             <div v-for="(source,sourceIndex) in line.source_items || []" :key="source.order_item_id">{{ source.order_number }}｜{{ source.customer_name }}｜{{ source.product_code }}｜{{ source.product_name }} × {{ source.requisition_qty || source.source_quantity || source.quantity }}｜订单用途 {{ purchasePurposeSourceOrderQuantities(line)[sourceIndex] ?? 0 }} 张</div>
                           </div>
@@ -9411,9 +9419,9 @@
                 <span>{{ requisitionInventoryActionState.action ? requisitionInventoryActionLabel() : (requisitionInventoryActionState.committed ? '库存已经使用，但草稿刷新失败，请先核对状态。' : '上次库存操作结果暂不确定，请先核对状态。') }}</span>
                 <button class="btn small" type="button" :disabled="!!requisitionInventoryActionState.action" @click="refreshRequisitionInventoryState">核对待报料库存状态</button>
               </div>
-              <fieldset :disabled="requisitionInventoryActionBlocked()" style="border:0;padding:0;margin:0;min-width:0">
+              <fieldset :disabled="requisitionInventoryBaseActionBlocked()" style="border:0;padding:0;margin:0;min-width:0">
               <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">当前只是报料明细草稿。请先核对库存抵扣、采购张数、尺寸和开料方式；点击“确认生成正式采购单”后才会正式入账并进入打印页。</div>
-              <div class="field" style="width:360px"><label>报料供应商</label><select class="select" v-model="requisitionForm.supplier_name"><option value="">请选择供应商</option><option v-if="requisitionForm.supplier_name && !materialSupplierSelectOptions.includes(requisitionForm.supplier_name)" :value="requisitionForm.supplier_name">{{ supplierDisplayName(requisitionForm.supplier_name) }}</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
+              <div class="field" style="width:360px"><label>报料供应商</label><select class="select" v-model="requisitionForm.supplier_name" :disabled="manualSheetParentControlsBlocked()"><option value="">请选择供应商</option><option v-if="requisitionForm.supplier_name && !materialSupplierSelectOptions.includes(requisitionForm.supplier_name)" :value="requisitionForm.supplier_name">{{ supplierDisplayName(requisitionForm.supplier_name) }}</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
               <table>
                 <thead><tr><th>客户 / 存货编码 / 产品</th><th>供应商 / 材质</th><th>需求数量</th><th>库存抵扣</th><th class="purchase-qty-cell">采购总张数</th><th>订单生产用途张</th><th>客户通用片料备库张</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead>
                 <tbody>
@@ -9421,14 +9429,14 @@
                     <td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span><div v-if="line.is_composite_parent" class="status blue">父件</div><div v-else-if="line.is_composite_component_group" class="status green">已合并 {{ line._merged_component_lines.length }} 个同规格子件</div><div v-else-if="line.is_composite_component" class="status green">组件{{ line.component_type === 'cover' ? '·盖' : line.component_type === 'base' ? '·底' : '' }}</div></td>
                     <td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span></td>
                     <td><strong>{{ line.required_piece_qty || line.quantity || 0 }}</strong><div class="muted">剩余 {{ line.remaining_required_piece_qty ?? line.required_piece_qty ?? line.quantity ?? 0 }}</div></td>
-                    <td><div>成品：{{ line.finished_inventory_reserved_qty || 0 }}</div><div>半成品：{{ line.semi_finished_reserved_piece_qty || 0 }}</div><div v-if="line.carried_material_piece_qty">原报料抵扣：{{ line.carried_material_piece_qty }} 片（含待收）</div><button v-if="line.is_composite_component && !line.is_composite_component_group && Number(line.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="line._auto_cover_loading" @click="autoCoverCompositeDraftLine(line)">{{ line._auto_cover_loading ? '正在匹配…' : '自动使用匹配库存' }}</button><div v-if="line._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ line._auto_cover_error }}</div></td>
-                    <td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="1" step="1" v-model.number="line.purchase_total_sheet_qty" @input="onPurchasePurposeTotalChanged(line)" /><div class="muted">系统最低 {{ line._minimum_requisition_qty ?? line.purchase_total_sheet_qty }} 张</div></td>
-                    <td><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.order_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" /><div class="muted">本行订单上限 {{ purchasePurposeAuthoritativeOrderQty(line) }} 张</div></td>
-                    <td><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.stock_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" /><div v-if="purchasePurposeValidationError(line)" class="status red" style="white-space:normal;margin-top:4px">{{ purchasePurposeValidationError(line) }}</div><div v-else-if="Number(line.stock_purpose_sheet_qty || 0)>0" class="status blue" style="white-space:normal;margin-top:4px">多订 {{ line.stock_purpose_sheet_qty }} 张，进入该客户通用片料备库</div></td>
-                    <td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_len)>0 && Number(line.cardboard_len)<500 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td>
-                    <td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_width)>0 && Number(line.cardboard_width)<270 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td>
-                    <td><div class="inline-input"><span>一开</span><input class="input" type="number" min="1" step="1" :value="cuttingModeFactor(line.special_process)" @change="line.special_process=normalizeCuttingMode($event.target.value);autoRequisitionQty(line)" /></div><div v-for="warning in requisitionDimensionWarnings(line)" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td>
-                    <td><input class="input compact-input" v-model.trim="line.remark" /></td>
+                    <td><div>成品：{{ line.finished_inventory_reserved_qty || 0 }}</div><div>半成品：{{ line.semi_finished_reserved_piece_qty || 0 }}</div><div v-if="line.carried_material_piece_qty">原报料抵扣：{{ line.carried_material_piece_qty }} 片（含待收）</div><button v-if="line.is_composite_component && !line.is_composite_component_group && Number(line.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="(line._auto_cover_loading) || manualSheetParentControlsBlocked()" @click="autoCoverCompositeDraftLine(line)">{{ line._auto_cover_loading ? '正在匹配…' : '自动使用匹配库存' }}</button><template v-if="canWarehouseReserve" v-for="manualSource in manualSheetDraftSources(line)" :key="`manual:${manualSource.bom_snapshot_id}:${manualSource.component_type}`"><manual-sheet-deduction v-if="Number(manualSource.bom_snapshot_id)>0" :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" :snapshot-id="Number(manualSource.bom_snapshot_id)" :component-type="manualSource.component_type || 'whole'" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualBomSheetDeduction(manualSource,$event,line)"></manual-sheet-deduction></template><div v-if="line._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ line._auto_cover_error }}</div></td>
+                    <td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="1" step="1" v-model.number="line.purchase_total_sheet_qty" @input="onPurchasePurposeTotalChanged(line)" / :disabled="manualSheetParentControlsBlocked()"><div class="muted">系统最低 {{ line._minimum_requisition_qty ?? line.purchase_total_sheet_qty }} 张</div></td>
+                    <td><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.order_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" / :disabled="manualSheetParentControlsBlocked()"><div class="muted">本行订单上限 {{ purchasePurposeAuthoritativeOrderQty(line) }} 张</div></td>
+                    <td><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.stock_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" / :disabled="manualSheetParentControlsBlocked()"><div v-if="purchasePurposeValidationError(line)" class="status red" style="white-space:normal;margin-top:4px">{{ purchasePurposeValidationError(line) }}</div><div v-else-if="Number(line.stock_purpose_sheet_qty || 0)>0" class="status blue" style="white-space:normal;margin-top:4px">多订 {{ line.stock_purpose_sheet_qty }} 张，进入该客户通用片料备库</div></td>
+                    <td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_len)>0 && Number(line.cardboard_len)<500 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_len" / :disabled="manualSheetParentControlsBlocked()"></td>
+                    <td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_width)>0 && Number(line.cardboard_width)<270 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_width" / :disabled="manualSheetParentControlsBlocked()"></td>
+                    <td><div class="inline-input"><span>一开</span><input class="input" type="number" min="1" step="1" :value="cuttingModeFactor(line.special_process)" @change="line.special_process=normalizeCuttingMode($event.target.value);autoRequisitionQty(line)" / :disabled="manualSheetParentControlsBlocked()"></div><div v-for="warning in requisitionDimensionWarnings(line)" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td>
+                    <td><input class="input compact-input" v-model.trim="line.remark" / :disabled="manualSheetParentControlsBlocked()"></td>
                   </tr>
                 </tbody>
               </table>
@@ -10963,6 +10971,7 @@
             pdfTemplateForm: { id:null, customer_id:null, template_name:"", order_no_pattern:"", date_pattern:"", item_row_pattern:"", customer_name_pattern:"", column_map_json:"", notes:"", status:"draft", version:null },
             pdfTemplateLoading: false, pdfTemplatesLoaded: false,
             requisitionWorkspace: "board", requisitionTab: "pending", requisitionPending: [], requisitionPendingTotal: 0, requisitionPendingOverallTotal: 0, requisitionPendingLoading: false, requisitionPendingError: "", requisitionPendingAppliedPage: 1, requisitionPendingAppliedSupplierFilter: "", requisitionPendingRetryPage: 1, requisitionPendingRetrySupplierFilter: "", requisitionPendingRetryScope: "page", requisitionItems: [], requisitionReportedLoaded: false, requisitionSelected: {}, selectedPendingKeys: [], selectedBomSnapshotIds: [],
+            manualSheetOperations:{},
             requisitionInventoryActionState:{action:"",committed:false,outcomeUncertain:false,context:"",orderItemId:null,bomSnapshotId:null,targetKey:"",result:null},
             requisitionVoidActionState:{action:"",sourceType:"",targetId:null,targetKey:"",documentNumber:"",committed:false,outcomeUncertain:false,result:null},
             requisitionHolds: [], requisitionHoldsLoaded: false, requisitionHoldsTotal: 0, requisitionHoldSummary: { total:0, due_count:0, anomaly_count:0 },
@@ -12563,6 +12572,146 @@
           window.removeEventListener("message", this.handleWarehouseFrameMessage);
         },
         methods: {
+          manualSheetTargetsForItem(item) {
+            return TMManualSheetDeduction.orderTargets(item);
+          },
+          manualSheetDraftSources(line) {
+            return line?.is_composite_component_group ? (line._merged_component_lines || []) : [line];
+          },
+          manualSheetParentControlsBlocked() {
+            return Object.values(this.manualSheetOperations || {}).some(actor=>Number(actor)===Number(this.user?.id || 0));
+          },
+          requisitionInventoryBaseActionBlocked() {
+            const state = this.requisitionInventoryActionState || {};
+            return Boolean(state.action || state.committed || state.outcomeUncertain);
+          },
+          manualSheetDeductionDisabled() {
+            const save = this.modal?.type === 'supplierRequisitionDraft' ? this.supplierRequisitionSaveState
+              : this.modal?.type === 'requisition' ? this.compositeRequisitionSaveState : null;
+            return Boolean(this.requisitionInventoryActionState?.action || save?.saving || save?.committed || save?.uncertain
+              || this.manualSheetParentControlsBlocked()
+              || this.orderBomDemandSaveState?.saving || this.orderBomDemandSaveState?.outcomeUncertain);
+          },
+          setManualSheetOperation(state) {
+            const actorPrefix=String(state.identity || "").match(/^(\d+):/);
+            if(actorPrefix && Number(actorPrefix[1])!==Number(this.user?.id || 0))return;
+            if (state.blocked) this.manualSheetOperations[state.identity] = Number(this.user?.id || 0);
+            else delete this.manualSheetOperations[state.identity];
+          },
+          async refreshManualSheetOrder(item, data, orderId) {
+            if (!data.message) return;
+            this.showToast(data.message);
+            const detail = this.orderDetail;
+            const authGeneration = this.authGeneration;
+            const actorId = this.user?.id;
+            const identity = `refresh:${actorId}:order:${item.id}`;
+            this.setManualSheetOperation({identity,blocked:true});
+            try {
+              if (Number(orderId)>0) {
+                const {data:fresh} = await axios.get(`/api/orders/${Number(orderId)}`);
+                if (this.authGeneration!==authGeneration || this.user?.id!==actorId) return;
+                if (this.modal?.type==='orderDetail' && this.orderDetail===detail && Number(detail?.id)===Number(orderId)) this.orderDetail=fresh;
+              }
+              await this.loadOrders();
+              if (this.activePage==='requisition') await this.loadRequisition({skipAutoRelease:true});
+            } catch (error) {
+              this.showToast('片料已按填写张数预占；订单摘要刷新失败，请刷新详情核对。',true);
+            } finally {this.setManualSheetOperation({identity,blocked:false});}
+          },
+          async loadManualReportedSheetTargets(row=this.reportedItemDetail) {
+            if (!row?.order_item_id || !this.canWarehouseReserve) return;
+            row._manual_sheet_targets=[];row._manual_sheet_loading=true;row._manual_sheet_error='';
+            const actorId=this.user?.id,authGeneration=this.authGeneration;
+            const current=()=>this.reportedItemDetail===row && this.user?.id===actorId && this.authGeneration===authGeneration;
+            try {
+              const {data}=await axios.get('/api/requisition/reported-documents',{params:{document_number:row.document_number,source_type:row.source_type}});
+              if (!current()) return;
+              const document=(data.items || data.documents || []).find(value=>Number(value.id)===Number(row.document_id) && value.source_type===row.source_type);
+              const line=(document?.line_items || []).find(value=>Number(value.id)===Number(row.item_id) && Number(value.order_item_id)===Number(row.order_item_id));
+              if (!line) throw Error('原单据明细未找到，请刷新后核对');
+              row._manual_sheet_targets=TMManualSheetDeduction.reportedTargets(line);
+              if (!row._manual_sheet_targets.length) throw Error('原单据缺少真实组件标识，请从订单详情核对');
+            } catch (error) {if(current())row._manual_sheet_error=this.errorMessage(error);}
+            finally {if(current())row._manual_sheet_loading=false;}
+          },
+          async refreshManualReportedSheetDeduction(row, data) {
+            if (!data.message) return;
+            this.showToast(data.message);
+            const identity=`refresh:${this.user?.id}:reported:${row.stable_id}`;
+            this.setManualSheetOperation({identity,blocked:true});
+            try {
+              await this.loadReportedDocuments();
+              await this.loadRequisition({skipAutoRelease:true});
+              if(this.reportedItemDetail===row) {
+                const fresh=this.requisitionItems.find(value=>value.stable_id===row.stable_id);
+                if(fresh)Object.assign(row,fresh);
+                else if(data.internal_requisition_changes?.some(change=>Number(change.before.id)===Number(row.item_id) && change.after.quantity===0)) {
+                  row.requisition_qty=0;row.status='voided';
+                }
+              }
+            } catch(error) {this.showToast('片料已预占；内部报料明细刷新失败，请重新查询原单据。',true);}
+            finally {this.setManualSheetOperation({identity,blocked:false});}
+          },
+          async refreshManualBomSheetDeduction(source, data, parentLine=null) {
+            source.finished_component_reserved_piece_qty = Number(data.finished_reserved_piece_qty || 0);
+            source.semi_finished_reserved_piece_qty = Number(data.semi_finished_reserved_piece_qty || 0);
+            source.finished_inventory_reserved_qty = Number(data.finished_inventory_reserved_qty ?? data.finished_reserved_piece_qty ?? 0);
+            source.remaining_required_piece_qty = Number(data.remaining_required_piece_qty || 0);
+            if (!data.message) return;
+            this.showToast(data.message);
+            const identity = `refresh:${this.user?.id}:${source.bom_snapshot_id || source.snapshot_id || source.order_item_id || source.item_id}:${source.component_type || 'whole'}`;
+            this.setManualSheetOperation({identity,blocked:true});
+            const modal=this.modal, draft=this.supplierRequisitionDraft, form=this.requisitionForm, actorId=this.user?.id, authGeneration=this.authGeneration;
+            try {
+              if (source.bom_snapshot_id && source.is_composite_component) {
+                source._manual_sheet_refresh_error=true;
+                const stockExtra = Number(source.stock_purpose_sheet_qty || 0),remark=source.remark;
+                const {data: refreshed} = await axios.post('/api/requisition/bom-sheet-cutting/preview', this.requisitionBatchLinePayload({...source,_manual_sheet_refresh_error:false}));
+                if(this.user?.id!==actorId || this.authGeneration!==authGeneration)return;
+                Object.assign(source, refreshed, {remark, _manual_sheet_refresh_error:false});
+                source._minimum_requisition_qty=Number(refreshed.order_purpose_sheet_qty || 0);
+                source._authoritative_order_purpose_sheet_qty=source._minimum_requisition_qty;
+                source.stock_purpose_sheet_qty = stockExtra;
+                source.purchase_total_sheet_qty = source._minimum_requisition_qty + stockExtra;
+                source.requisition_qty = source.purchase_total_sheet_qty;
+                this.initializePurchasePurposeLine(source);
+                if(parentLine?.is_composite_component_group) {
+                  TMManualSheetDeduction.refreshDraftGroup(parentLine);
+                }
+                // Keep the successful write separate from creating a fresh
+                // purchase request; an empty demand never becomes a zero PO.
+                if(this.modal===modal && Number((parentLine || source).purchase_total_sheet_qty)===0) {
+                  if(modal?.type==='requisition' && this.requisitionForm===form) this.requisitionForm.items=this.requisitionForm.items.filter(line=>line!==(parentLine || source));
+                  if(modal?.type==='supplierRequisitionDraft' && this.supplierRequisitionDraft===draft) {
+                    for(const group of draft.supplier_groups || []) group.bom_lines=(group.bom_lines || []).filter(line=>line!==(parentLine || source));
+                  }
+                }
+              }
+              const loaded=await this.loadRequisition({skipAutoRelease:true});
+              if(loaded===false || this.requisitionPendingError)throw Error('报料列表读取失败');
+              if(this.modal===modal && !source.bom_snapshot_id && modal?.type==='supplierRequisitionDraft') {
+                await this.refreshSupplierRequisitionDraftAfterInventoryReservation();
+              }
+              if(this.modal===modal && modal?.type==='requisition' && !this.requisitionForm.items.length) {
+                this.modal=null;this.showToast('库存已覆盖订单需求，无需生成零张报料单');
+              }
+              if(this.modal===modal && modal?.type==='supplierRequisitionDraft') {
+                this.supplierRequisitionDraft.supplier_groups=(this.supplierRequisitionDraft.supplier_groups || []).filter(group=>
+                  (group.lines || group.items || []).length || group.stock_sources?.length || group.bom_lines?.length);
+                if(!this.supplierRequisitionDraft.supplier_groups.length) {
+                  this.modal=null;this.supplierRequisitionSelections=[];
+                  this.showToast('库存已覆盖订单需求，无需生成零张采购单');
+                }
+              }
+            } catch (error) {
+              if(this.user?.id!==actorId || this.authGeneration!==authGeneration)return;
+              source._auto_cover_error = '片料抵扣已成功，报料刷新失败；请关闭草稿并重新生成后保存。';
+              source._manual_sheet_refresh_error = true;
+              if(parentLine)parentLine._manual_sheet_refresh_error=true;
+              if(this.modal===modal && modal?.type==='supplierRequisitionDraft') this.supplierRequisitionDraft._manual_sheet_refresh_error=true;
+              this.showToast(source._auto_cover_error, true);
+            } finally {this.setManualSheetOperation({identity,blocked:false});}
+          },
           async loadReceiptStorage() {
             const id=this.productForm.id;
             this.receiptStorage={product_id:id,locations:[],loading:true,saving:false,message:'',error:'',saved_label:'',floor:null,area_id:null,location_id:null,version:0};
@@ -20004,9 +20153,11 @@
           openReportedItemDetail(row) {
             if (!row?.stable_id) return false;
             this.reportedItemDetail = {...row};
+            this.loadManualReportedSheetTargets(this.reportedItemDetail);
             return true;
           },
           closeReportedItemDetail() {
+            if(this.manualSheetParentControlsBlocked()){this.showToast("请先核对片料抵扣原请求",true);return;}
             this.reportedItemDetail = null;
           },
           reportedItemStatusText(row) {
@@ -20180,7 +20331,7 @@
           },
           requisitionInventoryActionBlocked() {
             const state = this.requisitionInventoryActionState || {};
-            return Boolean(state.action || state.committed || state.outcomeUncertain);
+            return Boolean(state.action || state.committed || state.outcomeUncertain || this.manualSheetParentControlsBlocked());
           },
           requisitionInventoryActionLabel(action = "") {
             const labels = {
@@ -36759,6 +36910,7 @@
             };
           },
           validateSupplierRequisitionDraft() {
+            if(this.supplierRequisitionDraft?._manual_sheet_refresh_error)return "片料已抵扣，请重新生成采购草稿后保存";
             const groups = this.supplierRequisitionDraft.supplier_groups || [];
             if (!groups.length) return "请先选择待报料明细";
             for (const [groupIndex, group] of groups.entries()) {
@@ -36798,6 +36950,7 @@
             return "";
           },
           async saveCompositeRequisitionDraft() {
+            if(this.requisitionInventoryActionBlocked())throw Error("请先核对片料抵扣结果并刷新草稿");
             const state = this.compositeRequisitionSaveState;
             if (state.saving || state.committed) {
               this.showToast(
@@ -37118,6 +37271,7 @@
             finally { if(controller && latestRequestControllers.get(requestKey)===controller) {this.supplierRequisitionPreviewLoading=false;this.finishLatestRequest(requestKey,controller);} }
           },
           async saveSupplierRequisitionDraft() {
+            if(this.requisitionInventoryActionBlocked())throw Error("请先核对片料抵扣结果并刷新草稿");
             if(this.supplierRequisitionPreviewLoading) throw new Error('正在重算开料，请等待计算完成再保存');
             const state = this.supplierRequisitionSaveState;
             if (state.saving || state.committed) {
@@ -37570,6 +37724,7 @@
             }
           },
           requisitionBatchLinePayload(line) {
+            if (line._manual_sheet_refresh_error) throw new Error("片料已抵扣，请关闭草稿并重新生成后保存");
             return {
               order_item_id:Number(line.order_item_id),
               sheet_cutting_snapshot:line.sheet_cutting_snapshot || null,
@@ -37587,6 +37742,7 @@
             };
           },
           requisitionBatchLinePayloads(line) {
+            if(line?._manual_sheet_refresh_error)throw Error("片料已抵扣，请重新生成草稿后保存");
             if (!line?.is_composite_component_group) return [this.requisitionBatchLinePayload(line)];
             const sources = line._merged_component_lines || [];
             const cutting = this.normalizeCuttingMode(line.special_process || line.cutting_mode);
@@ -37630,7 +37786,7 @@
               });
               if (index === sources.length - 1) extra = 0;
               return payload;
-            });
+            }).filter(payload => Number(payload.requisition_qty)>0);
           },
           async openRequisition() {
             if (!this.canRequisition) return;
@@ -40036,6 +40192,8 @@
             }
           },
 	          closeModal() {
+            if(["orderDetail","requisition","supplierRequisitionDraft"].includes(this.modal?.type) && this.manualSheetParentControlsBlocked()){this.showToast("请先核对片料抵扣原请求",true);return;}
+
             if (this.modal?.type === "orderDetail" && this.costPanelReturnContext?.auth === this.authGeneration && this.canViewCosts) { this.returnToCostPanel(); return; }
             if (this.modal?.type === "costGaps") { this.costGapState.requestId++; this.costReviewState.requestId++; this.costPanelReturnContext = null; this.costReviewFocusItemId = 0; }
             if(this.modal?.type === "statementMerge" && this.statementMerge.saving) return;
@@ -43101,6 +43259,7 @@
       app.mixin(TMDemandStock.mixin);
       app.component("demand-stock-summary", TMDemandStock.summary);
       app.component("manual-replenishment-picker", TMManualReplenishment.picker);
+      app.component("manual-sheet-deduction", TMManualSheetDeduction.component);
       app.component("weekly-demand-import", TMDemandStock.importer);
       app.component("order-reference", TMOrderReference.component);
       app.component("page-head", { props:["title","desc"], template:`<div class="page-head"><div><h2>{{title}}</h2><p>{{desc}}</p></div></div>` });

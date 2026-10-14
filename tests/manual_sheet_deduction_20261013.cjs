@@ -51,7 +51,9 @@ test('Vue component template compiles and ordinary and BOM procurement entry poi
   const sandbox={console};vm.runInNewContext(fs.readFileSync('static/vendor/vue-3.5.40.global.prod.js','utf8'),sandbox);
   assert.equal(typeof sandbox.Vue.compile(ui.component.template,{decodeEntities:value=>value}),'function');
   const html=fs.readFileSync('static/index.html','utf8');
-  assert.equal((html.match(/<manual-sheet-deduction /g)||[]).length,5);
+  assert.ok((html.match(/<manual-sheet-deduction /g)||[]).length>=8);
+  assert.match(html,/order-manual-sheet-entry/);
+  assert.match(html,/reported-manual-sheet-entry/);
   assert.match(html,/TMManualSheetDeduction.component/);
 });
 
@@ -65,7 +67,7 @@ test('manual write blocks parent saving while outcome is uncertain and clears af
 
 test('successful BOM deduction refreshes save fingerprint and preserves remark and separate stock purchase',async()=>{
   const html=fs.readFileSync('static/index.html','utf8');
-  const start=html.indexOf('          async refreshManualBomSheetDeduction(source, data) {');
+  const start=html.indexOf('          async refreshManualBomSheetDeduction(source, data, parentLine=null) {');
   const end=html.indexOf('          async loadReceiptStorage()',start);
   const code=html.slice(start,end).trim().replace(/,$/,'');
   const root=vm.runInNewContext('({'+code+'})',{axios:{post:async()=>({data:{
@@ -81,4 +83,31 @@ test('successful BOM deduction refreshes save fingerprint and preserves remark a
 test('pending operation is isolated by signed-in operator',()=>{
   const a=ctx();a.actorId=1;const b=ctx();b.actorId=2;
   assert.notEqual(a.identity,b.identity);
+});
+
+test('late read and write responses never populate a different signed-in actor scope',async()=>{
+  let resolveRead;
+  global.axios={get:()=>new Promise(resolve=>{resolveRead=resolve})};
+  const state=ctx();state.actorId=1;
+  const read=state.open();state.actorId=2;ui.component.watch.identity.call(state);
+  resolveRead({data:data()});await read;
+  assert.equal(state.preview,null);assert.equal(state.rows.length,0);assert.equal(state.loading,false);
+  let resolveWrite;
+  global.axios={get:async()=>({data:data()}),post:()=>new Promise(resolve=>{resolveWrite=resolve})};
+  state.actorId=1;await state.open();state.rows[0].inputQuantity=3;
+  const write=state.reserve(state.rows[0]);state.actorId=2;ui.component.watch.identity.call(state);
+  resolveWrite({data:{message:'原操作者成功',stock_quantity:3}});await write;
+  assert.equal(state.preview,null);assert.equal(state.message,'');assert.equal(ui.pending.size,0);
+  assert.equal(state.emitted.filter(item=>item[0]==='reserved').length,0);
+});
+
+test('re-mounted pending component can reconcile while parent remains disabled',async()=>{
+  global.axios={get:async()=>({data:data()}),post:async()=>{throw Error('lost response')}};
+  const original=ctx();await original.open();original.rows[0].inputQuantity=3;await original.reserve(original.rows[0]);
+  const reopened={snapshotId:1,componentType:'whole',disabled:true,...ui.component.data(),...ui.component.methods,$emit(){}};
+  Object.defineProperty(reopened,'identity',{get(){return ui.component.computed.identity.call(this)}});
+  ui.component.created.call(reopened);
+  assert.equal(reopened.uncertain,true);await reopened.open();assert.equal(reopened.opened,true);
+  let posted;global.axios.post=async(path,payload)=>{posted=payload;return {data:{message:'原回执',stock_quantity:3}}};
+  await reopened.reserve(null);assert.equal(posted.stock_quantity,3);assert.equal(ui.pending.size,0);
 });

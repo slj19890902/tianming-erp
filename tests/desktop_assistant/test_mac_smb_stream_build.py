@@ -114,7 +114,8 @@ def test_windows_cannot_request_smb_stream_before_source_or_output_io(monkeypatc
     (False,False,'macos-arm64',None),(True,False,'macos-arm64',None),
     (True,True,'macos-arm64',None),(False,False,'windows',None),
     (False,False,'macos-arm64','mac_system_upgrade_worker.py'),
-    (True,False,'macos-arm64','mac_system_upgrade_contract.py')])
+    (True,False,'macos-arm64','mac_system_upgrade_contract.py'),
+    (True,False,'macos-arm64','nas_backup_rotation_worker.py')])
 def test_builder_declares_capability_only_after_explicit_verified_runtime(tmp_path,monkeypatch,enabled,failed,platform,omitted):
     # Exercise the real main() wiring; packaging and heavy native copies are
     # explicit fakes, not an actual native build or signature.
@@ -159,9 +160,14 @@ def test_builder_declares_capability_only_after_explicit_verified_runtime(tmp_pa
     monkeypatch.setattr(m,'verify',verify)
     manifests=[];monkeypatch.setattr(build,'pack_tree',lambda tree,path,manifest,key:manifests.append(manifest))
     if omitted:
-        with pytest.raises(ValueError,match='监护升级'):build.main()
-        assert not manifests and not output.exists()
-        assert calls==(['inputs'] if enabled else [])
+        rotation_missing = omitted == 'nas_backup_rotation_worker.py'
+        with pytest.raises(ValueError,match='轮换' if rotation_missing else '监护升级'):build.main()
+        assert not manifests
+        if rotation_missing:
+            assert calls == ['inputs','install','verify']
+        else:
+            assert not output.exists()
+            assert calls==(['inputs'] if enabled else [])
         return
     if failed:
         with pytest.raises(ValueError):build.main()
@@ -170,6 +176,7 @@ def test_builder_declares_capability_only_after_explicit_verified_runtime(tmp_pa
         build.main();assert len(manifests)==1
         capabilities=manifests[0].get('runtime_capabilities',{})
         assert (capabilities.get(m.cfg.CAPABILITY)==1)==enabled
+        assert (capabilities.get('nas_backup_rotation_v1')==1)==enabled
         assert (capabilities.get('system_upgrade_worker_v1')==1)==(platform=='macos-arm64')
         for name in ('current_mac_worker_v1','current_mac_audit_v3','factory_current_mac_execution_v3'):
             assert (capabilities.get(name)==1)==(platform=='macos-arm64')

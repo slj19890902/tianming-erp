@@ -278,8 +278,15 @@ def main():
         elif local_update_files & sources.keys():
             raise ValueError('本地程序切换协议源码不完整')
         if stream_wheels is not None:
+            rotation_files = {'desktop_assistant/nas_backup_rotation_worker.py',
+                              'desktop_assistant/nas_backup_rotation.py',
+                              'desktop_assistant/nas_backup_rotation_stream.py',
+                              'desktop_assistant/nas_full_backup_retention.py'}
+            if not rotation_files <= sources.keys():
+                raise ValueError('NAS备份轮换实现不完整，不能声明轮换能力')
             runtime_metadata['runtime_capabilities'][stream_build.cfg.CAPABILITY] = 1
             runtime_metadata['runtime_capabilities']['archive_smb_upgrade_v1'] = 1
+            runtime_metadata['runtime_capabilities']['nas_backup_rotation_v1'] = 1
     package = output / ('release.unsigned.zip' if args.signing_request_only else 'release.zip')
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
                             'revision': args.revision, 'git_sha': code_sha, 'migration': migration,

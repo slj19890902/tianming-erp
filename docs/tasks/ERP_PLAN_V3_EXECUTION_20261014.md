@@ -89,3 +89,19 @@ owned child 复现000204手工预占100张通过、实际生产消费被材质�
 NAS候选3936043f/a4f3596b/bfbfb9ff/497691a7已整合为cae8e2b5/25cd9ff8/fc5488ca/3ce4cf1b。63项模块测试及另一聊天独立复审已完成，但生产manager/worker hooks尚未接通，不能宣称自动两份已生效或历史733.74GB已删除。阶段文件所有权移交Sol新分支codex/nas-worker-integration-20261014：manager、local_code_update、stream receipt/target/runtime/contract、nightly及mac_service_manage必要调用段与新worker；根不并发写。
 
 Astra发布复审发现原monitor升级在NEW plist与OLD disabled control之间失败时现有enable拒绝不一致。为避免再次停工，只补既有计划/失败证据钉住的有限split恢复：原激活、current、state不改，原锁/进程/签名/CAS/UID canary全部保持。Astra新独立monitor-recovery工作区独占其新模块/contract及必要closed CODE_FILES/build改动；旧dispatch工作区测试复制文件保留。自动备份root pause在整个发布及bootstrap期间保持，避免start后监护60秒再次冷备。此必要收尾尚未完成，当前没有正式发布、库存写入、服务控制或新备份。
+
+## 13:18 最终业务入口与有限发布保障整合
+
+原四项组合采用固定 finite-business-worker 的实际 apply_facts 再演练：owned task-65270020989f478bb866247784bcacae，最终提交故障全库回滚、child成功后680/666/1421/1430分别104/160/160/0，154仍pending/v6。此次按真实item_id读取sr44/45/46，收料准备及库位均ready、purpose_issue均None；数量605/267/800，不能与对外供应商合并1917混淆。同样没有修改pristine baseline或正式库。后续盲重试被原Finance/OperationLog回执拒绝，业务及文件无增量。
+
+组套reader合同192e4859/895f0aaf核实真实signed manifest及持久化来源标记；初次拆分也核成对movement与actor/原key，不只校验后续移库。缺cost列仅放行8个明确pre-cost revision，其他损坏schema拒绝。独立原两项红例均转绿，相邻88 passed。新数据事实提交后旧reader不得恢复运行，不能用取消订单绕过。
+
+有限monitor恢复865154be/0af302d7已整合。上下文退出失败亦留下failed证据、不得allow_local_update；根最终96 passed。固定root装配助手在最后status/monitor后复核enabled NEW/plist NEW/完整state与两份激活原bytes，持既有publication锁；两个装配反例已先复现再修，专项33与独立1共34通过。旧/旧或新/新恢复原服务后明确终止发布；未知组合保留，不能仅凭disabled字段推断进程不存在。
+
+地图940c577f让4楼校准先取既有持久化floor写锁再写draft；真实双SQLite连接冲突从失败转绿。88相邻通过，1个静态drawPointLabels断言与正式61e5源码相同且既存失败，不扩大修它。其他入口异常回滚释放数据库锁后恢复文件的窗口没有被宣称全局修复；本次四项正式更正放在同一次正常停止期间执行，避免将进程内RLock当跨进程互斥证明。
+
+NAS真实worker8db6289f（原8ed620b）已接入；详见NAS_WORKER_INTEGRATION_20261014.md。386相邻通过、37专项重叠不相加；根构建能力及签名reader接线36通过。新能力nas_backup_rotation_v1精确int1，要求4份签名源码齐全；旧archive能力不更义。旧密文先真实恢复认证，升级binding后同物理密文下载认证；预约唯一slot，本地一次冷备切换后先ready再NAS网络/真实恢复；成功pair后受控链保留本地1、远端2。未知旧文件/活跃恢复迁移引用保留并报错，不把缺证据当可删除。
+
+服务UID原全机进程守卫可能拒清恢复副本，产品先保存真实成功proof并停在同任务，阻断下次增副本。root可在同批用未修改remove_owned_tree精确删除只读retained_recovery_targets返回且存在的已验证目标，再同入口推进原任务，不重新pack/restore/upload。旧13种已结束staging登记另由固定root取真实进程/DB路径/树/state证据，保留原小文件，不伪造空registry。
+
+最终候选版本v0.22.630、唯一head ep1010md，不做DDL迁移。发布装配仍在开发/复审，尚未构建签名、未正式执行或更正业务；正式v625继续运行。冷备恢复点明确位于四项更正前，不冒称含补账后事实。任何在线前置失败仍保持服务；停止窗口仅原本地完整验证与有限事务，之后先恢复服务再网络处理。

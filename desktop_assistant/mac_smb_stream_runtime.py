@@ -31,6 +31,8 @@ RESULT = 'tianming.mac-smb-stream-worker.v1'
 REQUEST = {'challenge','control_sha256','contract_sha256','action','socket_fd','file_fd',
            'job','filename','size','sha256','attempt_id','upload'}
 PROBE_REQUEST = {'challenge','control_sha256','contract_sha256','action','socket_fd','attempt_id','required_bytes'}
+ROTATION_REQUEST={'challenge','control_sha256','contract_sha256','action','socket_fd','attempt_id'}
+ROTATION_RESULT='tianming.mac-smb-retirement.v1'
 PROBE_TIMEOUT = 120
 
 
@@ -78,20 +80,22 @@ def load_binding():
             and cfg.digest(records[published.REGISTRY])==meta['registry_sha256'])
     tree,manifest=published.resolve(cfg.BASE/'instance',control['package_sha256'],meta['public'],kind='migration')
     require(tree==meta['tree']);cfg.capability(manifest)
-    binding=Binding(control,value,context,meta,records);binding.check()
+    binding=Binding(control,value,context,meta,records);binding.manifest=deepcopy(manifest);binding.check()
     return binding
 
 
 def _request(value,binding):
     require(isinstance(value,dict))
     is_probe=value.get('action')=='probe'
-    require(set(value)==(PROBE_REQUEST if is_probe else REQUEST)
+    is_rotation=value.get('action')=='retire'
+    require(set(value)==(ROTATION_REQUEST if is_rotation else PROBE_REQUEST if is_probe else REQUEST)
             and value['control_sha256']==binding.control_sha
             and value['contract_sha256']==binding.control['contract_sha256']
-            and value['action'] in ('upload','download','probe'))
+            and value['action'] in ('upload','download','probe','retire'))
     for key in ('challenge','attempt_id'):
         require(isinstance(value[key],str) and re.fullmatch('[0-9a-f]{32}',value[key]))
     require(type(value['socket_fd']) is int and 3<=value['socket_fd']<=2**31-1)
+    if is_rotation:return value
     if is_probe:
         probe.specification(value['attempt_id'],value['required_bytes'])
         return value
@@ -105,6 +109,14 @@ def _request(value,binding):
 
 
 def _observation(proof,kind,request,binding):
+    if kind==ROTATION_RESULT:
+        require(isinstance(proof,dict) and proof.get('status') in ('idle','removed','already_absent')
+            and type(proof.get('removed_bytes')) is int and proof['removed_bytes']>=0)
+        if proof['status']=='idle':require(set(proof)=={'status','removed_bytes'} and proof['removed_bytes']==0)
+        else:
+            require(set(proof)=={'status','filename','removed_bytes','index_sha256'} and cfg.sha(proof['index_sha256']))
+            archive.filename(proof['filename'])
+        return
     if kind==probe.TYPE:
         probe.validate(proof,binding.value,request['attempt_id'],request['required_bytes'])
         return
@@ -172,8 +184,9 @@ def run(request,*,script,executable):
             and Path(__file__).resolve()==binding.tree/cfg.MODULE
             and Path(executable).resolve()==binding.tree/'runtime/bin/python3.12')
     _request(request,binding);denied_new_connection()
-    is_probe=request['action']=='probe'
-    with nullcontext() if is_probe else file_lease(binding,request) as held:
+    is_probe=request['action']=='probe';is_rotation=request['action']=='retire'
+    if is_rotation:_rotation_capability(binding)
+    with nullcontext() if is_probe or is_rotation else file_lease(binding,request) as held:
         channel=transport.Channel(request['socket_fd'],(binding.value['server_address'],445))
         try:
             binding.check()
@@ -183,7 +196,12 @@ def run(request,*,script,executable):
                     proof=probe.check(tree,binding.value,request['attempt_id'],request['required_bytes'])
                 else:
                     with files.open_archive(tree,binding.value) as remote:
-                        if request['action']=='upload':
+                        if is_rotation:
+                            from .nas_backup_rotation import MacStreamReceiptAdapter
+                            from .nas_backup_rotation_stream import execute_next
+                            from .mac_smb_stream_target import _manager
+                            proof=execute_next(MacStreamReceiptAdapter(_manager(binding)),remote)
+                        elif request['action']=='upload':
                             proof=remote.upload(held.fd,request['filename'],request['size'],
                                                 request['sha256'],request['attempt_id'])
                         else: proof=remote.download(held.fd,request['upload'])
@@ -221,11 +239,11 @@ def _dispatch(binding,request):
         connected.settimeout(None)
         request=dict(request,socket_fd=connected.fileno())
         _request(request,binding);binding.check()
-        is_probe=request['action']=='probe'
-        with nullcontext() if is_probe else file_lease(binding,request):
+        is_probe=request['action']=='probe';is_rotation=request['action']=='retire'
+        with nullcontext() if is_probe or is_rotation else file_lease(binding,request):
             process=subprocess.Popen(command(binding),stdin=subprocess.PIPE,stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,cwd='/',close_fds=True,
-                pass_fds=((connected.fileno(),) if is_probe else (connected.fileno(),request['file_fd'])),umask=0o077,
+                pass_fds=((connected.fileno(),) if is_probe or is_rotation else (connected.fileno(),request['file_fd'])),umask=0o077,
                 env={'HOME':str(cfg.BASE/'home'),'PATH':'/usr/bin:/bin:/usr/sbin:/sbin',
                      'LANG':'en_US.UTF-8','ERP_HOME_REHEARSAL':'1'})
             first=True;interrupted=False
@@ -257,7 +275,28 @@ def _dispatch(binding,request):
 
 
 def _kind(request):
-    return {'probe':probe.TYPE,'upload':files.UPLOAD,'download':files.READBACK}[request['action']]
+    return {'probe':probe.TYPE,'upload':files.UPLOAD,'download':files.READBACK,'retire':ROTATION_RESULT}[request['action']]
+
+
+def _rotation_capability(binding):
+    meta=service.metadata(binding.control['package_sha256'])
+    tree,manifest=published.resolve(cfg.BASE/'instance',binding.control['package_sha256'],meta['public'],kind='migration')
+    require(tree==binding.tree and meta['context']==binding.context)
+    cfg.rotation_capability(manifest);binding.check()
+
+
+def retire_next():
+    """Only the next indexed retired file, on the existing fixed signed entry."""
+    binding=load_binding();require(Path(__file__).resolve()==binding.tree/cfg.MODULE)
+    _rotation_capability(binding)
+    from .nas_backup_rotation import MacStreamReceiptAdapter
+    from .mac_smb_stream_target import _manager
+    _,index=MacStreamReceiptAdapter(_manager(binding)).read_index()
+    if not index['retired']:return {'status':'idle','removed_bytes':0}
+    request=dict(challenge=uuid.uuid4().hex,control_sha256=binding.control_sha,
+        contract_sha256=binding.control['contract_sha256'],action='retire',socket_fd=2**31-1,attempt_id=uuid.uuid4().hex)
+    _request(request,binding);verify_network_policy(binding);binding.check()
+    return _dispatch(binding,request)
 
 
 def preflight(required_bytes):

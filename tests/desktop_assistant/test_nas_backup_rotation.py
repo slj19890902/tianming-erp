@@ -233,7 +233,7 @@ class RotationTests(unittest.TestCase):
         with self.assertRaises(ValueError): rotation.collect_registered_references(registry, {'unknown-job'}, state, 'b' * 64)
 
     def test_finite_existing_job_names_can_be_registered_without_arbitrary_paths(self):
-        for prefix in ('', 'smb-stream-', 'local-code-update-', 'mounted-checkpoint-', 'import-'):
+        for prefix in ('', 'smb-stream-', 'local-code-update-', 'mounted-checkpoint-', 'import-', 'completion-', 'current-mac-audit-'):
             job = {'job_id': prefix + 'a' * 32, 'kind': 'restore', 'status': 'completed',
                    'backup_path': '', 'backup_sha256': None, 'receipt': ''}
             rotation.validate_job(job)

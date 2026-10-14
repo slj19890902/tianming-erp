@@ -158,9 +158,14 @@ def capture_verified_recovery(restored, receipt, receipt_sha, downloaded, raw_zi
 def _validate_pointer(pointer):
     require(isinstance(pointer, dict) and set(pointer) == {'receipt', 'receipt_sha256'}
             and isinstance(pointer['receipt'], str) and '/' not in _relative(pointer['receipt'])
-            and re.fullmatch(r'[0-9]{8}-[0-9]{6}-[a-f0-9]{8}\.smb-stream\.json', pointer['receipt'])
+            and re.fullmatch(r'(?:reauth-[a-f0-9]{64}-)?[0-9]{8}-[0-9]{6}-[a-f0-9]{8}\.smb-stream\.json', pointer['receipt'])
             and _sha(pointer['receipt_sha256']),
             'index pointer must name an authenticated stream receipt')
+
+
+def recovery_name(receipt,receipt_sha):
+    require(_sha(receipt.get('sha256')) and _sha(receipt_sha),'recovery name requires exact cipher/receipt identities')
+    return 'retention-recovery-'+receipt['sha256']+'-'+receipt_sha+'.json'
 
 
 def validate_index(index, contract_sha):
@@ -218,9 +223,11 @@ class MacStreamReceiptAdapter:
             raw, receipt = records._local_object(directory, pointer['receipt'], bound['context']['uid'])
             require(hashlib.sha256(raw).hexdigest() == pointer['receipt_sha256'], 'receipt bytes changed')
             existing.validate(receipt, bound)
-            require(existing.receipt_name(receipt['filename']) == pointer['receipt'], 'receipt name mismatch')
-            name = 'retention-recovery-' + receipt['sha256'] + '.json'
-            recovery_raw, recovery = records._local_object(directory, name, bound['context']['uid'])
+            require(existing.matches_receipt_name(receipt, pointer['receipt']), 'receipt name mismatch')
+            name = recovery_name(receipt, pointer['receipt_sha256'])
+            try:recovery_raw, recovery = records._local_object(directory, name, bound['context']['uid'])
+            except FileNotFoundError:
+                recovery_raw, recovery = records._local_object(directory, 'retention-recovery-'+receipt['sha256']+'.json', bound['context']['uid'])
             source_time = validate_recovery(recovery, receipt, pointer['receipt_sha256'])
             return {'pointer': dict(pointer), 'receipt': receipt, 'source_time': source_time,
                     'recovery_sha256': hashlib.sha256(recovery_raw).hexdigest(),
@@ -234,7 +241,7 @@ class MacStreamReceiptAdapter:
             raw, receipt = records._local_object(directory, pointer['receipt'], bound['context']['uid'])
             require(hashlib.sha256(raw).hexdigest() == pointer['receipt_sha256'], 'receipt bytes changed')
             existing.validate(receipt, bound)
-            require(existing.receipt_name(receipt['filename']) == pointer['receipt'], 'receipt name mismatch')
+            require(existing.matches_receipt_name(receipt, pointer['receipt']), 'receipt name mismatch')
             return receipt
 
     def publish_recovery(self, pointer, report):
@@ -246,7 +253,7 @@ class MacStreamReceiptAdapter:
             require(hashlib.sha256(raw).hexdigest() == pointer['receipt_sha256'], 'receipt bytes changed')
             existing.validate(receipt, bound)
             validate_recovery(report, receipt, pointer['receipt_sha256'])
-            name = 'retention-recovery-' + receipt['sha256'] + '.json'
+            name = recovery_name(receipt, pointer['receipt_sha256'])
             payload = records.canonical(report)
             try: existing_raw, _ = records._local_object(directory, name, bound['context']['uid'])
             except FileNotFoundError: existing_raw = None
@@ -354,7 +361,7 @@ def validate_job(job):
     fields = {'job_id', 'kind', 'status', 'backup_path', 'backup_sha256', 'receipt'}
     require(isinstance(job, dict) and set(job) == fields
             and isinstance(job['job_id'], str)
-            and re.fullmatch(r'(?:smb-stream-|local-code-update-|mounted-checkpoint-|import-)?[0-9a-f]{32}', job['job_id'])
+            and re.fullmatch(r'(?:smb-stream-|local-code-update-|mounted-checkpoint-|import-|completion-|current-mac-audit-)?[0-9a-f]{32}', job['job_id'])
             and job['kind'] in ('backup', 'upload', 'restore', 'rehearsal')
             and job['status'] in ('active', 'completed', 'failed_closed')
             and all(isinstance(job[k], str) for k in ('backup_path', 'receipt'))

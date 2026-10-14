@@ -58,6 +58,16 @@ def approved_destination(context):
     return path
 
 
+def rotation_enabled(path):
+    """Old archive workers keep their existing route; new capability is explicit."""
+    binding=prepare(path)
+    manifest=getattr(binding,'manifest',None)
+    if manifest is None:return False
+    if cfg.ROTATION_CAPABILITY not in manifest.get('runtime_capabilities',{}):return False
+    cfg.rotation_capability(manifest);binding.check()
+    return True
+
+
 def configured(path, context):
     """Status only: small approved local records, no secrets or NAS access."""
     from . import mac_smb_stream_receipt as receipt
@@ -135,3 +145,21 @@ def _archive(manager, password, path, resume=None):
         return result
     except Exception:
         raise ValueError(ERROR) from None
+
+
+def capture_bootstrap_authority(manager,password):
+    """Approved candidate owner entry before binding upgrade; no new backup."""
+    from .nas_backup_rotation_worker import capture_first_authority
+    return capture_first_authority(manager,password)
+
+
+def reauthenticate_bootstrap_first(manager,password,path):
+    binding=prepare(path);_check_manager(manager,binding)
+    from .nas_backup_rotation_worker import reauthenticate_first
+    return reauthenticate_first(manager,password)
+
+
+def reserve_local_update_slot(manager,path):
+    binding=prepare(path);_check_manager(manager,binding)
+    from .nas_backup_rotation_worker import reserve_bootstrap_second
+    return reserve_bootstrap_second(manager)

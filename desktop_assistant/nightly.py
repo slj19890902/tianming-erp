@@ -10,6 +10,7 @@ from desktop_assistant import mac_backup_storage
 
 
 def run_once(manager, *, now=None, resume_when_stopped=False, admission=None, restart_allowed=None):
+    stream_plan=None;stream_destination=None;password=None
     try:
         with manager.lock():
             state = manager.state
@@ -38,11 +39,15 @@ def run_once(manager, *, now=None, resume_when_stopped=False, admission=None, re
                 destination = Path(settings['nas'])
                 mac_backup_storage.prepare_destination(destination)
                 password = unprotect_backup(settings['protected_password'])
-                backup = (manager._backup_locked(password, destination, restart_allowed=restart_allowed)
-                          if restart_allowed is not None else manager._backup_locked(password, destination))
-                if resume_when_stopped:
-                    manager.start()
-                return {'status':'verified', 'backup':str(backup)}
+                from desktop_assistant import mac_smb_stream_target as stream
+                if stream.selected(destination) and stream.rotation_enabled(destination):
+                    stream_destination=destination
+                    stream_plan=manager._capture_stream_locked(password,destination,restart_allowed=restart_allowed)
+                else:
+                    backup = (manager._backup_locked(password, destination, restart_allowed=restart_allowed)
+                              if restart_allowed is not None else manager._backup_locked(password, destination))
+                    if resume_when_stopped:manager.start()
+                    return {'status':'verified', 'backup':str(backup)}
             except Exception:
                 # Set a public status while still holding the maintenance lock.
                 # Do not persist native credential errors or their local values.
@@ -50,6 +55,16 @@ def run_once(manager, *, now=None, resume_when_stopped=False, admission=None, re
                 state['backup_error'] = '自动备份未完成，请检查服务用户凭据、NAS连接及维护状态'
                 write_json(manager.root/'state.json', state)
                 raise
+        # Long transfer/independent restore never owns the maintenance lock.
+        try:
+            backup=manager._finish_stream_backup(password,stream_destination,stream_plan)
+            return {'status':'verified','backup':str(backup)}
+        except Exception:
+            with manager.lock():
+                state=manager.state;state['backup_error']='自动备份独立验证或两份保留尚未完成；保留当前任务，请管理员核查'
+                write_json(manager.root/'state.json',state)
+            raise
+        finally:password=None
     except ValueError as error:
         if str(error) == BUSY:
             return {'status':'maintenance-busy'}

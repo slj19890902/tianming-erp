@@ -29,6 +29,9 @@ FILES = {ENTRY, MODULE, 'desktop_assistant/mac_smb_stream_runtime_contract.py',
          'desktop_assistant/current_mac_smb_broker.py',
          'desktop_assistant/current_mac_worker_contract.py',
          'desktop_assistant/current_mac_cutover_contract.py'}
+ROTATION_CAPABILITY = 'nas_backup_rotation_v1'
+ROTATION_FILES = {'desktop_assistant/nas_backup_rotation_worker.py','desktop_assistant/nas_backup_rotation.py',
+    'desktop_assistant/nas_backup_rotation_stream.py','desktop_assistant/nas_full_backup_retention.py'}
 FIELDS = {'type','attempt_id','plan_sha256','package_sha256','context_sha256',
           'publisher_sha256','contract_sha256','credential_account'}
 PROFILE = '(version 1)(allow default)(deny network-outbound)'
@@ -64,4 +67,13 @@ def capability(manifest):
     caps=manifest.get('runtime_capabilities',{})
     if (type(caps.get(CAPABILITY)) is not int or caps[CAPABILITY]!=1
             or not FILES <= manifest.get('files',{}).keys()):
+        raise ValueError(ERROR)
+
+
+
+def rotation_capability(manifest):
+    """New rotation execution only; the old archive protocol keeps its meaning."""
+    capability(manifest)
+    value=manifest.get('runtime_capabilities',{}).get(ROTATION_CAPABILITY)
+    if type(value) is not int or value!=1 or not ROTATION_FILES <= manifest.get('files',{}).keys():
         raise ValueError(ERROR)

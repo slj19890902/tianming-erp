@@ -32,6 +32,10 @@ def instance(tmp_path,monkeypatch):
     (root/'control/operation.lock').write_bytes(b'0')
     context={'uid':os.getuid(),'gid':os.getgid()}
     monkeypatch.setattr(m,'BASE',base);monkeypatch.setattr(m,'ROOT',root)
+    # This legacy mounted-contract fixture must never inspect installed stream records.
+    from desktop_assistant.mac_smb_stream_target import cfg as stream_cfg
+    monkeypatch.setattr(stream_cfg,'CONTROL',base/'smb-stream-service.json')
+    monkeypatch.setattr(stream_cfg,'CONTRACT',base/'smb-stream-archive.json')
     original=m.Lease
     def lease(path,**kwargs):
         if path==base:

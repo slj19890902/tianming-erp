@@ -85,3 +85,18 @@ def test_approval_changes_before_publication_keep_current(case):
         update(case.manager, package, PASSWORD, sha(case.manager.root/'state.json'), approval_check=revoked)
     assert case.manager.state == before
     assert list((case.manager.root/'backups').glob('*.tmbackup'))
+
+
+def test_local_proof_binds_actual_raw_manifest_database_and_business_time(case):
+    from desktop_assistant import nas_backup_rotation_stream as rotation_stream
+    manager=case.manager
+    with manager.lock(), forbidden_runtime(manager):
+        proof=update(manager,case.release('two'),PASSWORD,sha(manager.root/'state.json'))
+    authenticated=proof['authenticated_recovery']
+    raw=case.root/'nas-independent-authenticated.zip'
+    manifest=rotation_stream.authenticate_existing_readback(Path(manager.state['update_backup']),raw,PASSWORD,authenticated)
+    assert authenticated['cipher_sha256']==proof['backup_sha256']
+    assert authenticated['raw_sha256']==sha(raw)
+    assert authenticated['source_time']==manifest['created']
+    assert authenticated['database']==manifest['database']
+    assert set(authenticated)=={'cipher_sha256','raw_sha256','manifest_sha256','database','source_time'}

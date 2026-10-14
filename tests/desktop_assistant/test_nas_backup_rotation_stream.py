@@ -16,7 +16,7 @@ from smbprotocol.header import SMB2HeaderResponse
 
 from desktop_assistant import mac_smb_stream_files_v2 as files
 from desktop_assistant.mac_smb_stream_contract import digest as contract_digest
-from desktop_assistant.mac_smb_stream_receipt import validate as existing_validate, receipt_name
+from desktop_assistant.mac_smb_stream_receipt import validate as existing_validate, receipt_name, matches_receipt_name
 from desktop_assistant import nas_backup_rotation as rotation
 from desktop_assistant import nas_backup_rotation_stream as stream
 from desktop_assistant.storage import MAGIC
@@ -182,7 +182,7 @@ class RecordAdapter(rotation.MacStreamReceiptAdapter):
     @contextmanager
     def records(self):
         fd = os.open(self.directory, os.O_DIRECTORY | os.O_RDONLY)
-        try: yield SimpleNamespace(validate=existing_validate, receipt_name=receipt_name), self.bound, SimpleNamespace(fd=fd), fd
+        try: yield SimpleNamespace(validate=existing_validate, receipt_name=receipt_name, matches_receipt_name=matches_receipt_name), self.bound, SimpleNamespace(fd=fd), fd
         finally: os.close(fd)
 
 
@@ -201,7 +201,7 @@ def test_real_receipt_validator_owner_reader_publish_replay_and_conflict(tmp_pat
     adapter = RecordAdapter(tmp_path, bound)
     report = report_for(receipt, p['receipt_sha256'])
     adapter.publish_recovery(p, report)
-    target = tmp_path / ('retention-recovery-' + receipt['sha256'] + '.json')
+    target = tmp_path / rotation.recovery_name(receipt,p['receipt_sha256'])
     before, inode = target.read_bytes(), target.stat().st_ino
     adapter.publish_recovery(p, report)
     assert target.read_bytes() == before and target.stat().st_ino == inode
@@ -253,3 +253,29 @@ def test_existing_ciphertext_fd_transfer_and_independent_authentication_do_not_b
                    'database': manifest['database'], 'source_time': manifest['created']}
     assert stream.authenticate_existing_readback(downloaded, checked, 'synthetic-transfer-password', local_proof) == manifest
     assert sha(source) == sha(downloaded)
+
+
+def test_control_bound_receipt_alias_does_not_accept_caller_chosen_names():
+    from desktop_assistant.mac_smb_stream_receipt import reauthenticated_receipt_name
+    value={'filename':'20261014-070840-4086632c.tmbackup','control_sha256':'a'*64}
+    alias=reauthenticated_receipt_name(value)
+    assert matches_receipt_name(value,alias)
+    assert matches_receipt_name(value,receipt_name(value['filename']))
+    assert not matches_receipt_name(value,alias.replace('a'*64,'b'*64))
+    rotation._validate_pointer({'receipt':alias,'receipt_sha256':'c'*64})
+    with pytest.raises(ValueError):rotation._validate_pointer({'receipt':alias.replace('a'*64,'a'*8),'receipt_sha256':'c'*64})
+
+
+def test_recovery_legacy_name_only_reads_the_same_receipt_identity(tmp_path):
+    from desktop_assistant import mac_backup_storage as records
+    _,value,versions,_=setup();data=versions[0]['receipt']
+    bound={'value':value,'control':{'context_sha256':value['context_sha256'],'contract_sha256':contract_digest(value),
+        'package_sha256':data['package_sha256']},'context':{'uid':os.geteuid(),'gid':os.getegid()},'control_sha':data['control_sha256']}
+    raw=records.canonical(data);p={'receipt':receipt_name(data['filename']),'receipt_sha256':hashlib.sha256(raw).hexdigest()}
+    path=tmp_path/p['receipt'];path.write_bytes(raw);path.chmod(0o600)
+    report=report_for(data,p['receipt_sha256'])
+    legacy=tmp_path/('retention-recovery-'+data['sha256']+'.json');legacy.write_bytes(records.canonical(report));legacy.chmod(0o600)
+    adapter=RecordAdapter(tmp_path,bound)
+    assert adapter.load_verified(p)['source_time']==report['source_time']
+    report['receipt_sha256']='0'*64;legacy.write_bytes(records.canonical(report));legacy.chmod(0o600)
+    with pytest.raises(ValueError,match='not bound'):adapter.load_verified(p)

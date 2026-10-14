@@ -201,8 +201,39 @@ def snapshot(manager, root, context):
                                       or 'failed' in state.get('operation', ''))}
 
 
+def _stream_backup(request,context,public):
+    """Same authenticated backup action; short capture and publication locks."""
+    from desktop_assistant.manager import Manager
+    from desktop_assistant import mac_smb_stream_target as stream
+    from desktop_assistant.credential_store import unprotect_backup
+    with instance(context) as (folders,lock,recheck):
+        with maintenance(lock):
+            root=folders['root'];_,saved=settings(root,context)
+            destination=approved_destination(context)
+            if not stream.selected(destination) or not stream.rotation_enabled(destination):return None
+            if saved.get('nas')!=str(destination):raise ValueError('先配置已批准的系统备份位置')
+            manager=Manager(ROOT,public)
+            system.verify_keychain(context);recheck()
+            password=unprotect_backup(saved['protected_password'])
+            plan=manager._capture_stream_locked(password,destination)
+        try:
+            backup=manager._finish_stream_backup(password,destination,plan)
+        finally:password=None
+        with maintenance(lock):
+            recheck();final=manager.state
+            if final.get('last_backup')!=str(backup) or remote.verified_at(ROOT,final) is None:
+                raise ValueError('完整备份尚未独立恢复和两份索引核验，不能报告完成')
+            result={'type':'tianming.service-management.v1','action':'backup',
+                'package_sha256':request['package_sha256'],'challenge':request['challenge'],
+                'identity':boot._actual(),'home_rehearsal':True,'snapshot':snapshot(manager,root,context)}
+            return system.management_reply(result,request,context)
+
+
 def run(request, *, script, executable):
     context, public = authenticated(request, script, executable)
+    if request['action']=='backup':
+        result=_stream_backup(request,context,public)
+        if result is not None:return result
     with instance(context) as (folders, lock, recheck), maintenance(lock):
         root = folders['root']; state_raw, state = record(root, 'state.json', context)
         if not system._sha(state.get('current')): raise ValueError('专用实例尚未完整恢复')

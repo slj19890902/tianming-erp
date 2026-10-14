@@ -84,7 +84,13 @@ def update(manager, package, password, state_sha256, *, approval_check=lambda: N
     inputs = manager._backup_inputs()
     if shutil.disk_usage(manager.root).free < inputs['required']:
         raise ValueError('本地完整备份空间不足')
-    job = manager.root/'staging'/('local-code-update-'+uuid.uuid4().hex)
+    slot=None
+    from desktop_assistant import mac_smb_stream_target as stream
+    if manager.root==stream.cfg.BASE/'instance' and stream.metadata_present():
+        from desktop_assistant import nas_backup_rotation_worker as rotation_worker
+        slot=rotation_worker.local_update_slot_locked(manager)
+    job = manager.root/'staging'/('local-code-update-'+(slot['task_id'] if slot else uuid.uuid4().hex))
+    if slot:rotation_worker.local_job_locked(manager,job)
     job.mkdir(mode=0o700)
     payload = manager._build_backup_payload(password, job, inputs)
     final = manager.root/'backups'/payload['encrypted'].name
@@ -103,11 +109,16 @@ def update(manager, package, password, state_sha256, *, approval_check=lambda: N
     if signed_release_manifest(restored/'release.zip', manager.public_key) != current:
         raise ValueError('备份内原程序签名不一致')
     check()
+    from desktop_assistant.nas_full_backup_retention import digest as manifest_digest
+    authenticated_recovery = dict(cipher_sha256=payload['sha256'], raw_sha256=sha(readback),
+        manifest_sha256=manifest_digest(recovered), database=database_info(restored/'shared/data/carton_erp.sqlite3'),
+        source_time=recovered['created'])
     proof = dict(type='tianming.local-code-update.v1', storage='local',
         independent_device=False, nas_verified=False, backup_sha256=payload['sha256'],
         backup_bytes=payload['size'], current=identity, previous=old['current'],
         database_sha256=db_sha, shared_files=len(before), manual_stop=True,
-        restored_verified=True, factory_activated=False)
+        restored_verified=True, factory_activated=False, authenticated_recovery=authenticated_recovery,
+        backup_filename=final.name,job_id=job.name,rotation_slot=slot)
     write_json(job/'verified.json', proof)
     sync_directory(job)
     sync_directory(job.parent)
@@ -135,6 +146,7 @@ def update(manager, package, password, state_sha256, *, approval_check=lambda: N
                 path.unlink()
     except OSError:
         pass  # Cleanup is never a rollback or an update failure.
+    if slot:rotation_worker.local_job_locked(manager,job,complete=True,proof=proof)
     return proof
 
 

@@ -49,6 +49,8 @@ def metadata(package):
     with (meta['tree'].parent/'package.zip').open('rb') as source:
         _, manifest, _ = publication.inspect(source)
     cfg.capability(manifest)
+    if cfg.ROTATION_CAPABILITY in manifest.get('runtime_capabilities',{}):
+        cfg.rotation_capability(manifest)
     return meta
 
 

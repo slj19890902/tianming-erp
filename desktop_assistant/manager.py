@@ -75,6 +75,7 @@ class Manager:
         try:
             self._check_dispatch_reader(release)
             self._check_provenance_reader(release)
+            self._check_physical_kit_reader(release)
         except (ValueError, OSError):
             return False
         # Preserve rollback metadata, but never run a writer which ignores the
@@ -181,6 +182,16 @@ class Manager:
                     and manifest == self.manifest(release))
         except Exception:
             return False
+
+    def _check_physical_kit_reader(self,release):
+        from desktop_assistant.physical_kit_reader_contract import require_reader
+        package=self.root/'packages'/(release+'.zip')
+        if sha(package)!=release:
+            raise ValueError('实物组套读取程序原包身份变化')
+        manifest=signed_release_manifest(package,self.public_key)
+        if manifest!=self.manifest(release):
+            raise ValueError('实物组套读取清单与签名原包不一致')
+        require_reader(self.root/'shared/data/carton_erp.sqlite3',manifest)
 
     def _quotation_writer(self, release):
         package = self.root / 'packages' / (release + '.zip')
@@ -485,6 +496,7 @@ class Manager:
                 require_factory_service()
         self._check_dispatch_reader(state['current'], require_active=self._dispatch_reader(state['current']))
         self._check_provenance_reader(state['current'])
+        self._check_physical_kit_reader(state['current'])
         running = self._process()
         if running:
             expected = python
@@ -548,6 +560,7 @@ class Manager:
         if not current:
             raise ValueError('尚未导入或恢复ERP数据')
         dispatch_activation = self._check_dispatch_reader(current, require_active=self._dispatch_reader(current))
+        self._check_physical_kit_reader(current)
         before = database_info(self.root / 'shared/data/carton_erp.sqlite3')
         from desktop_assistant.preflight import inspect
         checks = inspect(self.root / 'shared/data/carton_erp.sqlite3', self.root / 'shared', managed=True)
@@ -725,7 +738,37 @@ class Manager:
                 # and graceful-exit checks; ordinary NAS failures leave it up.
                 self.stop()
 
+    def _capture_stream_locked(self,password,nas,*,restart_allowed=None):
+        from desktop_assistant import mac_smb_stream_target as stream
+        stream.prepare(nas)
+        from desktop_assistant import nas_backup_rotation_worker as rotation_worker
+        try:
+            pending=rotation_worker.pending_locked(self)
+            if pending is not None:return {'pending':pending}
+            return rotation_worker.capture_locked(self,password,restart_allowed=restart_allowed)
+        except Exception:
+            state=self.state;state['backup_error']='NAS备份任务或两份保留资格尚未确认；保留现场，ERP不因该错误停止'
+            write_json(self.root/'state.json',state)
+            raise
+
+    def _finish_stream_backup(self,password,nas,plan):
+        from desktop_assistant import mac_smb_stream_target as stream
+        stream.prepare(nas)
+        from desktop_assistant import nas_backup_rotation_worker as rotation_worker
+        try:
+            result=rotation_worker.finish_pending(self,password,plan['pending']) if 'pending' in plan else rotation_worker.finish(self,password,plan)
+            return Path(result['backup'])
+        except Exception:
+            with self.lock():
+                state=self.state;state['backup_error']='NAS独立回读、恢复或两份轮换尚未完成；保留本任务，请管理员核查'
+                write_json(self.root/'state.json',state)
+            raise
+
     def backup(self, password: str, nas: Path):
+        from desktop_assistant import mac_smb_stream_target as stream
+        if stream.selected(nas) and stream.rotation_enabled(nas):
+            with self.lock():plan=self._capture_stream_locked(password,nas)
+            return self._finish_stream_backup(password,nas,plan)
         with self.lock():
             return self._backup_locked(password, nas)
 
@@ -1214,6 +1257,8 @@ class Manager:
                 if database_info(database) != info:
                     raise ValueError('凭据恢复后的完整性、表计数或版本不一致')
                 validate_database_schema(database, contract)
+            from desktop_assistant.physical_kit_reader_contract import require_reader
+            require_reader(database,release_manifest)
             # Promote program caches only after all payload checks pass.
             for original in originals.values():
                 self.stage_release(original, verify_existing=True)

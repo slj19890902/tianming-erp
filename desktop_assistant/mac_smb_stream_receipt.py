@@ -39,6 +39,16 @@ def receipt_name(filename):
     return archive.filename(filename)[:-len('.tmbackup')]+'.smb-stream.json'
 
 
+def reauthenticated_receipt_name(value):
+    """Current control-bound alias; preserve the original immutable receipt."""
+    require(cfg.sha(value.get('control_sha256')))
+    return 'reauth-'+value['control_sha256']+'-'+receipt_name(value['filename'])
+
+
+def matches_receipt_name(value, name):
+    return name in (receipt_name(value['filename']),reauthenticated_receipt_name(value))
+
+
 def approval():
     """Historical display: small root records only, no package hash or network."""
     context=runtime.keychain.load_context();runtime.actual_identity(context)
@@ -236,12 +246,13 @@ def verified_at(root,state,*,now=None):
         require(isinstance(index,dict) and set(index)=={'path','receipt','receipt_sha256'}
                 and index['path']==state['last_backup'] and cfg.sha(index['receipt_sha256']))
         filename=Path(index['path']).name;archive.filename(filename)
-        require(index['receipt']==receipt_name(filename))
+        require(index['receipt'] in (receipt_name(filename),'reauth-'+bound['control_sha']+'-'+receipt_name(filename)))
         with root_lease(context) as held:
             with receipts(held,context) as directory:
                 raw,value=local._local_object(directory,index['receipt'],context['uid'])
             require(raw==cfg.canonical(value) and cfg.digest(raw)==index['receipt_sha256'])
             validate(value,bound,now=now)
+            require(matches_receipt_name(value,index['receipt']))
             require(value['local_copy']['path']==index['path'] and value['filename']==filename
                     and value['verified_at']==state['last_backup_at'])
             with copy_lease(held,context,filename) as copy:

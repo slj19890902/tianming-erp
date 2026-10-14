@@ -361,11 +361,13 @@ def validate_job(job):
     fields = {'job_id', 'kind', 'status', 'backup_path', 'backup_sha256', 'receipt'}
     require(isinstance(job, dict) and set(job) == fields
             and isinstance(job['job_id'], str)
-            and re.fullmatch(r'(?:smb-stream-|local-code-update-|mounted-checkpoint-|import-|completion-|current-mac-audit-)?[0-9a-f]{32}', job['job_id'])
+            and re.fullmatch(r'(?:smb-stream-|local-code-update-|mounted-checkpoint-|import-|completion-|current-mac-audit-|migration-)?[0-9a-f]{32}', job['job_id'])
             and job['kind'] in ('backup', 'upload', 'restore', 'rehearsal')
             and job['status'] in ('active', 'completed', 'failed_closed')
             and all(isinstance(job[k], str) for k in ('backup_path', 'receipt'))
             and (job['backup_sha256'] is None or _sha(job['backup_sha256'])), 'unknown job metadata/closure')
+    require(not job['job_id'].startswith('migration-') or job['kind']=='rehearsal',
+            'migration namespace is rehearsal only')
     require(job['status'] != 'active' or bool(job['backup_path'] or job['backup_sha256'] or job['receipt']),
             'active job must declare its backup input/output')
 

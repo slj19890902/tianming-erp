@@ -212,6 +212,28 @@ def run_migration(release, shared, revision, log, environment=None, *, release_m
         raise ValueError('升级子进程失败，保留现场；不得启动未核验数据库，请查看迁移日志')
 
 
+def _rotation_rehearsal_owner(manager,job):
+    """Caller already owns manager.lock; optional fixed signed Mac rotation only."""
+    from desktop_assistant import mac_smb_stream_target as stream
+    if manager.root!=stream.cfg.BASE/'instance' or not stream.metadata_present():return None
+    from desktop_assistant import mac_smb_stream_receipt as receipt
+    if not stream.rotation_enabled(stream.destination(receipt.approval()['control'])):return None
+    from desktop_assistant import nas_backup_rotation_worker as worker
+    worker._binding(manager);adapter=worker._adapter(manager)
+    if job.exists() or job.is_symlink():raise ValueError('migration rehearsal owner already exists')
+    try:_,registry=worker._read(adapter,'retention-jobs.json')
+    except FileNotFoundError:registry=None
+    if registry is not None and job.name in registry['jobs']:
+        raise ValueError('migration rehearsal identity already registered; preserve its owner')
+    adapter.record_job_locked(worker._job(job.name,'rehearsal','active',job))
+    return adapter
+
+
+def _rotation_rehearsal_terminal(adapter,job,status):
+    from desktop_assistant import nas_backup_rotation_worker as worker
+    adapter.record_job_locked(worker._job(job.name,'rehearsal',status,job))
+
+
 def rehearse(manager, package):
     from desktop_assistant import mac_published_runtime
     approved = (manager._execution_release(sha(package), kind='migration')
@@ -219,6 +241,8 @@ def rehearse(manager, package):
     source=manager.root/'shared'; database=source/'data/carton_erp.sqlite3'
     before_info=database_info(database);before=facts(database);before_files=files(source)
     job=manager.root/'staging'/('migration-'+uuid.uuid4().hex)
+    owner=_rotation_rehearsal_owner(manager,job)
+    # Admission is durable before mkdir/report; either failure retains active.
     job.mkdir();report_path=job/'report.json'
     report={'status':'running','source_revision':before_info['revision'],'package_sha256':sha(package),
         'created_at':datetime.now(timezone.utc).isoformat(),'source_facts':before,
@@ -258,7 +282,16 @@ def rehearse(manager, package):
             result_schema=schema(shared/'data/carton_erp.sqlite3'),
             attachments_verified=len(before_files),source_unchanged=True)
     except Exception as error:
-        report.update(status='failed',error=str(error));write_json(report_path,report);raise
+        report.update(status='failed',error=str(error));write_json(report_path,report)
+        if owner is not None:
+            from desktop_assistant.cleanup import assert_idle
+            try:
+                assert_idle(job)
+                if str(job) in json.dumps(manager.state,ensure_ascii=False):
+                    raise ValueError('rehearsal remains a runtime state dependency')
+            except (OSError,ValueError):pass  # Unknown writer/reference retains active.
+            else:_rotation_rehearsal_terminal(owner,job,'failed_closed')
+        raise
     write_json(report_path,report)
     # Version-2 reports contain the schema proof needed for interrupted-update
     # recovery; successful rehearsal payloads are no longer needed afterward.
@@ -271,4 +304,7 @@ def rehearse(manager, package):
             cleanup[name] = {'retained': str(error)}
     report['temporary_cleanup'] = cleanup
     write_json(report_path,report)
+    # Completed means the observed rehearsal child/report reached a terminal
+    # state; temporary_cleanup remains truthful, including retained payloads.
+    if owner is not None:_rotation_rehearsal_terminal(owner,job,'completed')
     return report

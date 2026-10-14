@@ -435,6 +435,13 @@ def test_update_never_migrates_without_mac_backup_evidence(storage,real_manager,
     monkeypatch.setattr(real_manager,'compatible',lambda *a,**kw:False)
     monkeypatch.setattr(nas_probe,'check_before_stop',lambda path:s.before_write(path))
     rehearse = Mock(); migrate = Mock()
+    # This fixture substitutes a candidate contract rather than a signed
+    # runtime; test backup rejection after a separately verified preflight.
+    monkeypatch.setattr(real_manager, '_execution_release', lambda *a, **kw: Path('/synthetic-migration'))
+    monkeypatch.setattr('desktop_assistant.manager.signed_release_manifest',
+        lambda *a: dict(revision='r2', runtime_platform='macos-arm64'))
+    prepare = Mock()
+    monkeypatch.setattr(migration, 'prepare_migration', prepare)
     monkeypatch.setattr(migration,'rehearse',rehearse); monkeypatch.setattr(migration,'run_migration',migrate)
     if failure == 'preflight': storage.observation['classification'] = 'loopback_proxy'
     if failure == 'worker': monkeypatch.setattr(s,'_child',Mock(side_effect=ValueError('synthetic readback failed')))
@@ -446,8 +453,10 @@ def test_update_never_migrates_without_mac_backup_evidence(storage,real_manager,
         monkeypatch.setattr(s,'_exclusive',exclusive)
     with pytest.raises((ValueError,OSError)): real_manager._update_locked(Path('/unused-synthetic.zip'),'synthetic-passphrase',storage.destination)
     rehearse.assert_not_called(); migrate.assert_not_called()
+    prepare.assert_called_once()
     assert real_manager.state == original
     if failure == 'preflight': real_manager.stop.assert_not_called()
+    else: real_manager.stop.assert_called_once()
 
 
 def test_onboard_and_finish_reject_before_original_marker_or_pending_clear(storage,real_manager,monkeypatch):

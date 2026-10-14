@@ -59,6 +59,21 @@ def build_and_verify_stopped(manager,password,value,transfer):
     observations. It must not consume/close these descriptors or publish state.
     No production caller is enabled until the signed worker protocol is ready.
     """
+    return _build_and_verify(manager,password,value,transfer)
+
+
+def build_and_verify_captured(manager,password,value,transfer,resume):
+    """Authenticate a stopped recovery point, then resume before network IO.
+
+    Only the Manager-owned callback may resume the service. True means startup
+    readiness completed; False preserves the original stopped-service contract.
+    The published backup describes the captured point, not later live writes.
+    """
+    require(callable(resume))
+    return _build_and_verify(manager,password,value,transfer,resume)
+
+
+def _build_and_verify(manager,password,value,transfer,resume=None):
     from .mac_service_restore import Lease
     value=dict(contract.validate(value,value.get('context_sha256'),value.get('uid')))
     require(manager._process() is None)
@@ -85,6 +100,19 @@ def build_and_verify_stopped(manager,password,value,transfer):
             job_lease.check()
             source=held.enter_context(Lease(payload['encrypted'],uid=uid,gid=gid,mode=0o600,
                 parent=job_lease))
+            resumed=False
+            if resume is not None:
+                require(manager._process() is None and manager.state==payload['state']
+                        and database_info(root/'shared/data/carton_erp.sqlite3')==payload['database']
+                        and os.fstat(source.fd).st_size==payload['size']
+                        and sha(payload['encrypted'])==payload['sha256'])
+                os.fsync(source.fd);os.fsync(job_lease.fd);os.fsync(stage_lease.fd)
+                source.check();job_lease.check()
+                resumed=resume()
+                require(type(resumed) is bool)
+                if not resumed:
+                    require(manager._process() is None)
+                source.check();job_lease.check()
             destination=job/'download.tmbackup'
             fd=os.open(destination.name,os.O_CREAT|os.O_EXCL|os.O_RDWR|os.O_NOFOLLOW,0o600,
                        dir_fd=job_lease.fd)
@@ -105,8 +133,10 @@ def build_and_verify_stopped(manager,password,value,transfer):
                 cipher_sha=decrypt_file(destination,verified,password)
             require(cipher_sha==payload['sha256'] and sha(verified)==payload['raw_sha256'])
             source.check();downloaded.check();job_lease.check()
-            require(manager._process() is None and manager.state==payload['state']
-                    and database_info(root/'shared/data/carton_erp.sqlite3')==payload['database'])
+            require(manager.state==payload['state'])
+            if not resumed:
+                require(manager._process() is None
+                        and database_info(root/'shared/data/carton_erp.sqlite3')==payload['database'])
             from .mac_smb_stream_work import capture
             work=capture(job_lease,payload)
             return dict(type='tianming.mac-smb-stream-candidate-verification.v1',

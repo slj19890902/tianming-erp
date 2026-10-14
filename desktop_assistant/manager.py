@@ -694,7 +694,21 @@ class Manager:
         self._backup_preflight(nas)
         running = bool(self._process())
         self.stop()
+        resume_attempted = False
+        resumed_process = None
+        def resume():
+            nonlocal resume_attempted, resumed_process
+            # A readiness failure must not cause a second start in finally.
+            resume_attempted = True
+            if running and (restart_allowed is None or restart_allowed()):
+                self.start()
+                resumed_process = self._process()
+                return True
+            return False
         try:
+            from desktop_assistant import mac_smb_stream_target as stream
+            if running and stream.selected(nas):
+                return stream.archive_with_resume(self, password, nas, resume)
             return self._backup_stopped(password, nas)
         except Exception as error:
             state = self.state
@@ -702,8 +716,14 @@ class Manager:
             write_json(self.root / 'state.json', state)
             raise
         finally:
-            if running and (restart_allowed is None or restart_allowed()):
-                self.start()
+            if not resume_attempted:
+                resume()
+            elif (resumed_process is not None and restart_allowed is not None
+                    and not restart_allowed() and self._process() == resumed_process):
+                # A supervisor shutdown may arrive during network IO. Stop only
+                # the exact process this backup resumed, with the usual nonce
+                # and graceful-exit checks; ordinary NAS failures leave it up.
+                self.stop()
 
     def backup(self, password: str, nas: Path):
         with self.lock():
@@ -924,6 +944,14 @@ class Manager:
                     or contract.get('from_revision') != revision
                     or contract.get('rollback_package_sha256') != old['current']):
                 raise ValueError('此版本需要专项迁移或缺少上版程序兼容契约，未停止服务')
+            from desktop_assistant.migration import prepare_migration
+            migration_release = self._execution_release(candidate['id'], kind='migration')
+            migration_manifest = signed_release_manifest(
+                self.root / 'packages' / (candidate['id'] + '.zip'), self.public_key)
+            migration_environment = (None if migration_manifest.get('runtime_platform') == 'macos-arm64'
+                                     else self._environment(migration_release))
+            prepare_migration(migration_release, self.root / 'shared', candidate['revision'],
+                environment=migration_environment, release_manifest=migration_manifest)
         self._backup_preflight(nas)
         self.stop()
         try:
@@ -943,7 +971,7 @@ class Manager:
             shared = self.root / 'shared'
             dbpath = shared / 'data/carton_erp.sqlite3'
             before_files = files(shared)
-            release = self._execution_release(candidate['id'], kind='migration')
+            release = migration_release
             new.update(operation='migration_running', update_backup=str(backup),
                        migration_report=report['report_path'], migration_target=candidate['id'],
                        migration_files=before_files, migration_report_sha256=sha(Path(report['report_path'])),
@@ -952,9 +980,8 @@ class Manager:
             try:
                 run_migration(release, shared, candidate['revision'],
                     self.root / 'control' / ('migration-' + uuid.uuid4().hex + '.log'),
-                    environment=self._environment(release),
-                    release_manifest=signed_release_manifest(
-                        self.root / "packages" / (candidate["id"] + ".zip"), self.public_key))
+                    environment=migration_environment,
+                    release_manifest=migration_manifest)
                 actual = database_info(dbpath)
                 if (actual['revision'] != candidate['revision']
                         or schema(dbpath) != report['result_schema']

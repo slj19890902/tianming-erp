@@ -16,6 +16,11 @@ class CrossRevisionTests(unittest.TestCase):
         # process. Keep executable hash checks while omitting only host matching.
         runtime = self.manager._runtime_python
         self.manager._runtime_python = lambda identity, **_: runtime(identity, runnable=False)
+        from desktop_assistant import migration
+        migration_runtime = migration.runtime_python
+        host = patch.object(migration, 'runtime_python',
+            side_effect=lambda release, manifest, **_: migration_runtime(release, manifest, runnable=False))
+        host.start(); self.addCleanup(host.stop)
         self.database=self.manager.root/'shared/data/carton_erp.sqlite3'
 
     def tearDown(self):self.fixture.tearDown()

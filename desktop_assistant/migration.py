@@ -130,7 +130,8 @@ def files(root):
     return result
 
 
-def run_migration(release, shared, revision, log, environment=None, *, release_manifest):
+def prepare_migration(release, shared, revision, environment=None, *, release_manifest):
+    """Validate the exact signed migration environment without spawning a writer."""
     # Callers pass the manifest authenticated by extraction or package signature.
     if revision != release_manifest.get('revision'):
         raise ValueError('迁移目标与签名发布包不一致')
@@ -183,6 +184,14 @@ def run_migration(release, shared, revision, log, environment=None, *, release_m
     arguments = ([str(python), '-I', '-B', str(entry), 'upgrade', revision] if system_service else
                  [str(python), '-X', 'utf8', '-m', module, 'upgrade', revision])
     arguments = command(arguments, env)
+    return arguments, env, system_service
+
+
+def run_migration(release, shared, revision, log, environment=None, *, release_manifest):
+    # Repeat preflight immediately before spawn: an earlier online preflight
+    # does not authorize a changed package, runtime, database path or entry.
+    arguments, env, system_service = prepare_migration(
+        release, shared, revision, environment=environment, release_manifest=release_manifest)
     with log.open('wb') as output:
         if system_service:
             process = subprocess.Popen(arguments, cwd=release, env=env, stdout=output, stderr=output,

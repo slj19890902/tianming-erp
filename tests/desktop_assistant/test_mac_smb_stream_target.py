@@ -26,6 +26,12 @@ pytestmark = pytest.mark.skipif(sys.platform != 'darwin', reason='Mac private in
 @pytest.fixture
 def route(case, monkeypatch):
     a = case
+    # Migration SQL is supplied by each test, not a Windows child on this Mac.
+    # The new pre-stop gate still validates all signed synthetic runtime bytes.
+    from desktop_assistant import migration
+    migration_runtime = migration.runtime_python
+    monkeypatch.setattr(migration, 'runtime_python',
+        lambda release, manifest, **_: migration_runtime(release, manifest, runnable=False))
     for name in ('releases', 'shared', 'control', 'backups', 'packages', 'staging'):
         (a.manager.root / name).chmod(0o700)
     # Remove the legacy TestManager storage adapter. Exercise production routing,
@@ -34,7 +40,7 @@ def route(case, monkeypatch):
         monkeypatch.setattr(a.manager, name, MethodType(getattr(Manager, name), a.manager))
     a.binding.control['publisher_sha256'] = subject.cfg.digest(a.public)
     a.target = subject.destination(a.binding.control)
-    a.peer = Peer(); a.preflights = 0; a.events = []; a.running = True
+    a.peer = Peer(); a.preflights = 0; a.events = []; a.running = True; a.transfer_running = []
     monkeypatch.setattr(subject.cfg, 'CONTROL', a.root / 'stream-service.json')
     monkeypatch.setattr(subject.cfg, 'CONTRACT', a.root / 'stream-archive.json')
     def preflight(required):
@@ -49,7 +55,7 @@ def route(case, monkeypatch):
     monkeypatch.setattr(a.manager, 'start', start)
     transfer = runtime.transfer
     def send(*args):
-        a.events.append('transfer'); assert not a.running
+        a.events.append('transfer'); a.transfer_running.append(a.running)
         return transfer(*args)
     monkeypatch.setattr(runtime, 'transfer', send)
     # Match the dedicated service entry's private process umask, including the
@@ -62,7 +68,8 @@ def route(case, monkeypatch):
 def test_complete_manual_backup_preflights_then_stops_and_restores_running_erp(route, host_store):
     a = route; db = a.manager.root / 'shared/data/carton_erp.sqlite3'; before = sha(db)
     result = a.manager.backup(PASSWORD, a.target)
-    assert a.events == ['preflight', 'stop', 'transfer', 'start']
+    assert a.events == ['preflight', 'stop', 'start', 'transfer']
+    assert a.transfer_running == [True]
     assert result.parent == a.manager.root / 'backups' and a.running
     assert storage.verified_at(a.manager.root, a.manager.state) == a.manager.state['last_backup_at']
     restored = TestManager(a.root / 'restore-check', a.public)
@@ -108,7 +115,8 @@ def test_nightly_uses_same_route_and_verified_receipt_prevents_duplicate_run(rou
     now = datetime.now(timezone.utc)
     assert nightly.run_once(a.manager, now=now)['status'] == 'verified'
     assert nightly.run_once(a.manager, now=now)['status'] == 'up-to-date'
-    assert a.preflights == 1 and a.events == ['preflight', 'stop', 'transfer', 'start']
+    assert a.preflights == 1 and a.events == ['preflight', 'stop', 'start', 'transfer']
+    assert a.transfer_running == [True]
 
 
 def test_nightly_probe_failure_has_public_warning_without_stopping(route, monkeypatch):
@@ -131,6 +139,7 @@ def test_update_keeps_private_backup_path_and_success_receipt(route, monkeypatch
     assert receipt.verified_at(a.manager.root, state) == state['last_backup_at']
     retain.assert_called_once_with(a.manager, package.parent)
     assert a.events == ['preflight', 'stop', 'transfer', 'start']
+    assert a.transfer_running == [False]
 
 
 def test_migration_failure_retains_exact_local_evidence_and_stays_stopped(route, monkeypatch):
@@ -154,6 +163,7 @@ def test_migration_failure_retains_exact_local_evidence_and_stays_stopped(route,
         a.manager.update(package, PASSWORD, a.target)
     state = a.manager.state; backup = Path(state['update_backup'])
     assert len(runs) == 2 and not a.running and state['operation'] == 'migration_failed'
+    assert a.transfer_running == [False]
     assert backup.is_file() and sha(backup) == state['migration_backup_sha256']
     assert receipt.verified_at(a.manager.root, state) == state['last_backup_at']
     assert state['current'] == original
@@ -197,6 +207,7 @@ def test_actual_feed_chain_and_migration_keep_stream_backups(route, monkeypatch)
     state = a.manager.state
     assert state['current'] == sha(latest) and a.running and a.preflights == 3
     assert len(runs) == 4 and len(list((a.manager.root / 'backups').glob('*.tmbackup'))) == 3
+    assert a.transfer_running == [False, False, False]
     assert sha(Path(state['update_backup'])) == state['migration_backup_sha256']
     assert receipt.verified_at(a.manager.root, state) == state['last_backup_at']
     retain.assert_called_once_with(a.manager, feed)

@@ -109,12 +109,25 @@ def preflight(path, *, manager=None):
 
 
 def archive_stopped(manager, password, path):
+    return _archive(manager, password, path)
+
+
+def archive_with_resume(manager, password, path, resume):
+    """Normal backups resume at the captured point; update/pause stay cold."""
+    require(callable(resume))
+    return _archive(manager, password, path, resume)
+
+
+def _archive(manager, password, path, resume=None):
     from . import mac_smb_stream_receipt as receipt
     try:
         binding = prepare(path)
         _check_manager(manager, binding)
         require(not manager._process())
-        result = receipt.archive_and_publish_stopped(manager, password)
+        if resume is None:
+            result = receipt.archive_and_publish_stopped(manager, password)
+        else:
+            result = receipt.archive_and_publish_captured(manager, password, resume)
         binding.check()
         require(result.parent == manager.root / 'backups'
                 and manager.state.get('last_backup') == str(result)

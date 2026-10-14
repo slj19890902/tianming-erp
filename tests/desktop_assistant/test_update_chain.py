@@ -12,6 +12,13 @@ class UpdateChainTests(unittest.TestCase):
     def setUp(self):
         self.fixture=recovery.RecoveryTests();self.fixture.setUp()
         self.manager=self.fixture.manager
+        # These signed Windows executables are byte fixtures; no process runs.
+        # Keep signature/path/hash preflight and omit only host matching.
+        from desktop_assistant import migration
+        runtime = migration.runtime_python
+        host = patch.object(migration, 'runtime_python',
+            side_effect=lambda release, manifest, **_: runtime(release, manifest, runnable=False))
+        host.start(); self.addCleanup(host.stop)
         self.feed=self.fixture.nas/'releases';self.feed.mkdir()
         self.database=self.manager.root/'shared/data/carton_erp.sqlite3'
 

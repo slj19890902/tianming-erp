@@ -146,6 +146,16 @@ def _copy_authenticated(root,context,result):
 
 def archive_and_publish_stopped(manager,password):
     """Internal candidate: full backup first; exclusive receipt then CAS state."""
+    return _archive_and_publish(manager,password)
+
+
+def archive_and_publish_captured(manager,password,resume):
+    """Publish the authenticated captured point after Manager resumes ERP."""
+    require(callable(resume))
+    return _archive_and_publish(manager,password,resume)
+
+
+def _archive_and_publish(manager,password,resume=None):
     binding=runtime.load_binding()
     require(manager.root==cfg.BASE/'instance' and manager._process() is None
             and Path(__file__).resolve()==binding.tree/'desktop_assistant/mac_smb_stream_receipt.py')
@@ -155,7 +165,18 @@ def archive_and_publish_stopped(manager,password):
         with root_lease(context) as root:
             before,state=manage.record(root,'state.json',context)
             binding.check()
-            result=builder.build_and_verify_stopped(manager,password,binding.value,runtime.transfer)
+            resumed=False
+            def resume_captured():
+                nonlocal resumed
+                binding.check();root.check()
+                require(manage.record(root,'state.json',context)[0]==before)
+                resumed=resume()
+                require(type(resumed) is bool)
+                return resumed
+            if resume is None:
+                result=builder.build_and_verify_stopped(manager,password,binding.value,runtime.transfer)
+            else:
+                result=builder.build_and_verify_captured(manager,password,binding.value,runtime.transfer,resume_captured)
             require(result['type']=='tianming.mac-smb-stream-candidate-verification.v1'
                     and result['backup_authenticated'] is True and result['state_published'] is False)
             local_copy=_copy_authenticated(root,context,result)
@@ -168,11 +189,13 @@ def archive_and_publish_stopped(manager,password):
             raw=cfg.canonical(receipt);name=receipt_name(result['filename'])
             def recheck():
                 binding.check();root.check()
-                require(manager._process() is None)
+                if not resumed:
+                    require(manager._process() is None)
             recheck()
             require(manage.record(root,'state.json',context)[0]==before
-                    and manager.state==state
-                    and database_info(root.path/'shared/data/carton_erp.sqlite3')==result['database'])
+                    and manager.state==state)
+            if not resumed:
+                require(database_info(root.path/'shared/data/carton_erp.sqlite3')==result['database'])
             with copy_lease(root,context,result['filename']) as copy:
                 require(fingerprint(os.fstat(copy.fd))==local_copy['identity'])
                 with receipts(root,context,create=True) as directory:

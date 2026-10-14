@@ -339,3 +339,39 @@ def test_consistent_tuple_uses_existing_conditional_disable_enable_route(split_c
     assert (c.root / 'state.json').read_bytes() == c.stopped
     assert {p.name: p.read_bytes() for p in c.slot.iterdir()} == c.evidence
     assert (c.active_path.read_bytes(), c.gate_path.read_bytes()) == c.original_authority
+
+
+@pytest.mark.parametrize('fault', ['evidence-change', 'exit-error', 'exit-interrupt'])
+def test_evidence_context_exit_is_inside_failure_closure(split_case, monkeypatch, fault):
+    c = split_case; recovery = prepare(c)
+    if fault == 'evidence-change':
+        monitor = upgrade._monitor
+        def after_last_check(meta):
+            result = monitor(meta)
+            if (c.recovery_slot / 'verified.json').exists():
+                path = c.slot / 'failed.json'; path.write_bytes(path.read_bytes() + b' ')
+            return result
+        monkeypatch.setattr(upgrade, '_monitor', after_last_check)
+    else:
+        evidence = recovery._evidence
+        @contextmanager
+        def fail_on_exit(*args):
+            with evidence(*args) as value: yield value
+            # Deliberately after all explicit checks and after the original
+            # context finishes: adding one more explicit check cannot fix it.
+            if fault == 'exit-interrupt': raise KeyboardInterrupt()
+            raise OSError('synthetic evidence context exit failure')
+        monkeypatch.setattr(recovery, '_evidence', fail_on_exit)
+    with pytest.raises(recovery.RecoveryError) as error:
+        recovery.apply(c.recovery_plan['recovery_id'], c.recovery_sha)
+    assert error.value.result['gate_disabled_confirmed'] is True
+    assert error.value.result['label_disabled_confirmed'] is True
+    assert json.loads(upgrade.system.CONTROL.read_bytes())['enabled'] is False
+    assert (c.recovery_slot / 'verified.json').exists()
+    assert (c.recovery_slot / 'failed.json').exists()
+    assert (c.root / 'state.json').read_bytes() == c.stopped
+    assert (c.active_path.read_bytes(), c.gate_path.read_bytes()) == c.original_authority
+    expected = dict(c.evidence)
+    if fault == 'evidence-change': expected['failed.json'] += b' '
+    assert {p.name: p.read_bytes() for p in c.slot.iterdir()} == expected
+    assert c.trace[-2:] == ['disable', 'publication-exit']

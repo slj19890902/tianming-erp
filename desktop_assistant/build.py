@@ -152,6 +152,10 @@ def main():
                       'app/services/sheet_cutting_contract.py', 'app/services/sheet_cutting_settings.py',
                       'desktop_assistant/delivery_dispatch_contract.py',
                       'desktop_assistant/restore_provenance.py',
+                      'desktop_assistant/physical_kit_reader_contract.py',
+                      'app/services/emergency_kit_correction_20261014.py',
+                      'app/services/entry_source_valuation.py',
+                      'app/core/inventory_entry_guard.py',
                       'desktop_assistant/reader_contract.py'}
     if not reader_sources <= sources.keys():
         raise ValueError('库存业务读取契约的实现不完整，禁止签名发布')
@@ -168,6 +172,8 @@ def main():
             raise ValueError('专用管理或系统定时备份源码不完整')
         if not {'desktop_assistant/mac_system_upgrade_worker.py',
                 'desktop_assistant/mac_system_upgrade_contract.py',
+                'desktop_assistant/mac_system_upgrade_recovery.py',
+                'desktop_assistant/mac_system_upgrade_recovery_contract.py',
                 'desktop_assistant/mac_system_service.py',
                 'desktop_assistant/mac_service_manage.py',
                 'desktop_assistant/manager.py',
@@ -261,6 +267,7 @@ def main():
                                                     'service_manage_v1': 1, 'system_nightly_v1': 1,
                                                     'system_upgrade_worker_v1': 1,
                                                     'system_upgrade_preserve_activation_v1': 1,
+                                                    'system_upgrade_split_recovery_v1': 1,
                                                     'factory_request_v1': 1, 'factory_audit_v1': 1,
                                                     'factory_activation_v1': 1, 'factory_execution_v1': 1}
         runtime_metadata['runtime_capabilities'].update(current_protocols)
@@ -287,6 +294,7 @@ def main():
                                                     'unused_mold_deletion_v1': 1,
                                                     'supplier_sheet_trim_v1': 1,
                                                     'restore_provenance_v1': 1,
+                                                    'physical_kit_correction_20261014_v1': 1,
                                                     **({'factory_cutover_v1': 1} if args.runtime_platform == 'macos-arm64' else {})},
                             'offline_ocr_models': models, **runtime_metadata}, key)
     if args.signing_request_only:

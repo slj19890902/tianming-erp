@@ -159,7 +159,7 @@ def activity(db, product, *, permissions, scope, page=1, page_size=30):
                     for j in jobs[r.id]:
                         if j.status != 'completed': continue
                         output = db.get(InventoryLot, j.output_lot_id)
-                        add('补库完工',j.id,'已完工入库',s.order.order_number,j.actual_output,product_unit_label(product),
+                        add('补库完工',j.id,'已加工半成品入库',s.order.order_number,j.actual_output,'片',
                             at=at(j.created_at),location=position(output), lot_id=j.output_lot_id if permissions['warehouse'] else None)
     else: result['hidden_sections'].append('报料、收料与生产')
     if permissions['orders']:

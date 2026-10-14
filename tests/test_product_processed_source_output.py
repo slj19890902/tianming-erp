@@ -16,7 +16,7 @@ from app.models.warehouse_inventory import (InventoryLot, InventoryLotTransfer, 
 from tests.test_product_workbench import _app, _login, mobile_erp_app
 
 
-def seed_output(db, ids, *, moved=False, invalid=None):
+def seed_output(db, ids, *, moved=False, invalid=None, verified_identity=False):
     p=db.get(Product,ids['product_two']);now=datetime(2026,10,10)
     place=db.scalar(select(WarehouseLocation).where(WarehouseLocation.location_code=='SF-TEMP'))
     order=StockReplenishmentOrder(order_number='CBW-PROCESSED',customer_id=p.customer_id,
@@ -62,8 +62,12 @@ def seed_output(db, ids, *, moved=False, invalid=None):
             source_location_id=place.id,target_location_id=place.id,quantity=30,available_quantity=30,
             reserved_quantity=0,source_version_before=1,source_version_after=2,
             idempotency_key='processed-move',request_hash='f'*64,transferred_at=now))
-    db.add(WarehouseGoodsProfile(lot_id=visible.id,data_json=json.dumps(dict(output_piece=True,
-        product_ids=[p.id],customer_ids=[p.customer_id],scope='customers',usage_confirmed=True))))
+    profile=dict(output_piece=True,product_ids=[p.id],customer_ids=[p.customer_id],
+        scope='customers',usage_confirmed=True)
+    if verified_identity:
+        from app.services.finished_stock_identity import product_basis
+        profile.update(processing='cut',remaining_processes=[],physical_basis=product_basis(p))
+    db.add(WarehouseGoodsProfile(lot_id=visible.id,data_json=json.dumps(profile)))
     db.commit()
     assert not db.scalar(select(SemiFinishedLotAllowedProduct).where(SemiFinishedLotAllowedProduct.inventory_lot_id==visible.id))
     return visible.id,place.id,p.id
@@ -123,3 +127,85 @@ def test_processed_stock_is_ranked_before_empty_products_before_pagination(mobil
         assert response.status_code==200,response.text
         assert response.json()['total']==2
         assert response.json()['items'][0]['id']==product_id
+
+
+@pytest.mark.parametrize('moved', [False, True])
+def test_completed_output_covers_new_board_request_but_not_finished_stock(mobile_erp_app, moved):
+    from app.models.stock_replenishment import InventoryStockPolicy
+    from app.services.stock_replenishment import stock_policy_dict
+    app, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        lot_id, _, product_id = seed_output(db, ids, moved=moved, verified_identity=True)
+        product = db.get(Product, product_id)
+        policy = InventoryStockPolicy(policy_name='processed output warning',
+            target_inventory_type='finished', product_id=product_id,
+            customer_id=product.customer_id, warning_quantity=5,
+            target_quantity=20, active=True)
+        db.add(policy); db.flush()
+        summary = stock_policy_dict(db, policy)
+        assert summary['available_quantity'] == 0
+        assert summary['warning_triggered'] is True
+        assert summary['processed_component_available_piece_quantity'] == 30
+        assert summary['suggested_new_requisition_sheet_quantity'] == 0
+        assert summary['replenishment_state'] == 'board_preparation_ready'
+        db.get(InventoryLot, lot_id).quantity_available = 9
+        db.flush()
+        short = stock_policy_dict(db, policy)
+        assert short['processed_component_available_piece_quantity'] == 9
+        assert short['suggested_new_requisition_sheet_quantity'] > 0
+
+
+def test_unverified_processed_output_cannot_suppress_new_board_request(mobile_erp_app):
+    from app.models.stock_replenishment import InventoryStockPolicy
+    from app.services.stock_replenishment import stock_policy_dict
+    _app_instance, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        _, _, product_id = seed_output(db, ids)
+        product = db.get(Product, product_id)
+        policy = InventoryStockPolicy(policy_name='unverified output warning',
+            target_inventory_type='finished', product_id=product_id,
+            customer_id=product.customer_id, warning_quantity=5,
+            target_quantity=20, active=True)
+        db.add(policy); db.flush()
+        summary = stock_policy_dict(db, policy)
+        assert summary['processed_component_available_piece_quantity'] == 0
+        assert summary['suggested_new_requisition_sheet_quantity'] > 0
+
+
+def test_changed_product_process_exposes_old_output_for_review_without_auto_offset(mobile_erp_app):
+    from app.models.stock_replenishment import InventoryStockPolicy
+    from app.services.stock_replenishment import stock_policy_dict
+    _app_instance, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        _, _, product_id = seed_output(db, ids, verified_identity=True)
+        product = db.get(Product, product_id)
+        policy = InventoryStockPolicy(policy_name='changed process warning',
+            target_inventory_type='finished', product_id=product_id,
+            customer_id=product.customer_id, warning_quantity=5,
+            target_quantity=20, active=True)
+        db.add(policy)
+        product.production_process = '粘贴,模切'
+        db.flush()
+        summary = stock_policy_dict(db, policy)
+        assert summary['processed_component_available_piece_quantity'] == 0
+        assert summary['processed_component_identity_review_piece_quantity'] == 30
+        assert summary['suggested_new_requisition_sheet_quantity'] > 0
+        assert summary['replenishment_state'] == 'processed_identity_review'
+
+
+@pytest.mark.parametrize('invalid', ['owner', 'source', 'status'])
+def test_inconsistent_completed_output_cannot_suppress_other_demand(mobile_erp_app, invalid):
+    from app.models.stock_replenishment import InventoryStockPolicy
+    from app.services.stock_replenishment import stock_policy_dict
+    _app_instance, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        _, _, product_id = seed_output(db, ids, invalid=invalid, verified_identity=True)
+        product = db.get(Product, product_id)
+        policy = InventoryStockPolicy(policy_name='invalid output warning',
+            target_inventory_type='finished', product_id=product_id,
+            customer_id=product.customer_id, warning_quantity=5,
+            target_quantity=20, active=True)
+        db.add(policy); db.flush()
+        summary = stock_policy_dict(db, policy)
+        assert summary['processed_component_available_piece_quantity'] == 0
+        assert summary['suggested_new_requisition_sheet_quantity'] > 0

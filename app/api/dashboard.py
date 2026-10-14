@@ -546,6 +546,12 @@ def _common_box_low_stock_warnings_in_scope(
                 "suggested_replenishment_quantity": item[
                     "suggested_replenishment_quantity"
                 ],
+                "processed_component_available_piece_quantity": item[
+                    "processed_component_available_piece_quantity"
+                ],
+                "processed_component_identity_review_piece_quantity": item[
+                    "processed_component_identity_review_piece_quantity"
+                ],
                 "customer_board_preparation_available_sheet_quantity": item[
                     "customer_board_preparation_available_sheet_quantity"
                 ],

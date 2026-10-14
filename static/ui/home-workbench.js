@@ -8,6 +8,7 @@
   }
   function stockState(row) {
     if (row.pending_request_ids?.length) return 'approval';
+    if (row.replenishment_state === 'processed_identity_review') return 'review';
     const needed = Number(row.is_virtual_composite_parent || row.procurement_mode === 'external_purchase'
       ? row.suggested_new_requisition_finished_quantity : row.suggested_new_requisition_sheet_quantity);
     if (needed > 0) return row.draft_ready ? 'new' : 'missing';
@@ -15,7 +16,7 @@
     if (row.replenishment_state === 'already_ordered') return 'incoming';
     return row.draft_ready ? 'covered' : 'missing';
   }
-  const actionable = row => ['new','missing','prepare'].includes(stockState(row));
+  const actionable = row => ['new','missing','prepare','review'].includes(stockState(row));
   function customerGroups(rows) {
     const groups=new Map();
     for(const row of rows){
@@ -169,23 +170,31 @@
       homeNumber(value) { return value===null||value===undefined ? '待核' : Number(value).toLocaleString('zh-CN',{maximumFractionDigits:2}); },
       homeStockUnit(row) { return row.is_virtual_composite_parent ? '套' : row.unit_label || '单位待核'; },
       homeStockHeading(row) {
+        if(stockState(row)==='review') return `已加工半成品 ${this.homeNumber(row.processed_component_identity_review_piece_quantity)} 片，工艺身份待核对`;
+        if(stockState(row)==='prepare'&&Number(row.processed_component_available_piece_quantity||0)>0)
+          return `已加工半成品 ${this.homeNumber(row.processed_component_available_piece_quantity)} 片，待成品入库`;
         return ({approval:'报料申请待审批',prepare:'已有备料，待生产',incoming:'已报料，待到货',missing:'补库资料待完善',covered:'现有备料已覆盖'})[stockState(row)]
           || `建议补至 ${this.homeNumber(row.target_quantity)}${this.homeStockUnit(row)}`;
       },
       homeStockDetail(row) {
         const state=stockState(row);
+        if(state==='review') return '已收料并加工，但批次冻结工艺与当前产品资料不同；核对实物后再决定抵扣或新报料';
         if(state==='missing') return `缺：${(row.missing_fields || []).join('、') || '请核对常用箱'}`;
         if(state==='approval') return '已提交申请';
-        if(state==='prepare') return `可覆盖 ${this.homeNumber(row.customer_board_preparation_auto_cover_capacity)}${this.homeStockUnit(row)}`;
+        if(state==='prepare') return Number(row.processed_component_available_piece_quantity||0)>0
+          ? `已加工半成品 ${this.homeNumber(row.processed_component_available_piece_quantity)} 片`
+          : `可覆盖 ${this.homeNumber(row.customer_board_preparation_auto_cover_capacity)}${this.homeStockUnit(row)}`;
         if(state==='incoming') return `在途纸板 ${this.homeNumber(row.incoming_board_preparation_sheet_quantity)}张`;
         if(state==='new') return `尚需补 ${this.homeNumber(row.suggested_new_requisition_finished_quantity)}${this.homeStockUnit(row)}`;
         return '查看库存与备料';
       },
       homeStockAction(row) {
         const state=stockState(row);
+        if(state==='review') return '核对半成品';
         if(state==='approval') return '查看申请';
         if(state==='missing') return this.hasPermission('products.edit') ? '补充资料' : this.canSubmitBusinessRequest ? '申请修改' : '查看缺项';
-        if(state==='prepare') return ['admin','boss','workshop'].includes(this.user?.role) ? '安排生产' : '查看备料';
+        if(state==='prepare') return Number(row.processed_component_available_piece_quantity||0)>0
+          ? '查看半成品' : ['admin','boss','workshop'].includes(this.user?.role) ? '安排生产' : '查看备料';
         if(state==='incoming') return '查看来料';
         if(state==='covered') return '查看库存';
         if(this.canSubmitBusinessRequest && !this.canRequisition) return '申请报料';
@@ -198,6 +207,7 @@
         try {
           const state=stockState(row);this.homeRemember();
           if(state==='approval') return this.homeOpenApproval(row.pending_request_ids[0]);
+          if(state==='review') return await this.openProductWorkbench(row.product_id,'inventory');
           if(state==='missing') {
             if(this.canSubmitBusinessRequest&&!this.hasPermission('products.edit')) {window.location.href=`/static/business-approvals.html?customer=${Number(row.customer_id)}&action=product_update&product=${Number(row.product_id)}&q=${encodeURIComponent(row.product_code || row.product_name)}`;return;}
             if(!this.hasPermission('products.view')) {this.homeExpandedPolicy=row.policy_id;return;}
@@ -205,6 +215,8 @@
             this.homeEntry={target:'products',customer_label:row.customer_label,product_code:row.product_code};this.pages.products=1;
             this.invalidatePageCache('products');return await this.go('products');
           }
+          if(state==='prepare' && Number(row.processed_component_available_piece_quantity||0)>0)
+            return await this.openProductWorkbench(row.product_id,'inventory');
           if(state==='prepare' && ['admin','boss','workshop'].includes(this.user?.role)) {
             this.productionTab='preparation';this.stockPrepState='arrange';this.stockPrepQuery=row.product_code;
             this.homeEntry={target:'production',customer_label:row.customer_label,product_code:row.product_code};
@@ -310,11 +322,11 @@
           <article v-for="r in vm.homeStocksPage.rows" :key="r.policy_id" class="home-stock-item">
             <div class="home-stock-row"><div class="home-product"><span class="home-customer" :title="r.customer_name">{{r.customer_label || r.customer_name}}</span><strong>{{r.product_code || '无编码'}}</strong><span>{{r.product_name}}</span></div>
               <div class="home-stock-qty"><div><strong>{{vm.homeNumber(r.physical_unconsumed_quantity)}}</strong><span> {{vm.homeStockUnit(r)}}</span></div><small>实存 · 可用 {{vm.homeNumber(r.available_quantity)}}<template v-if="r.is_virtual_composite_parent">（含可配套）</template></small></div>
-              <div class="home-stock-status"><strong>预警 {{vm.homeNumber(r.warning_quantity)}} · 目标 {{vm.homeNumber(r.target_quantity)}} {{vm.homeStockUnit(r)}}</strong><span>{{vm.homeState(r)==='new'?vm.homeStockDetail(r):vm.homeStockHeading(r)}}<template v-if="vm.homeState(r)==='missing'"> · {{vm.homeStockDetail(r)}}</template></span></div>
+              <div class="home-stock-status"><strong>预警 {{vm.homeNumber(r.warning_quantity)}} · 目标 {{vm.homeNumber(r.target_quantity)}} {{vm.homeStockUnit(r)}}</strong><span>{{vm.homeState(r)==='new'?vm.homeStockDetail(r):vm.homeStockHeading(r)}}<template v-if="['missing','review'].includes(vm.homeState(r))"> · {{vm.homeStockDetail(r)}}</template></span></div>
               <div class="home-row-actions"><button class="home-button" :class="{primary:vm.homeState(r)==='new'}" :disabled="vm.homeActionBusy || !!vm.overviewError" @click="vm.homeOpenStock(r)">{{vm.homeStockAction(r)}}</button><button class="home-link" :aria-expanded="vm.homeExpandedPolicy===r.policy_id" @click="vm.homeExpandedPolicy=vm.homeExpandedPolicy===r.policy_id?null:r.policy_id">{{vm.homeExpandedPolicy===r.policy_id?'收起明细':'库存明细'}}</button></div>
             </div>
             <div v-if="vm.homeExpandedPolicy===r.policy_id" class="home-stock-expanded">
-              <span>订单占用 {{vm.homeNumber(r.reserved_quantity)}} {{vm.homeStockUnit(r)}}</span><span>备料 {{vm.homeNumber(r.customer_board_preparation_available_sheet_quantity)}} 张</span><span>在途 {{vm.homeNumber(r.incoming_board_preparation_sheet_quantity)}} 张</span>
+              <span>订单占用 {{vm.homeNumber(r.reserved_quantity)}} {{vm.homeStockUnit(r)}}</span><span>备料 {{vm.homeNumber(r.customer_board_preparation_available_sheet_quantity)}} 张</span><span v-if="r.processed_component_available_piece_quantity">已加工半成品 {{vm.homeNumber(r.processed_component_available_piece_quantity)}} 片</span><span v-if="r.processed_component_identity_review_piece_quantity">旧工艺半成品待核 {{vm.homeNumber(r.processed_component_identity_review_piece_quantity)}} 片</span><span>在途 {{vm.homeNumber(r.incoming_board_preparation_sheet_quantity)}} 张</span>
               <span v-if="r.is_virtual_composite_parent">已成套 {{vm.homeNumber(r.assembled_quantity)}} · 未组装可配 {{vm.homeNumber(r.unassembled_available_set_quantity)}} 套</span>
               <span v-if="r.same_spec_warning_count">另有{{r.same_spec_warning_count}}款同规格预警，备料不重复计入</span>
               <span v-if="r.material_code">{{r.material_code}} · {{r.report_length_mm}} × {{r.report_width_mm}} mm</span>

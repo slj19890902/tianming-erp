@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.631"
-APP_VERSION_NAME = "C模具架归档应用修复"
+APP_VERSION = "v0.22.632"
+APP_VERSION_NAME = "研光已加工半成品补库识别"
 APP_BUILD_DATE = "2026-10-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6127,3 +6127,15 @@ APP_VERIFICATION_STEPS = [
     "核对模具格二维码和正式位置保持原身份；其他货架草稿不应被此次应用带入正式地图。",
 ]
 APP_CHANGELOG = [*(f"v0.22.631：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "研光 80011965 已收 2500 张纸板并加工为 10000 片半成品后，首页和产品工作台明确显示半成品数量与位置，不把它误记为成品。",
+    "库存补库按完工任务、原批次来源、客户及冻结产品身份核对可用已加工片数；身份相符时抵扣新增纸板报料，身份不同则显示待核数量并避免首页直接引导重复报料。",
+    "本批次冻结工艺为粘贴，当前产品资料含模切及模具 197，需核对实物后才能抵扣；成品 3200 低于预警线的提示保留。本版无数据库迁移，不改历史库存和收料记录。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新首页，搜索研光 80011965，确认库存明细分别显示成品和已加工半成品及位置。",
+    "打开库存预警，核对真实成品仍低于预警线，10000 片显示旧工艺待核，点击核对半成品进入产品库存位置，不直接生成重复报料草稿。",
+    "核实实物是否已按模具 197 完成模切；批次冻结身份修正或补完工序后，再核对新增纸板建议和成品入库，勿重复盘点入库。",
+]
+APP_CHANGELOG = [*(f"v0.22.632：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -174,7 +174,18 @@
       if(mode==='reverse'){const extra=document.createElement('label');extra.textContent='层数';extra.innerHTML+='<select name="layer_count"><option value="">待核</option>'+[1,3,5,7].map(n=>`<option value="${n}" ${Number(draft.layer_count)===n?'selected':''}>${n}层</option>`).join('')+'</select>';container.querySelector('.pw-inputs').append(extra);if(validId(params.lot_id)){const input=document.createElement('input');input.type='hidden';input.name='lot_id';input.value=params.lot_id;container.querySelector('form').append(input);}}
       if(detail?.actions?.action_reason&&!detail.actions.stock_only){const notice=document.createElement('p');notice.className='pw-action-reason';notice.textContent=detail.actions.action_reason;container.querySelector('.pw-detail>header')?.after(notice);}
       if(detail?.product?.drawings?.status==='unavailable_inactive')container.querySelectorAll('.pw-engineering .pw-muted').forEach(e=>e.textContent='停用产品图纸待核');
-      if(result&&!detail)list(result.items).forEach((p,i)=>{const first=container.querySelectorAll('.pw-results tbody tr')[i]?.firstElementChild;if(first&&p.specification){const size=document.createElement('small');size.className='pw-phone-spec';size.textContent=p.specification;first.append(size);}});
+      if(result&&!detail)list(result.items).forEach((p,i)=>{
+        const row=container.querySelectorAll('.pw-results tbody tr')[i],first=row?.firstElementChild;
+        if(first&&p.specification){const size=document.createElement('small');size.className='pw-phone-spec';size.textContent=p.specification;first.append(size);}
+        if(first&&p.customer_material_code&&p.customer_material_code!==p.product_code){
+          const code=document.createElement('small');code.textContent=`存货编码 ${p.product_code} · 客户编码 ${p.customer_material_code}`;first.append(code);
+        }
+        const pieces=Number(p.inventory?.processed_component?.available||0);
+        if(mode==='search'&&pieces>0&&row?.children[2]){
+          const note=document.createElement('small');note.textContent=`已加工半成品可用 ${number(pieces)} 片（尚非成品）`;
+          row.children[2].append(note);
+        }
+      });
       if(detail&&purpose){const picker=document.createElement('div');picker.className='pw-purpose';picker.innerHTML='<strong>本次报料用途</strong><button type="button" data-purpose="order">对应现有订单</button><button type="button" data-purpose="stock">主动备库</button><button type="button" data-purpose="cancel">取消</button>';container.querySelector('.pw-detail>header').after(picker);}
       if(!detail&&result&&mode==='reverse'){
         const owner=document.createElement('p');owner.className='pw-action-reason';owner.textContent='登记归属：'+(result.registered_owner_customer_name|| (result.source==='actual_lot'?'已登记（按授权用途展示）':'未知'));

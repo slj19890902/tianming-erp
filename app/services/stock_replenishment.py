@@ -1254,6 +1254,42 @@ def virtual_composite_replenishment_demand_plan(
     }
 
 
+def completed_preparation_piece_status(db: Session, product: Product) -> tuple[int, int]:
+    """Return usable pieces and same-product pieces needing frozen-identity review."""
+    from app.services.finished_stock_identity import product_basis, matches_stock_identity
+    from app.services.processed_component_stock import eligible_output, output_identity
+    from app.services.product_activity import (
+        completed_stock_output_roots, source_lot_descendant_ids,
+    )
+
+    roots = {int(lot_id) for product_id, customer_id, lot_id in
+             completed_stock_output_roots(db, [product.id])
+             if product_id == product.id and customer_id == product.customer_id}
+    if not roots:
+        return 0, 0
+    ids = source_lot_descendant_ids(roots, product.customer_id)
+    lots = db.scalars(select(InventoryLot).where(
+        InventoryLot.id.in_(ids), InventoryLot.status == "active",
+        InventoryLot.quantity_available > 0)).all()
+    basis = product_basis(product)
+    usable = review = 0
+    for lot in lots:
+        identity = output_identity(db, lot)
+        if not identity or identity[:2] != (product.id, product.customer_id):
+            continue
+        quantity = int(lot.quantity_available or 0)
+        if eligible_output(db, lot, product_id=product.id,
+                           customer_id=product.customer_id, expected_basis=basis):
+            usable += quantity
+        elif not matches_stock_identity(identity[2], basis):
+            review += quantity
+    return usable, review
+
+
+def completed_preparation_piece_coverage(db: Session, product: Product) -> int:
+    return completed_preparation_piece_status(db, product)[0]
+
+
 def stock_policy_dict(
     db: Session,
     policy: InventoryStockPolicy,
@@ -1299,6 +1335,16 @@ def stock_policy_dict(
             db,
             product=policy.product,
         )
+    # A completed preparation job consumes its raw boards and creates physical
+    # pieces. Those pieces are not finished stock or reusable board sheets, but
+    # their verified 1:1 product identity can cover a non-BOM product's demand.
+    # Composite parents already count the same pieces in free_bom_component_coverage.
+    processed_piece_coverage = processed_piece_review = 0
+    if (policy.target_inventory_type == "finished" and policy.product is not None
+            and policy.customer_id == policy.product.customer_id
+            and policy.product.supply_mode == "corrugated_production"
+            and not is_set_replenishment_product(policy.product)):
+        processed_piece_coverage, processed_piece_review = completed_preparation_piece_status(db, policy.product)
     external_purchase_incoming_quantity = 0
     if (
         policy.target_inventory_type == "finished"
@@ -1340,8 +1386,13 @@ def stock_policy_dict(
             or 0
         )
     suggested_finished_quantity = max(target - available, 0)
+    pieces_per_box = (
+        max(int(product_replenishment_defaults(policy.product)["pieces_per_box"]), 1)
+        if policy.product is not None else 1
+    )
     suggested_new_requisition_finished_quantity = max(
         suggested_finished_quantity
+        - processed_piece_coverage // pieces_per_box
         - int(board_coverage["customer_board_preparation_auto_cover_capacity"])
         - int(board_coverage["incoming_board_preparation_auto_cover_capacity"])
         - external_purchase_incoming_quantity
@@ -1371,25 +1422,27 @@ def stock_policy_dict(
             if policy.product is not None
             else 1
         )
-        pieces_per_box = max(int(product_replenishment_defaults(policy.product)["pieces_per_box"]), 1) if policy.product is not None else 1
         if policy.target_inventory_type != "finished":
             # Material warning quantities are already physical sheets.
             pieces_per_box = output_per_sheet = 1
         required_pieces = max((suggested_finished_quantity - external_purchase_incoming_quantity) * pieces_per_box
+            - processed_piece_coverage
             - int(board_coverage.get("available_auto_cover_piece_quantity", 0))
             - int(board_coverage.get("incoming_auto_cover_piece_quantity", 0))
             - int(board_coverage.get("pending_auto_cover_piece_quantity", 0)), 0)
         suggested_new_requisition_sheet_quantity = (required_pieces + output_per_sheet - 1) // output_per_sheet
         suggested_new_requisition_finished_quantity = (required_pieces + pieces_per_box - 1) // pieces_per_box
     replenishment_state = (
-        "purchase_needed"
+        "processed_identity_review"
+        if processed_piece_review > 0
+        else "purchase_needed"
         if suggested_new_requisition_sheet_quantity > 0
         else "pending_requisition"
         if board_coverage.get("pending_board_preparation_sheet_quantity", 0) > 0
         else "already_ordered"
         if external_purchase_incoming_quantity > 0
         else "board_preparation_ready"
-        if board_coverage[
+        if processed_piece_coverage > 0 or board_coverage[
             "customer_board_preparation_available_sheet_quantity"
         ]
         > 0
@@ -1437,6 +1490,8 @@ def stock_policy_dict(
         ),
         "warning_triggered": bool(policy.active and available <= warning),
         "suggested_replenishment_quantity": suggested_finished_quantity,
+        "processed_component_available_piece_quantity": processed_piece_coverage,
+        "processed_component_identity_review_piece_quantity": processed_piece_review,
         **board_coverage,
         "suggested_new_requisition_finished_quantity": (
             suggested_new_requisition_finished_quantity

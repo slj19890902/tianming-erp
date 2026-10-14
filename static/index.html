@@ -8,9 +8,9 @@
     <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260926-cost-column" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
     <link rel="stylesheet" href="/static/ui/home-workbench.css?v=20261010-stock-alert3" />
-    <script src="/static/ui/home-workbench.js?v=5e31af5338b09535"></script>
+    <script src="/static/ui/home-workbench.js?v=20261014processed01"></script>
     <link rel="stylesheet" href="/static/ui/product-workbench.css?v=dbd8b4a62a34" />
-    <script src="/static/ui/product-workbench.js?v=902a32bc5f41"></script>
+    <script src="/static/ui/product-workbench.js?v=20261014processed01"></script>
     <script src="/static/ui/order-context.js?v=round-experience-d1b"></script>
     <script src="/static/ui/workspace.js?v=71e4c13edadc"></script>
     <script src="/static/ui/workflow-continuity.js?v=7ef70dee3ee7"></script>
@@ -20537,7 +20537,9 @@
             if (this.canSubmitBusinessRequest && !this.canRequisition) { this.openBusinessRequests(item); return; }
             if (!Number(item?.is_virtual_composite_parent ? this.stockPolicyDraftQuantity(item) : item?.procurement_mode==="external_purchase" ? item?.suggested_new_requisition_finished_quantity : item?.suggested_new_requisition_sheet_quantity || 0)) {
               const message = item?.replenishment_state === "board_preparation_ready"
-                ? "已有客户专用纸板备料，当前无需重复报料，请按订单安排生产"
+                ? Number(item?.processed_component_available_piece_quantity||0)>0
+                  ? "已有已加工半成品，当前无需重复报料，请核对半成品并办理成品入库"
+                  : "已有客户专用纸板备料，当前无需重复报料，请按订单安排生产"
                 : item?.replenishment_state === "already_ordered"
                 ? "该款已经报料，正在等待供应商到货，请勿重复报料"
                 : "当前无需新增报料";

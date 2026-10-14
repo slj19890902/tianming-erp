@@ -12,6 +12,29 @@ test('pending approval, preparation, incoming and missing data are different sto
  assert.equal(stockState({suggested_new_requisition_sheet_quantity:30,draft_ready:false}),'missing');
  assert.equal(stockState({procurement_mode:'external_purchase',suggested_new_requisition_finished_quantity:20,draft_ready:true}),'new');
 });
+test('processed pieces remain a visible preparation action with no duplicate board request',async()=>{
+ const row={product_id:3562,product_code:'80011965',replenishment_state:'board_preparation_ready',
+  processed_component_available_piece_quantity:10000,suggested_new_requisition_sheet_quantity:0};
+ const vm={homeActionBusy:false,overviewError:'',user:{role:'admin'},homeRemember(){},
+  homeNumber:n=>String(n),homeStockUnit:()=> '只',openProductWorkbench:async(id,tab)=>{assert.equal(id,3562);assert.equal(tab,'inventory');}};
+ vm.homeState=stockState;
+ assert.equal(stockState(row),'prepare');
+ assert.match(mixin.methods.homeStockHeading.call(vm,row),/已加工半成品 10000 片/);
+ assert.equal(mixin.methods.homeStockAction.call(vm,row),'查看半成品');
+ await mixin.methods.homeOpenStock.call(vm,row);
+ assert.equal(vm.homeActionBusy,false);
+});
+test('old-process output is visible for review and does not launch a new board draft',async()=>{
+ const row={product_id:3562,product_code:'80011965',replenishment_state:'processed_identity_review',
+  processed_component_identity_review_piece_quantity:10000,suggested_new_requisition_sheet_quantity:1700,draft_ready:true};
+ const vm={homeActionBusy:false,overviewError:'',homeRemember(){},homeNumber:n=>String(n),
+  openProductWorkbench:async(id,tab)=>{assert.equal(id,3562);assert.equal(tab,'inventory');},
+  openLowStockReplenishment:async()=>assert.fail('old process must be reviewed first')};
+ assert.equal(stockState(row),'review');
+ assert.match(mixin.methods.homeStockHeading.call(vm,row),/10000 片，工艺身份待核对/);
+ await mixin.methods.homeOpenStock.call(vm,row);
+ assert.equal(vm.homeActionBusy,false);
+});
 test('pagination stays bounded after filtering; quantities and customer counts do not duplicate',()=>{
  assert.deepEqual(pageRows([1,2],9,4),{rows:[1,2],page:1,pages:1,total:2});
  const cards=[{key:'pending_delivery',count:4,count_unit:'客户'}];

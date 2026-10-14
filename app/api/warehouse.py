@@ -3820,36 +3820,53 @@ def _manual_sheet_procurement_state(db, item, component, *, snapshot=None):
     from app.models.purchase_receipt import PurchaseReceiptFact
     from app.services.requisition_quantities import cutting_factor
     from app.services.sheet_cutting_contract import SheetCuttingContract
-    all_sources = list(db.scalars(select(RequisitionItemBomSource).join(RequisitionItem,
-        RequisitionItem.id == RequisitionItemBomSource.requisition_item_id).where(RequisitionItem.order_item_id == item.id)))
-    sources = {s.requisition_item_id: s for s in all_sources}
+    # A requisition can contain several BOM sources, including another order's
+    # source. Select the source first; never let the last child claim the row.
+    source_row_ids = select(RequisitionItemBomSource.requisition_item_id).where(
+        RequisitionItemBomSource.sales_order_item_bom_component_id == snapshot.id,
+        RequisitionItemBomSource.component_type == component) if snapshot else select(RequisitionItem.id).where(False)
+    relevant_rows = list(db.scalars(select(RequisitionItem).where(or_(
+        RequisitionItem.order_item_id == item.id, RequisitionItem.id.in_(source_row_ids))).order_by(RequisitionItem.id)))
+    all_sources = list(db.scalars(select(RequisitionItemBomSource).where(
+        RequisitionItemBomSource.requisition_item_id.in_([r.id for r in relevant_rows])).order_by(RequisitionItemBomSource.id)))
+    by_row = {}
+    for source in all_sources:
+        by_row.setdefault(source.requisition_item_id, []).append(source)
+    sources = {s.requisition_item_id: s for s in all_sources if snapshot
+               and s.sales_order_item_bom_component_id == snapshot.id and s.component_type == component}
     def matches(row):
-        source = sources.get(row.id)
-        return (source is not None and source.sales_order_item_bom_component_id == snapshot.id
-                and source.component_type == component) if snapshot else (source is None and _requisition_item_component(row) == component)
-    rows = [r for r in db.scalars(select(RequisitionItem).join(Requisition, Requisition.id == RequisitionItem.requisition_id)
-        .where(RequisitionItem.order_item_id == item.id,
-            func.lower(RequisitionItem.status).notin_(INACTIVE_REQUISITION_ITEM_STATUSES),
-            func.lower(Requisition.status).notin_(INACTIVE_REQUISITION_ITEM_STATUSES)).order_by(RequisitionItem.id)) if matches(r)]
+        return row.id in sources if snapshot else (row.id not in by_row and _requisition_item_component(row) == component)
+    rows = [r for r in relevant_rows if matches(r)
+            and str(r.status or '').lower() not in INACTIVE_REQUISITION_ITEM_STATUSES
+            and str(db.get(Requisition, r.requisition_id).status or '').lower() not in INACTIVE_REQUISITION_ITEM_STATUSES]
     row_ids = [r.id for r in rows]
-    source_ids = [s.id for s in all_sources if snapshot and s.sales_order_item_bom_component_id == snapshot.id and s.component_type == component]
+    source_ids = {s.id for s in sources.values()}
     purpose_rows = list(db.scalars(select(PurchasePurposeSourceSnapshot).where(or_(
         PurchasePurposeSourceSnapshot.material_requisition_item_id.in_(row_ids),
         PurchasePurposeSourceSnapshot.source_requisition_item_id.in_(row_ids),
         PurchasePurposeSourceSnapshot.source_bom_requisition_source_id.in_(source_ids),
         (PurchasePurposeSourceSnapshot.source_order_item_id == item.id) &
         (PurchasePurposeSourceSnapshot.source_kind == 'order_item') &
-        (PurchasePurposeSourceSnapshot.component_type == component) if not snapshot else False))))
+        (PurchasePurposeSourceSnapshot.component_type == component) if not snapshot else False)).order_by(PurchasePurposeSourceSnapshot.id)))
+    def purpose_matches(purpose):
+        if purpose.component_type != component:
+            return False
+        if snapshot:
+            return purpose.source_bom_requisition_source_id in source_ids
+        return purpose.source_bom_requisition_source_id is None and purpose.source_order_item_id == item.id
     purposes = {p.supplier_requisition_order_item_id: p for p in purpose_rows if p.supplier_requisition_order_item_id}
-    links = list(db.scalars(select(ProcurementSourceLink).where(ProcurementSourceLink.material_requisition_item_id.in_(row_ids))))
-    linked = {l.supplier_item_id: l.material_requisition_item_id for l in links}
+    material_purposes = {p.material_requisition_item_id: p for p in purpose_rows if p.material_requisition_item_id}
+    links = list(db.scalars(select(ProcurementSourceLink).where(
+        ProcurementSourceLink.material_requisition_item_id.in_(row_ids)).order_by(ProcurementSourceLink.id)))
+    linked = {l.supplier_item_id: l.material_requisition_item_id for l in links if l.status == 'active'}
     supplier_ids = set(purposes) | set(linked)
     supplier_rows = list(db.scalars(select(SupplierRequisitionOrderItem).where(or_(
         SupplierRequisitionOrderItem.id.in_(supplier_ids),
-        SupplierRequisitionOrderItem.order_item_id == item.id if not snapshot else False))))
+        SupplierRequisitionOrderItem.order_item_id == item.id if not snapshot else False)).order_by(SupplierRequisitionOrderItem.id)))
     receipts = list(db.scalars(select(IncomingReceiptItem).where(IncomingReceiptItem.requisition_item_id.in_(row_ids),
-        IncomingReceiptItem.status == 'posted')))
-    facts = list(db.scalars(select(PurchaseReceiptFact).where(PurchaseReceiptFact.material_requisition_item_id.in_(row_ids))))
+        IncomingReceiptItem.status == 'posted').order_by(IncomingReceiptItem.id)))
+    facts = list(db.scalars(select(PurchaseReceiptFact).where(
+        PurchaseReceiptFact.material_requisition_item_id.in_(row_ids)).order_by(PurchaseReceiptFact.id)))
     downstream = {p.material_requisition_item_id for p in purpose_rows if p.material_requisition_item_id}
     downstream.update(p.source_requisition_item_id for p in purpose_rows if p.source_requisition_item_id)
     downstream.update(s.requisition_item_id for s in all_sources if s.id in {p.source_bom_requisition_source_id for p in purpose_rows})
@@ -3864,12 +3881,17 @@ def _manual_sheet_procurement_state(db, item, component, *, snapshot=None):
     def capacity(qty, mode, contract):
         output = SheetCuttingContract.from_snapshot(contract).yield_per_supplier_sheet if contract else cutting_factor(mode)
         return max(int(qty or 0), 0) * output
+    def legacy_quantity(row_id, total):
+        source = sources.get(row_id)
+        return max(int(source.calculated_purchase_quantity - source.spare_sheet_quantity), 0) if source else total
     revisions = []
     for row in supplier_rows:
-        purpose = purposes.get(row.id)
-        linked_id = linked.get(row.id) or (purpose.source_requisition_item_id if purpose else None)
-        if purpose and purpose.source_bom_requisition_source_id:
-            linked_id = next((source.requisition_item_id for source in all_sources if source.id == purpose.source_bom_requisition_source_id), linked_id)
+        linked_id = linked.get(row.id)
+        purpose = purposes.get(row.id) or material_purposes.get(linked_id)
+        if purpose:
+            linked_id = linked_id or purpose.source_requisition_item_id or purpose.material_requisition_item_id
+            if purpose.source_bom_requisition_source_id:
+                linked_id = next((source.requisition_item_id for source in all_sources if source.id == purpose.source_bom_requisition_source_id), linked_id)
         if row.id not in supplier_ids:
             # Direct legacy purchases must identify their physical use. Unknown
             # multi-piece source keys cannot borrow a sibling's demand.
@@ -3879,25 +3901,44 @@ def _manual_sheet_procurement_state(db, item, component, *, snapshot=None):
             if component == 'whole' and key.endswith((':cover', ':base')):
                 continue
         header = db.get(SupplierRequisitionOrder, row.supplier_order_id)
-        revisions.append(('supplier', row.id, row.version, row.status, header.status, row.requisition_qty))
+        revisions.append(('supplier', row.id, row.version, row.status, header.status,
+                          row.requisition_qty, row.cutting_mode, row.sheet_cutting_snapshot))
         if row.status != 'active' or header.status != 'confirmed':
             continue
-        qty = purpose.order_purpose_sheet_qty if purpose else row.requisition_qty
-        committed += capacity(qty, row.cutting_mode, row.sheet_cutting_snapshot)
+        if purpose:
+            if purpose_matches(purpose):
+                committed += purpose.order_purpose_sheet_qty * purpose.yield_per_sheet_snapshot
+            elif snapshot and linked_id in sources:
+                # A frozen sibling purpose does not describe this source. Its
+                # own source quantity is the legacy commitment, not the total.
+                committed += capacity(legacy_quantity(linked_id, 0), row.cutting_mode, row.sheet_cutting_snapshot)
+        else:
+            committed += capacity(legacy_quantity(linked_id, row.requisition_qty), row.cutting_mode, row.sheet_cutting_snapshot)
         if linked_id:
             counted.add(linked_id)
     for row in rows:
         revisions.append(('internal', row.id, row.version, row.status, row.requisition_qty,
-                          row.sheet_cutting_snapshot, row.required_piece_qty))
+                          row.sheet_cutting_snapshot, row.required_piece_qty, row.purpose_contract_status,
+                          db.get(Requisition, row.requisition_id).status))
         if row.id in internal_ids or row.id in counted:
             continue
-        purpose = next((p for p in purpose_rows if p.material_requisition_item_id == row.id), None)
-        qty = purpose.order_purpose_sheet_qty if purpose else row.requisition_qty
-        committed += capacity(qty, row.special_process, row.sheet_cutting_snapshot)
+        purpose = material_purposes.get(row.id)
+        if purpose and purpose_matches(purpose):
+            committed += purpose.order_purpose_sheet_qty * purpose.yield_per_sheet_snapshot
+        else:
+            committed += capacity(legacy_quantity(row.id, row.requisition_qty), row.special_process, row.sheet_cutting_snapshot)
+    revisions.extend(('purpose', p.id, p.snapshot_version, p.material_requisition_item_id,
+        p.supplier_requisition_order_item_id, p.source_kind, p.source_order_item_id,
+        p.source_requisition_item_id, p.source_bom_requisition_source_id, p.component_type,
+        p.order_purpose_sheet_qty, p.reserve_purpose_sheet_qty, p.yield_per_sheet_snapshot) for p in purpose_rows)
+    revisions.extend(('link', l.id, l.supplier_item_id, l.material_requisition_item_id,
+                      l.status, l.source_quantity, l.source_snapshot_json) for l in links)
+    revisions.extend(('bom_source', s.id, s.requisition_item_id, s.sales_order_item_bom_component_id,
+        s.component_type, s.calculated_purchase_quantity, s.spare_sheet_quantity, s.active_guard) for s in all_sources)
     revisions.extend(('receipt', r.id, r.received_quantity) for r in receipts)
     revisions.extend(('receipt_fact', f.id) for f in facts)
-    return {'mutable_rows': mutable, 'sources': sources, 'committed_piece_qty': committed,
-            'revision': _manual_sheet_digest(revisions)}
+    return {'mutable_rows': mutable, 'sources': sources, 'all_sources_by_row': by_row,
+            'committed_piece_qty': committed, 'revision': _manual_sheet_digest(revisions)}
 
 
 def _revise_manual_internal_demand(db, item, component, remaining, user, *, snapshot=None, previous_remaining=None):
@@ -3932,17 +3973,27 @@ def _revise_manual_internal_demand(db, item, component, remaining, user, *, snap
                                  'active_guard':source.active_guard} if source else None}
         # Multiple old rows keep their individual scope and extras, rather than
         # multiplying the whole remaining demand onto every row.
-        order_capacity = max(int(row.requisition_qty) - extra, 0) * output
+        source_quantity = int(source.calculated_purchase_quantity) if source else int(row.requisition_qty)
+        if source:
+            siblings = state['all_sources_by_row'][row.id]
+            if any(int(s.calculated_purchase_quantity) != s.calculated_purchase_quantity
+                   or int(s.spare_sheet_quantity) != s.spare_sheet_quantity
+                   or s.calculated_purchase_quantity < s.spare_sheet_quantity for s in siblings):
+                raise WarehouseInventoryError('组件来源张数不是可核对的整张数量，请先核对内部报料', 409)
+            if sum(s.calculated_purchase_quantity for s in siblings) != row.requisition_qty:
+                raise WarehouseInventoryError('共享内部报料与组件来源张数不一致，请先核对', 409)
+        order_capacity = max(source_quantity - extra, 0) * output
         allocated = min(available, order_capacity)
-        quantity = (allocated+output-1)//output + extra
+        source_after = (allocated+output-1)//output + extra
+        quantity = int(row.requisition_qty) - source_quantity + source_after
         row.requisition_qty = quantity
         row.version += 1
         if quantity == 0:
             row.status = 'voided'
-            if source:
-                source.active_guard = None
         if source:
-            source.calculated_purchase_quantity = quantity
+            source.calculated_purchase_quantity = source_after
+            if source_after == 0:
+                source.active_guard = None
         changes.append({'before':before, 'after':{'version':row.version, 'quantity':quantity,
             'status':row.status, 'inventory_deducted_qty':row.inventory_deducted_qty},
             'spare_sheet_quantity':extra})

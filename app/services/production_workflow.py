@@ -2051,6 +2051,27 @@ def _receipt_auto_finished_ground_targets(
     )
 
 
+def _receipt_explicit_finished_ground_target(db, *, location_id, customer_id, claim):
+    """Select an explicit location from the same qualified, empty ground targets."""
+    def selected():
+        return next((target for target in _receipt_auto_finished_ground_targets(db, customer_id=customer_id)
+            if target.location.id == location_id), None)
+    target = selected()
+    if target is None:
+        raise ProductionWorkflowError("指定原成品位置不是本客户可用的已发布空位，请重新核对", 409)
+    if claim:
+        expected_layout_version=target.layout_version
+        if not claim_active_placed_location(db, location_id, expected_layout_version=expected_layout_version):
+            raise ProductionWorkflowError("指定成品位置版本已变化，请重新核对", 409)
+        db.expire(target.location)
+        if target.location.floor3_layout is not None:
+            db.refresh(target.location.floor3_layout)
+        target = selected()
+        if target is None or target.layout_version!=expected_layout_version:
+            raise ProductionWorkflowError("指定成品位置或布局版本已变化，请重新核对", 409)
+    return target
+
+
 def _receipt_auto_finished_ground_target(
     db: Session,
     *,
@@ -4997,6 +5018,7 @@ def post_automatic_receipt_completion(
     bom_snapshot_id: int | None = None,
     semi_only: bool = False,
     processing_manual: bool = False,
+    target_location_id: int | None = None,
 ) -> ProductionCompletion | None:
     """Post one receipt-derived finished increment through the existing ledger.
 
@@ -5109,6 +5131,10 @@ def post_automatic_receipt_completion(
         "capitalized_material_cost": str(capitalized_material_cost),
         "cost_detail": cost_detail,
     }
+    if target_location_id is not None:
+        if not semi_only:
+            raise ProductionWorkflowError("仅明确的半成品生产确认可指定真实成品目标位置", 409)
+        payload['target_location_id'] = target_location_id
     request_hash = _canonical_hash(payload)
     existing_batch = db.scalar(
         select(ProductionCompletionBatch).where(
@@ -5125,12 +5151,13 @@ def post_automatic_receipt_completion(
             raise ProductionWorkflowError("自动完工幂等事实不完整", 409)
         return replay.completions[0]
 
-    ground_target = _receipt_auto_finished_ground_target(
+    ground_target = (_receipt_explicit_finished_ground_target(db, location_id=target_location_id,
+        customer_id=order.customer_id, claim=True) if target_location_id is not None else _receipt_auto_finished_ground_target(
         db,
         claim=True,
         customer_id=order.customer_id,
         product_id=graph_snapshot.component_product_id if graph_snapshot is not None else item.product_id,
-    )
+    ))
     location = ground_target.location
     existing_posted = db.scalar(
         select(ProductionCompletion.id)

@@ -21,15 +21,17 @@ def _map_hash():
     return hashlib.sha256(resolve_warehouse_twin_layout_path().read_bytes()).hexdigest()
 
 
-def preview_semi_production(db, *, order_item_id, product_id):
+def preview_semi_production(db, *, order_item_id, product_id, target_location_id=None):
     from app.services.multilevel_bom_cutover_review import _row
     context, plan = plan_semi_only_production(db, order_item_id=order_item_id, product_id=product_id)
-    from app.services.production_workflow import _receipt_auto_finished_ground_target
+    from app.services.production_workflow import _receipt_auto_finished_ground_target, _receipt_explicit_finished_ground_target
     target_products = {node.product_id for node in context.compiled.graph.nodes
         if node.source == "assembled" or (node.source in ("manufactured", "purchased") and any(
             edge.parent_id == node.product_id and edge.relation == "assembly" for edge in context.compiled.graph.edges))}
-    production_target = _receipt_auto_finished_ground_target(db, claim=False,
-        customer_id=context.compiled.graph.customer_id, product_id=product_id)
+    production_target = (_receipt_explicit_finished_ground_target(db, claim=False,
+        customer_id=context.compiled.graph.customer_id, location_id=target_location_id)
+        if target_location_id is not None else _receipt_auto_finished_ground_target(db, claim=False,
+        customer_id=context.compiled.graph.customer_id, product_id=product_id))
     targets = {}
     excluded = set() if production_target.target_kind == "fixed_shelf" else {production_target.location.id}
     for pid in sorted(target_products):
@@ -55,13 +57,16 @@ def preview_semi_production(db, *, order_item_id, product_id):
         source_locations={lid: lot.warehouse_location_id for lid, lot in lots.items()}, map_hash=document["map_hash"])
 
 
-def confirm_semi_production(db, *, order_item_id, product_id, reviewed_hash, operation_key, actor):
+def confirm_semi_production(db, *, order_item_id, product_id, reviewed_hash, operation_key, actor, target_location_id=None):
     from app.services.production_workflow import lock_order_rows_for_production_transition, post_automatic_receipt_completion, refresh_order_production_status
     from app.services.multilevel_bom_receipts import assemble_graph_order_receipt, refresh_graph_main_task
     from app.services.audit_log import append_audit_event
     if actor is None or not actor.is_active or actor.role != "admin":
         raise BomPlanError("仅活动管理员可确认半成品生产")
-    request_hash = _hash(dict(order=order_item_id, product=product_id, review=reviewed_hash, key=operation_key, actor=actor.id))
+    request = dict(order=order_item_id, product=product_id, review=reviewed_hash, key=operation_key, actor=actor.id)
+    if target_location_id is not None:
+        request['target_location_id'] = target_location_id
+    request_hash = _hash(request)
     key = "bom-semi:"+hashlib.sha256(operation_key.encode()).hexdigest()
     with atomic_bom(db):
         item = db.get(OrderItem, order_item_id)
@@ -76,7 +81,8 @@ def confirm_semi_production(db, *, order_item_id, product_id, reviewed_hash, ope
             if prior.status != "posted" or detail.get("semi_production_request_hash") != request_hash:
                 raise BomPlanError("生产标识已使用、内容不同或已经撤销")
             return dict(completion_id=prior.id, lot_id=prior.inventory_lot_id, quantity=prior.quantity)
-        context, plan, preview = preview_semi_production(db, order_item_id=order_item_id, product_id=product_id)
+        context, plan, preview = preview_semi_production(db, order_item_id=order_item_id, product_id=product_id,
+            target_location_id=target_location_id)
         if not preview["ready"] or preview["reviewed_hash"] != reviewed_hash:
             raise BomPlanError("预占、订单或地图已变化，请重新预览")
         inputs = plan["detail"]["bom_material_inputs"]
@@ -86,7 +92,7 @@ def confirm_semi_production(db, *, order_item_id, product_id, reviewed_hash, ope
             material_input_cumulative=sum(entry["stock_after"] for entry in inputs), operator_id=actor.id,
             idempotency_key=key, capitalized_material_cost=plan["total_cost"],
             cost_detail={**plan["detail"], "semi_production_request_hash": request_hash},
-            bom_snapshot_id=context.snapshot.id, semi_only=True)
+            bom_snapshot_id=context.snapshot.id, semi_only=True, target_location_id=target_location_id)
         assemblies = assemble_graph_order_receipt(db, compiled=context.compiled, order_item_id=order_item_id,
             operation_key=f"bom-semi-assembly:{completion.id}", operator_id=actor.id)
         if completion.warehouse_location_id != preview["production_location"]["id"] or any(

@@ -20130,7 +20130,7 @@
               const reversal = error.response?.data?.detail;
               if (this.canAdmin && reversal?.code === 'PROCUREMENT_ORDER_REVERSAL_REQUIRED' && reversal.order_group) {
                 this.showToast('该采购需要关联撤回，正在打开订单影响预览；尚未执行撤销');
-                if (await this.openOrderEditor(reversal.order_group)) {
+                if (await this.openOrderEditor(reversal.order_group,{scope:"all"})) {
                   this.showOrderEditDanger = true;
                   await this.previewAdminOrderAction('withdraw');
                 }
@@ -34349,12 +34349,12 @@
               }
             }finally{if(this._pdfSaveOperation===operation&&this.user?.id===operation.actor&&this.authGeneration===operation.auth)this.loading=false;}
           },
-          async openOrderEditor(group) {
+          async openOrderEditor(group, {scope=null}={}) {
             const requestKey = "orders:read-detail-modal";
             this.cancelOrderTraceChildRequests();
             const controller = this.beginLatestRequest(requestKey);
             try {
-              const detail = await this.ensureOrderGroupDetail(group);
+              const detail = await this.ensureOrderGroupDetail(group,{scope,force:!!scope});
               if (!detail || latestRequestControllers.get(requestKey) !== controller) return false;
               const first = detail.orders?.[0];
               if (!first) return false;
@@ -35285,8 +35285,8 @@
             for (const entry of orderGroupDetailRequests.values()) entry.controller?.abort();
             orderGroupDetailRequests.clear();
           },
-          async ensureOrderGroupDetail(group, {force=false}={}) {
-            const anchor = group?.orders?.[0], key = group?.key;
+          async ensureOrderGroupDetail(group, {force=false,scope=null}={}) {
+            const anchor = group?.orders?.[0], key = scope ? `${group?.key}:scope:${scope}` : group?.key;
             if (!anchor?.id || !group?.customer_id || !key) {
               this.showToast("订单汇总信息不完整，请刷新后重试", true);
               return null;
@@ -35303,7 +35303,7 @@
             const params = {
               customer_id: group.customer_id,
               anchor_order_id: group.orders[0].id,
-              scope: this.filters.orderScope || "active",
+              scope: scope || this.filters.orderScope || "active",
             };
             if (String(group.customer_po || "").trim()) params.customer_po = String(group.customer_po).trim();
             const promise = (async() => {

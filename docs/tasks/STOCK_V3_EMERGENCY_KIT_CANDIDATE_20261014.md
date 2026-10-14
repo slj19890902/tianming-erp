@@ -56,3 +56,5 @@ Astra复审发现：父套50原位拆20后，仅将InventoryLotTransfer.quantity
 InventoryMovement没有历史location/version列：本修复不按movement条数推算lot.version，不发明缺失位置证据、不强制当前qty/version/location等于出生值。typed正版本与source_version_after=before+1保持；真实资料版本变化、正常split、partial move、full selfmove均兼容，普通move即使operation key以correction:开头也不会误判来源。
 
 专用54及组件/BOM相邻19合计73通过。新增13例覆盖typed20→19、缺source/target流水、错source/target余额、错lot、correction版本/hash/位置/key、正常partial/selfmove以及两种真实流水损坏。原无订单dispatch/cancel、真实session commit guard、完整Finance/late fault测试继续通过。本轮只改有限service、专用tests及本报告，其他业务文件未动，git diff --check通过。真实外层双更正的提交/回滚审计由根独立管理，此P2提交未触碰已批准原baseline及正式库存。
+
+Astra第二轮独立复审已确认原P2的14+1限定检查通过；另补整批selfmove的可用/预占分量分别匹配真实流水before值，总量相等不能替代分量证据。新增20/0→19/1且总20不变的定向测试先红后绿，包含正常full-self在内5例通过。仅此两项相等校验，没有新增结构或版本/位置推算。

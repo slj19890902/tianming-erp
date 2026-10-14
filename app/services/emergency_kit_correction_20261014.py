@@ -312,7 +312,9 @@ def _validate_transfer_movements(db, transfer):
     if same_lot:
         if target is not None or any(getattr(source,'before_'+n)!=getattr(source,'after_'+n) for n in names):
             raise ValueError('整批移动的流水余额不守恒')
-        if source.before_available+source.before_reserved!=transfer.quantity:
+        if (source.before_available!=transfer.available_quantity
+                or source.before_reserved!=transfer.reserved_quantity
+                or source.before_available+source.before_reserved!=transfer.quantity):
             raise ValueError('整批移动数量与真实可用/预占不一致')
         return
     for name in names:

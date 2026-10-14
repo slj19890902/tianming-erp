@@ -381,7 +381,7 @@ def test_descendant_typed_edge_must_match_real_transfer_movements(kit,fault):
         assert cost is None and detail.get('validation_issue')
 
 
-@pytest.mark.parametrize('fault',[None,'quantity','missing_target','self_balance'])
+@pytest.mark.parametrize('fault',[None,'quantity','missing_target','self_balance','self_components'])
 def test_normal_partial_and_full_self_move_are_bound_to_actual_ledgers(kit,fault):
     from app.models.warehouse_inventory import InventoryMovement
     from app.services.inventory_valuation import frozen_cost
@@ -402,6 +402,8 @@ def test_normal_partial_and_full_self_move_are_bound_to_actual_ledgers(kit,fault
     elif fault=='missing_target':
         row=db.scalar(select(InventoryMovement).where(InventoryMovement.idempotency_key==service.inv._transfer_key('location-transfer','correction:normal-parent-partial-20','target')))
         db.delete(row)
+    elif fault=='self_components':
+        whole.transfer.available_quantity=19;whole.transfer.reserved_quantity=1
     elif fault=='self_balance':
         row=db.scalar(select(InventoryMovement).where(InventoryMovement.idempotency_key==service.inv._transfer_key('location-transfer','normal-parent-full-20','source')))
         row.after_available-=1

@@ -3864,6 +3864,12 @@ def _manual_sheet_procurement_state(db, item, component, *, snapshot=None):
     supplier_rows = list(db.scalars(select(SupplierRequisitionOrderItem).where(or_(
         SupplierRequisitionOrderItem.id.in_(supplier_ids),
         SupplierRequisitionOrderItem.order_item_id == item.id if not snapshot else False)).order_by(SupplierRequisitionOrderItem.id)))
+    # Include every formal purpose of selected supplier lines before checking
+    # the total, even when a sibling purpose belongs to another component.
+    supplier_purposes = list(db.scalars(select(PurchasePurposeSourceSnapshot).where(
+        PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.in_([r.id for r in supplier_rows]))))
+    purpose_rows = sorted({p.id: p for p in [*purpose_rows, *supplier_purposes]}.values(), key=lambda p: p.id)
+    purposes = {p.supplier_requisition_order_item_id: p for p in purpose_rows if p.supplier_requisition_order_item_id}
     receipts = list(db.scalars(select(IncomingReceiptItem).where(IncomingReceiptItem.requisition_item_id.in_(row_ids),
         IncomingReceiptItem.status == 'posted').order_by(IncomingReceiptItem.id)))
     facts = list(db.scalars(select(PurchaseReceiptFact).where(
@@ -3888,8 +3894,8 @@ def _manual_sheet_procurement_state(db, item, component, *, snapshot=None):
     revisions = []
     for row in supplier_rows:
         linked_id = linked.get(row.id)
-        purpose = purposes.get(row.id) or material_purposes.get(linked_id)
-        if purpose:
+        allocations = {p.id: p for p in (purposes.get(row.id), material_purposes.get(linked_id)) if p is not None}
+        for purpose in allocations.values():
             linked_id = linked_id or purpose.source_requisition_item_id or purpose.material_requisition_item_id
             if purpose.source_bom_requisition_source_id:
                 linked_id = next((source.requisition_item_id for source in all_sources if source.id == purpose.source_bom_requisition_source_id), linked_id)
@@ -3906,10 +3912,12 @@ def _manual_sheet_procurement_state(db, item, component, *, snapshot=None):
                           row.requisition_qty, row.cutting_mode, row.sheet_cutting_snapshot))
         if row.status != 'active' or header.status != 'confirmed':
             continue
-        if purpose:
-            if purpose_matches(purpose):
-                committed += purpose.order_purpose_sheet_qty * purpose.yield_per_sheet_snapshot
-            elif snapshot and linked_id in sources:
+        if allocations:
+            if sum(p.purchase_sheet_qty for p in allocations.values()) > row.requisition_qty:
+                raise WarehouseInventoryError('供应商报料用途合计超过原明细张数，请先核对来源', 409)
+            matching = [p for p in allocations.values() if purpose_matches(p)]
+            committed += sum(p.order_purpose_sheet_qty * p.yield_per_sheet_snapshot for p in matching)
+            if not matching and snapshot and linked_id in sources:
                 # A frozen sibling purpose does not describe this source. Its
                 # own source quantity is the legacy commitment, not the total.
                 committed += capacity(legacy_quantity(linked_id, 0), row.cutting_mode, row.sheet_cutting_snapshot)

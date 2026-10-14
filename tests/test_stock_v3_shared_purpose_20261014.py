@@ -77,3 +77,35 @@ def test_shared_bom_row_revises_only_selected_source(composite_requisition_app, 
         assert row.status == '有效' and row.remark == 'retain shared note'
         assert sources[(selected-1)^1].active_guard == 1
         assert sources[selected-1].active_guard == (None if remaining == 0 else 1)
+
+
+@pytest.mark.parametrize("extra_component,supplier_quantity,expected", [("whole",32,25), ("cover",32,20), ("cover",31,None)])
+def test_supplier_own_and_linked_purposes_both_count_without_losing_material_demand(composite_requisition_app, extra_component, supplier_quantity, expected):
+    app, sessions = composite_requisition_app
+    _, rid = internal_seed(sessions, qty=27)
+    sid = supplier_seed(sessions, qty=supplier_quantity)
+    with sessions() as db:
+        db.get(RequisitionItem, rid).purpose_contract_status = 'frozen'
+        for label, formal, amount, extra in [('material', {'material_requisition_item_id':rid}, 20, 7),
+                                            ('supplier', {'supplier_requisition_order_item_id':sid}, 5, 0)]:
+            db.add(PurchasePurposeSourceSnapshot(snapshot_key=label, allocation_group_key=label+'-group',
+                **formal, source_kind='order_item', source_key='order_item:1:whole', source_order_item_id=1,
+                customer_id=1, customer_name_snapshot='test', component_type=extra_component if label == 'supplier' else 'whole',
+                source_finished_qty_snapshot=50, pieces_per_finished_snapshot=2, source_required_piece_qty_snapshot=100,
+                source_semi_reserved_piece_qty_snapshot=0, source_effective_piece_qty_snapshot=amount,
+                yield_per_sheet_snapshot=1, group_effective_piece_qty_snapshot=amount,
+                group_authoritative_order_sheet_qty_snapshot=amount, purchase_sheet_qty=amount+extra,
+                order_purpose_sheet_qty=amount, reserve_purpose_sheet_qty=extra, calculation_rule_version='p1-80-v1',
+                preview_fingerprint='a'*64, request_hash='b'*64, created_by=1))
+        db.add(ProcurementSourceLink(supplier_item_id=sid, material_requisition_item_id=rid,
+            source_quantity=27, source_snapshot_json='{}', created_by=1))
+        db.commit()
+    with TestClient(app) as client:
+        _login(client)
+        response = client.get(BASE+'/manual-inventory')
+        if expected is None:
+            assert response.status_code == 409 and '用途合计' in response.text
+        else:
+            assert response.status_code == 200, response.text
+            assert response.json()['committed_piece_qty'] == expected
+            assert response.json()['remaining_required_piece_qty'] == 100-expected

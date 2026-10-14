@@ -32,6 +32,9 @@ from app.services.warehouse_area_activation import (
     WarehouseAreaActivationError, _advance_policy_version,
 )
 from app.services.warehouse_floor_claim import claim_warehouse_floor_projection
+from app.services.warehouse_floor1_candidate_planner import (
+    Floor1CandidatePlanningError, validate_capacity_layout_slots_for_zone,
+)
 from app.services.warehouse_ground_map_application import (
     location_signature, record_map_applications,
 )
@@ -53,6 +56,47 @@ POLICY_PINS = ((4,29,45),(5,30,47),(6,31,34),(7,32,32),(8,33,30),
     (22,47,21),(25,49,21),(26,50,21),(27,51,21),(28,52,21),(29,53,21),
     (30,54,21),(31,55,21),(141,144,17),(142,145,18),(143,146,18),(144,147,14))
 STAGING_AREA_IDS = (29,30,42,44)
+# Exact historical functional positions: ID, address version, full location_signature.
+STAGING_LOCATION_PINS = {
+    29: (
+        (415, 2, 'd61d3bb11350783980e4fc3f75d30adb8fecc16d10b91d14893727e144b3892d'),
+        (416, 2, '07b60a260b936a6517a738532e6cf46e49436d5f1faff607d3bc1231e1390c6a'),
+        (417, 2, 'b68bd9c12d7b971cf24dd74fa97f2529c89fe9e168656c1d63e9db5c71f435f3'),
+        (418, 2, '9d021ca7f05a136361dee45c6aa48a7e0e53086bad2336d0de9080236ce9b32c'),
+        (419, 2, '39d299cfe0056ae33fb3103051d7890c20b6740b43e6e0d8b6a45bdaa9a803d6'),
+        (420, 2, '5927d1cbe96db6bed1466de982e0ce655cee3114b571cc091494ec7c10bbd6a8'),
+        (421, 2, '07aed6317d3635d97c90c3dfe246efc3fb3fbd0114dbbec1b32c59c51f94f9b7'),
+        (422, 2, 'c6b3b5c41c72af3a3839833f927eadaa55c3861e75debb90a5120865a16b3314'),
+    ),
+    30: (
+        (402, 2, '974f378091d2b4da7ce0efcfd43a5598be2151ca760b1b985cc41dd7986bdaeb'),
+        (403, 2, '01cdd9d8eff9ff3c8d2959ca9b65973fb0a08850288695040f5d6eb671775f83'),
+        (404, 2, '8bd7dce5fde5b8fff9777e2c9716bb281eae2122fd9becc57b380a0c9142998f'),
+        (405, 2, 'd12dad1cabc1a8a2c4a432c2b6af102e98f2456d04b44d0ad5fe2bade3803e01'),
+        (406, 2, '3ecc16b0799fb714d82b69af72572dfe426b2c15e6ae3aa944b5022a51c5f03e'),
+        (407, 2, '990ac1b72a0035726531cf4b2661adb16d87867042378baafc2928c5f6389157'),
+        (408, 2, 'a64584a60fc9cd2b8e4cc7e144b2afb2da7d0cdd7fe52dc0da022d895e8e885e'),
+        (409, 2, '18d521833a2c0ceab577f9669ca39a8cdfa7713adc68f0424af3fffc8aefd182'),
+        (410, 2, '9d0054cb4c2da9c32670adc09b8a8df8077c2904322ff3f319614d176a910707'),
+        (411, 2, 'b59a6e8cbc7cd86c327806da4490b17fcb3703ac4b6d127917e33dadae7d21d0'),
+        (412, 2, '220aad4c40b70c20d4d2adb03a0ece1c780b3e90bb5502bb8b4ed9071d83f00e'),
+        (413, 2, '63dfd0dd1ad48ac599f1a8f58cef4280ef12d9bb9a53689828b75283ee3cb82b'),
+    ),
+    42: (
+        (590, 2, '26c220032627fe4b65a2224dfc2f1c3274a6e30fbdcd1e142cc9f1b334651e62'),
+        (591, 2, '70da994374527315d64461c915dbd9dc00a4eb65c7b315053c2d0c6ca23b1660'),
+        (592, 2, 'c864c48b56433a1a564e42566f1c85ec72c5ae7c72114dfd11eadedc7624619d'),
+        (593, 2, '336da2773a22618d6b2d711f704800666a4d933033c2b89719c11e35ed093621'),
+        (594, 2, 'dc82ab40d1120f57f485538b7117d53ea01d52f4708f086fd27cce089338ba8e'),
+        (595, 2, '25aa9eb942a65236d55a1dc7ba6a24886feca8f41cc30e1a2216a66d00355336'),
+        (596, 2, '437efc64828725d42425a264bcfdce5430858dc6096725c2f3d3e536586be9bc'),
+        (597, 2, '92b6bd7cee5526083e4641e740c73108f50216f19eccf2dfad2ee0acf7d92a1f'),
+    ),
+    44: (
+        (604, 2, 'b97b96f6007e043547ec38e2d3212996ba0777136566d4de9770de29582fa49b'),
+        (605, 2, 'dc66a8d48bf6c8110c0bf58b9295d8c58b48f9946aeddcd06b658635ef43099a'),
+    ),
+}
 GROUND_PLAN_ID = 1
 RETIRED_RACK_IDS = ('83b533e9-e643-43ee-a68c-b151e951808e',
                     'd00e4e04-8043-4a98-bc4d-f018406d5aff')
@@ -106,7 +150,7 @@ def _actor(db, actor):
         _reject('缺少操作人')
     saved = db.scalar(select(User).where(User.id == actor.id)
                       .execution_options(populate_existing=True))
-    if not saved or not saved.is_active or saved.role not in {'admin', 'boss'} or saved.customer_access_mode != 'all':
+    if not saved or not saved.is_active or saved.role != 'admin' or saved.customer_access_mode != 'all':
         _reject('需要有效的全客户管理员')
     return saved
 
@@ -300,19 +344,22 @@ def _staging(db, old, new):
             _reject('待入库区域没有启用功能位')
         for loc in locations:
             layout=loc.floor3_layout
-            if (loc.address_kind!='functional' or loc.address_area_id!=area.id or loc.source_version!='CURRENT_MAP'
+            if (loc.address_kind!='functional' or loc.address_area_id not in (None,area.id) or loc.source_version!='CURRENT_MAP'
                     or loc.placement_status!='placed' or not layout or layout.version<1):
                 _reject('待入库区域不是原正式功能位')
             values=[float(getattr(layout,k)) for k in ('left_pct','top_pct','width_pct','height_pct')]
             if (not all(math.isfinite(x) and x>=0 for x in values)
                     or values[0]+values[2]>100.0001 or values[1]+values[3]>100.0001):
                 _reject('待入库功能位几何越界')
+        pinned=tuple((x.id,x.address_version,location_signature(x,x.floor3_layout)) for x in locations)
+        if pinned != STAGING_LOCATION_PINS.get(area.id):
+            _reject('待入库原30位置身份、地址版本或完整几何签名变化')
         result.append(dict(area_id=area.id, location_ids=[x.id for x in locations],
                            signatures={str(x.id):location_signature(x,x.floor3_layout) for x in locations}))
     return result
 
 
-def _ground(db, audits):
+def _ground(db, audits, current_floor):
     plans=list(db.scalars(select(WarehouseGroundLayoutPlan).join(WarehouseArea).join(WarehouseFloor)
         .where(WarehouseFloor.floor_number==1,WarehouseGroundLayoutPlan.status=='published')
         .options(selectinload(WarehouseGroundLayoutPlan.slots))))
@@ -328,7 +375,16 @@ def _ground(db, audits):
             or not signatures or receipt.get('locations')!=signatures
             or any(s.location.is_active and not s.location.floor3_layout for s in plan.slots)):
         _reject('原地堆计划或精确库位签名变化')
+    try:
+        validate_capacity_layout_slots_for_zone(current_floor,feature_id=policy.map_feature_id,
+            slots=[dict(location_id=s.location_id,layout_kind=s.location.floor3_layout.layout_kind,
+                **{k:float(getattr(s.location.floor3_layout,k)) for k in
+                   ('left_pct','top_pct','width_pct','height_pct')})
+                for s in plan.slots if s.location.is_active],allow_spatial_conflicts=False)
+    except Floor1CandidatePlanningError as error:
+        _reject('当前地堆严格几何核验失败：'+str(error))
     return dict(plan_id=plan.id,plan_version=plan.version,area_code=plan.area.area_code,
+                strict_current_geometry=True,
                 floor_code=plan.area.floor.floor_code,locations=signatures,
                 original_map_revision=plan.published_map_revision)
 
@@ -340,7 +396,7 @@ def _preview(db, actor, source_bytes):
     molds=_rows(db,table_by_name['mold_tools'])
     _geometry_and_audit_proof(old,new,audits,locations,molds)
     changes=_policies(db,new,audits)
-    staging=_staging(db,old,new); ground=_ground(db,audits)
+    staging=_staging(db,old,new); ground=_ground(db,audits,new)
     result=dict(schema_version=1,action=ACTION,actor_id=actor.id,actor_auth_version=actor.auth_version,
         geometry_source_sha256=SOURCE_SHA,geometry_source_revision=SOURCE_REVISION,
         audited_binding_sha256=BINDING_SHA,audited_binding_revision=BINDING_REVISION,

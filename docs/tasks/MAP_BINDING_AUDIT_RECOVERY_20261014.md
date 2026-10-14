@@ -26,7 +26,7 @@
 4. 41374证明6c发布；41400/41401将真实6c备份、e79/12069发布和单独EDIT-006应用连接起来。22份独立 area receipts 为其余22项策略给出原版本、feature和承接事实。所有23项策略ID/area/version固定，逐项核用途、名称、feature、区域状态和无草稿。
 5. 两架无启用正式库位引用；全部现有与历史 MCELL 无模具本体位置引用。现有实际模具搬位事实保留。
 6. 待入库4区采用独立几何合同：真实6c与current feature及邻近边界一致，区域均已有原正式 functional 位置，CURRENT_MAP、placed、layout版本和有效范围正确。合同明确区分几何来源063898和审计绑定12069；它不调用需要相同source revision的原staging preview去伪造对象。策略CAS后逐位调用原 `operational_location_issue(require_published=True, require_map_geometry=True)`，实际可用才接受。
-7. FIN-001唯一 published plan及全部active location signatures与原41399精确相同。策略CAS后调用原 `record_map_applications(previous_floor_layout=真实6c, floor_layout=真实current)`，写且仅写一个新适用回执，随后原 `published_ground_plan` 验证该回执。原plan revision/version、slots和locations全部保持。
+7. FIN-001唯一 published plan及全部active location signatures与原41399精确相同。预览直接调用原 `validate_capacity_layout_slots_for_zone(..., allow_spatial_conflicts=False)` 核验当前图几何，不依赖最新审计可能提供的空间冲突豁免。策略CAS后调用原 `record_map_applications(previous_floor_layout=真实6c, floor_layout=真实current)`，写且仅写一个新适用回执，随后原 `published_ground_plan` 验证该回执。原plan revision/version、slots和locations全部保持。
 
 ## API 与事务
 
@@ -40,7 +40,7 @@ receipt = apply(
 )
 ```
 
-`preview` 只读，要求清洁 Session 和数据库中仍有效、全客户范围的 admin/boss。返回完整可审核合同与 `preview_sha256`，包括全部策略行和指定业务表的完整逻辑摘要。库存/仓库/模具相关表、位置布局、staging、偏好均进入摘要。该摘要不等同只比较可用数量；每行所有字段参加校验。
+`preview` 只读，要求清洁 Session 和数据库中仍有效、全客户范围的 admin（沿用原地图 admin-only）。返回完整可审核合同与 `preview_sha256`，包括全部策略行和指定业务表的完整逻辑摘要。库存/仓库/模具相关表、位置布局、staging、偏好均进入摘要。该摘要不等同只比较可用数量；每行所有字段参加校验。
 
 `apply` 默认持有既有地图事务锁直到提交，进入原 `atomic_bom`，持有持久一楼投影 claim 后重新读取完整预览。原始文件在预览读前后、CAS前及写入末尾再次校验。任一变更拒绝旧预览。按原 `_advance_policy_version` 执行23次真实CAS，任何一项失败回滚所有已做变化。
 
@@ -67,3 +67,26 @@ PYTHONDONTWRITEBYTECODE=1 /Users/kimiyf/ERP-Migration/venv/bin/python -m pytest 
 92项不代表真实23项已正式恢复。根代理另用既有run_task在owned child检查真实数据、回滚/提交/重放及实际耗时；该独立实际结果由根记录，不能以合成样本代替。正式ERP仍由根统一授权和安排，本代理未做发布或正式更正。
 
 知识库回执：本文件作为本轮独立候选回执交根统一回写NAS，避免并行操作当前已报告阻塞的NAS。状态：开发验证通过，尚未正式发布；无管理员人工验收声明。
+
+
+## 现场副本反馈后的有限修正
+
+根 owned child `task-ee843bb95b2c4017bb87a343561db62f` 首次真实预览拒绝：本服务初版误将历史 functional 位置要求成必须已有 address_area_id。只读核对现有证据：4区30位置全部 address_area_id=None，使用原正式 warehouse_floor=1 + area_code，address_version=2，CURRENT_MAP/placed/functional，layout_kind=logical_anchor；29/30/42区layout version4，44区version3。原 `receipt_staging_map` 也以楼层和区域选择并冻结地址字段，没有补FK要求。
+
+最小修正保留原正式查找合同和数据库字段，新增30位置逐一固定 `(ID,address_version,location_signature)`，完整signature包括原空FK及实际几何。仅明确pins支持的历史NULL身份可通过；错误非空FK即使独立签名更新仍拒绝，任何位置字段在预览后漂移都使整份预览失效，不改业务旧服务。新增NULL正例和错误FK、字段漂移反例；原admin-only保持，boss不可执行。新增当前地堆严格几何预览，障碍物必须拒绝。
+
+本轮专用合成 **53 passed in 10.42s**。真实NULL及boss拒绝在修正前复现失败，修正后通过。初次真实child失败不能标成现场已通过；根按最终新SHA另做managed演练。服务SHA `6c7cf40eeb34467995d494db02a8296fa53839195fa2cf84f150700cc734b619`。
+
+## 最终验证结果
+
+最终3套合成相邻回归：**102 passed in 13.18s**（53本专项 + 49原专项），`git diff --check` 通过。
+
+根使用上述精确服务SHA，在既有run_task创建的 owned child `task-03422e83c7fb4ce1b2b799b482261d59` 实际演练通过。根记录整次执行10.66秒；这不是正式停服时间。stdout保存在 `/Users/kimiyf/ERP-Migration/evidence/erp-plan-v3-20261014/managed-tasks/task-03422e83c7fb4ce1b2b799b482261d59/stdout.log`，本代理只读核验该结果：
+
+- 实际preview：23 policies、4 staging、10 ground slots；`exact_binding_source_available=false`，preview SHA `9218437a0236b23f5fc11108fcc3789c8335eb0c0c1bb84e05cb04c03008e676`。
+- `ground_after_real`、`final_audit_after_real`、`commit` 三阶段故障均全数据库逻辑事实回滚，地图文件保持。
+- 实际提交仅在managed child：23 policies、1 ground application、4 staging；实际收料resolver返回既有404位置“原料堆放区 003 号位”。
+- 同key重放：全部数据库事实相同、地图文件相同、事务已结束。
+- 正式source没有写入。当前owned child因既有回收guard无法以普通用户确认受保护进程而保留；不得标记已删除或计入释放空间。
+
+状态仍为：开发和真实隔离副本验证通过，尚未正式发布/写入。正式更正及NAS回执由根单点协调，不能把本结果填成管理员人工验收。

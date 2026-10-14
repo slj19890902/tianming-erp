@@ -30,3 +30,9 @@
 - NAS本次独立回执挂载无响应，本地回执保留待回写，不声称已成功上传。
 
 本轮不执行旧combined维护脚本，不使用聊天密码，不关闭正式页面，不做自动页面点击验收。真实token用量不可获取，未估算。
+
+## 本地同 schema 更新持久性
+
+独立复审指出 local_code_update 的备份文件虽有 fsync，目录与最终 state 父目录没有同步。5 项针对实际文件句柄的回归先红后绿：备份目录、verified.json 文件、job/staging 必须先于 state 发布；根目录同步失败时保留已可能切换的新 current 和全部现场，不自动回滚或清理。与现有本地更新合计14项通过。此修正仍不等于已测量停服耗时或正式切换完成。
+
+本次只带入已复核的 SMB binding 升级实现和 archive_smb_upgrade_v1 capability，保留正式activation。它本身不升级monitor；nightly仍须完整的正式monitor升级闭环后才恢复。没有带入 order_stock_identity_v1 或新DDL。

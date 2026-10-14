@@ -11,6 +11,7 @@ import shutil
 import uuid
 
 from desktop_assistant import manager as m
+from desktop_assistant.mac_release_publish import sync_directory
 from desktop_assistant.migration import files
 from desktop_assistant.storage import (sha, read_json, write_json, decrypt_file,
     extract_verified, database_info, signed_release_manifest)
@@ -89,6 +90,7 @@ def update(manager, package, password, state_sha256, *, approval_check=lambda: N
     final = manager.root/'backups'/payload['encrypted'].name
     with payload['encrypted'].open('rb') as src, final.open('xb') as dst:
         shutil.copyfileobj(src, dst, 1024*1024); dst.flush(); os.fsync(dst.fileno())
+    sync_directory(final.parent)
     if sha(final) != payload['sha256'] or final.stat().st_size != payload['size']:
         raise ValueError('本地独立副本不一致')
     readback = job/'independent-readback.zip'
@@ -107,9 +109,14 @@ def update(manager, package, password, state_sha256, *, approval_check=lambda: N
         database_sha256=db_sha, shared_files=len(before), manual_stop=True,
         restored_verified=True, factory_activated=False)
     write_json(job/'verified.json', proof)
+    sync_directory(job)
+    sync_directory(job.parent)
     new = dict(old, current=identity, previous=old['current'], update_backup=str(final),
                operation='update', manual_stop=True, local_code_update=proof)
     write_json(state_path, new)
+    # If this fails after the atomic rename, preserve the new state and all
+    # recovery files. The caller must inspect it, never assume no switch ran.
+    sync_directory(manager.root)
     if manager.state != new:
         raise ValueError('本地切换状态回读未确认，保留现场')
     # Only this successful job's derived plaintext/copy files are disposable.

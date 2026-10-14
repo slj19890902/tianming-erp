@@ -85,8 +85,10 @@ def update(manager, package, password, state_sha256, *, approval_check=lambda: N
     if shutil.disk_usage(manager.root).free < inputs['required']:
         raise ValueError('本地完整备份空间不足')
     slot=None
+    from desktop_assistant import local_backup_only as local_only
+    local_policy=local_only.enabled(manager,manifest)
     from desktop_assistant import mac_smb_stream_target as stream
-    if manager.root==stream.cfg.BASE/'instance' and stream.metadata_present():
+    if not local_policy and manager.root==stream.cfg.BASE/'instance' and stream.metadata_present():
         from desktop_assistant import nas_backup_rotation_worker as rotation_worker
         slot=rotation_worker.local_update_slot_locked(manager)
     job = manager.root/'staging'/('local-code-update-'+(slot['task_id'] if slot else uuid.uuid4().hex))
@@ -118,7 +120,7 @@ def update(manager, package, password, state_sha256, *, approval_check=lambda: N
         backup_bytes=payload['size'], current=identity, previous=old['current'],
         database_sha256=db_sha, shared_files=len(before), manual_stop=True,
         restored_verified=True, factory_activated=False, authenticated_recovery=authenticated_recovery,
-        backup_filename=final.name,job_id=job.name,rotation_slot=slot)
+        backup_filename=final.name,job_id=job.name,rotation_slot=slot,local_backup_only=local_policy)
     write_json(job/'verified.json', proof)
     sync_directory(job)
     sync_directory(job.parent)

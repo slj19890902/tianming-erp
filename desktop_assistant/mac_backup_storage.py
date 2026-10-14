@@ -451,6 +451,8 @@ def publish_receipt(path, receipt, proof):
 
 def verified_at(root, state, *, now=None):
     """Small local records only. No remote path stat, mount query or full hash."""
+    from desktop_assistant import local_backup_only as local_only
+    if local_only.selected(root):return local_only.verified_at(root,state,now=now)
     if not required(): return state.get('last_backup_at')
     stream=state.get('last_backup_stream')
     if isinstance(stream,dict) and stream.get('path')==state.get('last_backup'):

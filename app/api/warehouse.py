@@ -11533,6 +11533,7 @@ def calibrate_twin_floor4_freight_elevator(
     user: User = Depends(admin_only),
 ) -> dict:
     with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
         draft_snapshot = snapshot_warehouse_twin_layout_draft()
         result = None
         try:

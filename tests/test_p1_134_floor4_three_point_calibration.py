@@ -480,6 +480,7 @@ def test_floor4_recalibration_requires_exactly_one_materialized_lift(
 def test_floor4_recalibration_api_audits_only_the_applied_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(warehouse_api, "_claim_floor_projection_for_layout_write", lambda *_args, **_kwargs: None)
     class FakeSession:
         commits = 0
         rollbacks = 0

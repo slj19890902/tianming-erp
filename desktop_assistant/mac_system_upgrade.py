@@ -38,7 +38,9 @@ MODULE = 'desktop_assistant/mac_system_upgrade.py'
 CONTRACT_MODULE = 'desktop_assistant/mac_system_upgrade_contract.py'
 WORKER = 'desktop_assistant/mac_system_upgrade_worker.py'
 CAPABILITY = 'system_upgrade_worker_v1'
-CODE_FILES = frozenset((*boot.FILES, MODULE, CONTRACT_MODULE))
+CODE_FILES = frozenset((*boot.FILES, MODULE, CONTRACT_MODULE,
+    'desktop_assistant/mac_system_upgrade_recovery.py',
+    'desktop_assistant/mac_system_upgrade_recovery_contract.py'))
 STATE_LIMIT = 16 * 1024**2
 EXIT_TIMEOUT = 250
 START_TIMEOUT = 180

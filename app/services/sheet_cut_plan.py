@@ -23,6 +23,13 @@ def rectangular_cut_plan(db, lot, product, expected, *, reviewed=False):
             utilization=round(expected.board_length_mm*expected.board_width_mm*100/(detail.board_length_mm*detail.board_width_mm),2))
     # Only explicitly intact, unprinted rectangles. A die-cut bounding box is not a sheet.
     if reviewed and detail and detail.sheet_type == "raw_board" and profile is None:
+        from app.services.warehouse_inventory import semi_finished_lot_allowed_product_ids
+        allowed = semi_finished_lot_allowed_product_ids(db, lot.id)
+        if (detail.owner_customer_id is not None and detail.owner_customer_id != expected.customer_id
+                or allowed and product.id not in allowed
+                or detail.owner_customer_id is not None and not detail.customer_generic_eligible
+                    and product.id not in allowed):
+            return None
         # An explicitly registered blank rectangle can be reviewed for this
         # allocation without rewriting its stock/customer profile.
         profile = {"processing": "raw"}

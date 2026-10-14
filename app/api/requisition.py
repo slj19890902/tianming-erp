@@ -24524,6 +24524,10 @@ def void_supplier_order(
     db: Session = Depends(get_db),
     user: User = Depends(admin_rollback),
 ) -> dict:
+    return _void_supplier_order(order_id, db=db, user=user)
+
+
+def _void_supplier_order(order_id: int, *, db: Session, user: User, commit: bool = True) -> dict:
     order = db.get(SupplierRequisitionOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="供应商报料单不存在")
@@ -24706,7 +24710,10 @@ def void_supplier_order(
                     "affected_items": affected_items,
                 },
             )
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
     except WarehouseInventoryError as error:
         db.rollback()
         raise HTTPException(

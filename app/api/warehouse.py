@@ -4181,7 +4181,7 @@ def reserve_order_manual_sheet_inventory(order_item_id: int, payload: ManualShee
     return _reserve_manual_sheet_inventory(order_item_id, payload, db, user, is_bom=False)
 
 
-def _reserve_manual_sheet_inventory(target_id, payload, db, user, *, is_bom):
+def _reserve_manual_sheet_inventory(target_id, payload, db, user, *, is_bom, commit=True):
     from app.models.audit import OperationLog
     from app.services.semi_finished_inventory import SIGNATURE_OVERRIDE_WARNING
     snapshot = db.get(SalesOrderItemBomComponent, target_id) if is_bom else None
@@ -4272,7 +4272,10 @@ def _reserve_manual_sheet_inventory(target_id, payload, db, user, *, is_bom):
             customer_id=temporary.customer_id, request_id=operation_id,
             description="用户按批次自定张数抵扣库存片料",
             details={"request_digest": request_digest, "response": response})
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return response
     except WarehouseInventoryError as error:
         db.rollback()

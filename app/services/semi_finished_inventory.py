@@ -3,7 +3,7 @@ from app.services.sheet_cutting_settings import theoretical_product_yield
 from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number
 
 from collections.abc import Iterable
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 import json
 from math import ceil
 
@@ -64,6 +64,22 @@ GENERAL_SEMI_FINISHED_STOCK = "GENERAL_SEMI_FINISHED_STOCK"
 CUSTOMER_GENERIC_SEMI_FINISHED_STOCK = "CUSTOMER_GENERIC_SEMI_FINISHED_STOCK"
 MATERIAL_VARIANCE_PRESERVED = "MATERIAL_VARIANCE_PRESERVED"
 REVERSE_CREASE_ADMIN_OVERRIDE = "REVERSE_CREASE_ADMIN_OVERRIDE"
+
+
+def _cut_review_contract(db, lot, requirement, actor_id):
+    """Only this demand and source scope were reviewed; later edits invalidate it."""
+    detail = lot.semi_finished_detail
+    return json.loads(json.dumps(dict(schema=1, actor_id=actor_id,
+        requirement_id=requirement.id, order_item_id=requirement.order_item_id,
+        product_id=_requirement_product_id(db, requirement),
+        bom_snapshot_id=requirement.sales_order_item_bom_component_id,
+        required_piece_quantity=requirement.required_piece_quantity,
+        requirement=asdict(requirement_signature(requirement)),
+        source=dict(owner_customer_id=detail.owner_customer_id,
+            customer_generic_eligible=detail.customer_generic_eligible,
+            sheet_type=detail.sheet_type,
+            allowed_product_ids=sorted(semi_finished_lot_allowed_product_ids(db, lot.id)),
+            profile=goods_profile(db, lot))), sort_keys=True, default=str))
 
 
 @dataclass(frozen=True)
@@ -2519,6 +2535,13 @@ def reserve_semi_finished_inventory(
                 if not reservations
                 else f"{idempotency_key}:{lot.id}"
             )
+            saved_warnings = list(confirmation.warning_codes)
+            if cut_plan and override and SIGNATURE_OVERRIDE_WARNING in warnings:
+                # Keep the explicit allocation review, not just the generic
+                # match scope returned by confirm_semi_finished_match.
+                saved_warnings = list(dict.fromkeys([
+                    *saved_warnings, MANUAL_CONFIRM_WARNING, SIGNATURE_OVERRIDE_WARNING]))
+                cut_plan['review_contract'] = _cut_review_contract(db, lot, requirement, operator_id)
             reservation = InventoryReservation(
                 reservation_number=_number("SRS"),
                 inventory_lot_id=lot.id,
@@ -2544,10 +2567,10 @@ def reserve_semi_finished_inventory(
                 released_requirement_quantity=0,
                 status="active",
                 warning_codes=json.dumps(
-                    list(confirmation.warning_codes), ensure_ascii=False
+                    saved_warnings, ensure_ascii=False
                 ),
                 warning_acknowledged_by=(
-                    operator_id if confirmation.warning_codes else None
+                    operator_id if saved_warnings else None
                 ),
                 reserved_by=operator_id,
                 reserved_at=now,
@@ -2855,6 +2878,7 @@ def consume_semi_finished_reservation(
         ):
             raise WarehouseInventoryError("半成品预占关联数据不完整", 409)
         requirement_product_id = _requirement_product_id(db, requirement)
+        reviewed_cut = False
         if reservation.cut_plan_json:
             if delivery_item_id is not None:
                 raise WarehouseInventoryError("所选片料需先裁切生产并确认完工，不能直接发货扣料", 409)
@@ -2864,6 +2888,32 @@ def consume_semi_finished_reservation(
                     or (frozen_plan.get("source_length_mm"), frozen_plan.get("source_width_mm")) != (detail.board_length_mm, detail.board_width_mm)
                     or (frozen_plan.get("target_length_mm"), frozen_plan.get("target_width_mm")) != (requirement.board_length_mm, requirement.board_width_mm)):
                 raise WarehouseInventoryError("裁切分配资料已变化，请核对冻结方案", 409)
+            # A prior review belongs to this exact frozen allocation. Carry it
+            # through production without changing the source material identity
+            # or granting permission to consume another, subsequently edited lot.
+            try:
+                codes = json.loads(reservation.warning_codes or "[]")
+                acknowledged = set(codes) if isinstance(codes, list) and all(isinstance(code, str) for code in codes) else set()
+            except (ValueError, TypeError):
+                acknowledged = set()
+            reviewed_cut = (reservation.warning_acknowledged_by is not None
+                and {MANUAL_CONFIRM_WARNING, SIGNATURE_OVERRIDE_WARNING}.issubset(acknowledged)
+                and frozen_plan.get("requires_production") is True
+                and isinstance(frozen_plan.get('review_contract'), dict))
+            if reviewed_cut and (lot.status != 'active' or frozen_plan['review_contract'] !=
+                    _cut_review_contract(db, lot, requirement, reservation.warning_acknowledged_by)):
+                raise WarehouseInventoryError("库存状态、适用范围或需求换算已变化，请重新确认本次裁切用途", 409)
+            if reviewed_cut and (
+                frozen_plan.get("material_code") != detail.material_code_snapshot
+                or normalize_material_code(frozen_plan.get("material_code")) != detail.normalized_material_code
+                or frozen_plan.get("flute_type") != detail.flute_type
+            ):
+                raise WarehouseInventoryError("原板材质或楞型与本次已确认裁切依据不同，请重新核对", 409)
+            if reviewed_cut:
+                current_plan = rectangular_cut_plan(db, lot, db.get(Product, requirement_product_id),
+                    requirement_signature(requirement), reviewed=True)
+                if current_plan != {key: value for key, value in frozen_plan.items() if key != 'review_contract'}:
+                    raise WarehouseInventoryError("当前原板裁切条件与已确认方案不一致，请重新核对", 409)
         from app.services.raw_purchase_plans import validate_reservation
         from app.services.order_replenishment_supply import validate_material_output_reservation
         if (not validate_material_output_reservation(db,reservation,lot,requirement,delivery=delivery_item_id is not None)
@@ -2884,6 +2934,7 @@ def consume_semi_finished_reservation(
                 product_id=requirement_product_id,
                 customer_id=order.customer_id,
                 expected=expected,
+                reviewed=reviewed_cut,
             )
         if lot.version != expected_version:
             raise WarehouseInventoryError("库存已被其他人修改，请刷新后重试", 409)

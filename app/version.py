@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.630"
-APP_VERSION_NAME = "库存抵扣与库位关联修复"
+APP_VERSION = "v0.22.631"
+APP_VERSION_NAME = "C模具架归档应用修复"
 APP_BUILD_DATE = "2026-10-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6116,3 +6116,14 @@ APP_VERIFICATION_STEPS = [
     "送货与回单查询原待核对请求，确认可结束本次确认且没有重复发货；核对供应商三条来源合计1917张。",
 ]
 APP_CHANGELOG = [*(f"v0.22.630：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "修复正式地图与草稿删除同一模具架时归档时间相差毫秒、导致恢复后的 C 架保存成功但应用被误拒绝。",
+    "只对同一货架、同一版本且归档内容除删除时间外完全一致的旧草稿自动对齐正式归档；真实身份、结构或格位变化仍阻止应用。",
+    "本版不改数据库结构，不自动改写正式地图、库存或送货记录。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新地图，在 C 模具架核对架号、三格及位置后保存，确认显示已保存并应用。",
+    "核对模具格二维码和正式位置保持原身份；其他货架草稿不应被此次应用带入正式地图。",
+]
+APP_CHANGELOG = [*(f"v0.22.631：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

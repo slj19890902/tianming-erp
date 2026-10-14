@@ -123,6 +123,53 @@ def test_rack_code_allocator_reserves_retired_internal_codes(tmp_path):
     assert restored.value["rack_code"] == original.value["rack_code"]
 
 
+def test_one_step_delete_uses_identical_archive_in_published_and_draft():
+    rack = {"id": "same-rack", "rack_code": "RACK-1", "version": 7}
+    published = {"racks": [deepcopy(rack)], "retired_racks": []}
+    draft = {"racks": [deepcopy(rack)], "retired_racks": []}
+    archived = editor._retire_rack_in_floor(published, rack, reason="正式删除")
+    editor._retire_rack_in_floor(draft, rack, reason="正式删除", archived_record=archived)
+    assert draft["retired_racks"] == published["retired_racks"]
+
+
+def test_legacy_retirement_timestamp_difference_reconciles_only_same_archive(tmp_path, monkeypatch):
+    published, values, _, _ = seed(tmp_path)
+    draft = tmp_path / "layout.draft.json"
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_PATH", published)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_DRAFT_PATH", draft)
+    document = editor._new_draft_document(published)
+    draft_floor = document["floors"]["3F"]
+    draft_floor["retired_racks"][0]["retired_at"] = "2026-10-13T03:12:14.407420+00:00"
+    draft_floor["revision"] = editor._floor_revision(draft_floor)
+    editor._write_document(draft, document)
+    restored = editor.create_warehouse_twin_rack(
+        "3F", expected_revision=draft_floor["revision"], operation_key="legacy-restore-C",
+        area_feature_id="zone-f1", values=values,
+    )
+    published_floor = floor(published)
+    assert restored.value["restoration_history"][-1]["retired_at"] != published_floor["retired_racks"][0]["retired_at"]
+    context = editor.begin_warehouse_twin_one_step_rack_publish(
+        "3F", restored.value["id"], expected_effective_revision=restored.floor_revision,
+        expected_published_revision=published_floor["revision"],
+    )
+    assert context.published_floor_revision
+    isolated = floor(draft)
+    assert isolated["retired_racks"] == []
+    assert isolated["racks"][0]["restoration_history"][-1] == published_floor["retired_racks"][0]
+
+
+def test_changed_retired_rack_identity_still_blocks_apply():
+    archived = {"id": "same-rack", "rack_code": "RACK-1", "version": 7,
+                "retired_at": "2026-10-13T03:12:14.406515+00:00"}
+    rack = {"id": "same-rack", "restored_from_retired": True,
+            "restoration_history": [{**archived, "version": 6,
+                "retired_at": "2026-10-13T03:12:14.407420+00:00"}]}
+    published = {"retired_racks": [archived]}
+    with pytest.raises(editor.WarehouseTwinLayoutEditConflictError, match="归档内容已变化"):
+        editor._consume_restored_rack_tombstone(published, rack)
+    assert published["retired_racks"] == [archived]
+
+
 @pytest.fixture
 def real_case(tmp_path, monkeypatch):
     from sqlalchemy import select

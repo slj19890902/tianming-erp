@@ -877,8 +877,19 @@ def _consume_restored_rack_tombstone(floor: dict[str, Any], rack: dict[str, Any]
     archived = deepcopy(retired[0])
     archived.pop("restoration_history", None)
     history = rack.get("restoration_history") or []
-    if len(retired) != 1 or not history or history[-1] != archived:
+    if len(retired) != 1 or not history or not isinstance(history[-1], dict):
         raise WarehouseTwinLayoutEditConflictError("原货架归档内容已变化，请重新核对后再应用")
+    if history[-1] != archived:
+        # Older one-step deletes stamped the published tombstone and the
+        # rebased draft separately. Their only difference can be microseconds
+        # in retired_at; keep the published timestamp as the canonical record.
+        previous = dict(history[-1])
+        current = dict(archived)
+        old_time = previous.pop("retired_at", None)
+        current_time = current.pop("retired_at", None)
+        if not old_time or not current_time or previous != current:
+            raise WarehouseTwinLayoutEditConflictError("原货架归档内容已变化，请重新核对后再应用")
+        history[-1] = archived
     floor["retired_racks"] = [r for r in floor.get("retired_racks") or [] if r is not retired[0]]
 
 
@@ -935,12 +946,13 @@ def begin_warehouse_twin_one_step_rack_publish(
             (i for i, item in enumerate(isolated_racks) if str(item.get("id") or "") == rack_id),
             None,
         )
+        isolated_rack = deepcopy(draft_rack)
         if index is None:
-            isolated_racks.append(deepcopy(draft_rack))
+            isolated_racks.append(isolated_rack)
         else:
-            isolated_racks[index] = deepcopy(draft_rack)
+            isolated_racks[index] = isolated_rack
         isolated_floor["racks"] = isolated_racks
-        _consume_restored_rack_tombstone(isolated_floor, draft_rack)
+        _consume_restored_rack_tombstone(isolated_floor, isolated_rack)
         isolated_floor["layout_edited_at"] = _utc_iso()
         isolated_floor["revision"] = _floor_revision(isolated_floor)
         isolated["generated_at"] = isolated_floor["layout_edited_at"]
@@ -2545,7 +2557,8 @@ def _retire_rack_in_floor(
     rack: dict[str, Any],
     *,
     reason: str,
-) -> None:
+    archived_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     rack_id = str(rack.get("id") or "").strip()
     if not rack_id:
         raise WarehouseTwinLayoutEditError("货架缺少稳定标识，不能删除")
@@ -2560,7 +2573,15 @@ def _retire_rack_in_floor(
     ]
     if len(same) > 1:
         raise WarehouseTwinLayoutEditConflictError("草稿中存在重复的已删除货架身份，请先完成治理")
-    if same:
+    if archived_record is not None:
+        if str(archived_record.get("id") or "").strip() != rack_id:
+            raise WarehouseTwinLayoutEditConflictError("正式与草稿货架归档身份不一致")
+        retired = deepcopy(archived_record)
+        retired_racks = [
+            item for item in retired_racks
+            if str(item.get("id") or "").strip() != rack_id
+        ]
+    elif same:
         # A prior draft-only delete (F7/F8) is a tombstone, not a reason to
         # publish the old rack again.  Preserve its historical timestamp and
         # replace the object fields with the published identity below.
@@ -2571,11 +2592,13 @@ def _retire_rack_in_floor(
         ]
     else:
         retired = {}
-    retired.update(deepcopy(rack))
-    retired.setdefault("retired_at", _utc_iso())
-    retired["retired_reason"] = reason
+    if archived_record is None:
+        retired.update(deepcopy(rack))
+        retired.setdefault("retired_at", _utc_iso())
+        retired["retired_reason"] = reason
     retired_racks.append(retired)
     floor["retired_racks"] = retired_racks
+    return retired
 
 
 def delete_published_warehouse_twin_rack(
@@ -2681,7 +2704,7 @@ def delete_published_warehouse_twin_rack(
                 "inactive_location_count": max(0, int(inactive_location_count)),
                 "request_fingerprint": request_fingerprint,
             }
-            _retire_rack_in_floor(
+            published_archive = _retire_rack_in_floor(
                 published_floor, rack,
                 reason="管理员删除正式空货架；关联空货位已归档，库存与历史未改变",
             )
@@ -2702,6 +2725,7 @@ def delete_published_warehouse_twin_rack(
                 _retire_rack_in_floor(
                     draft_floor, rack,
                     reason="管理员删除正式空货架；关联空货位已归档，库存与历史未改变",
+                    archived_record=published_archive,
                 )
                 # The operation receipt belongs to the published action.  The
                 # draft keeps its own former edit receipts for unrelated work.

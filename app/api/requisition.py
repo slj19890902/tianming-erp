@@ -12976,6 +12976,92 @@ def _add_material_requisition_purpose_snapshot(
     )
 
 
+def _internal_bom_sheet_preview(db, item, snapshot, component, payload):
+    """Read an uncommitted internal source without reopening its cutting choice.
+
+    The stock allocator supplies the same procurement boundary. This exception
+    is deliberately local to preview; formal batch duplicate gates stay intact.
+    """
+    from app.api.warehouse import _manual_sheet_procurement_state
+    from app.services.sheet_cutting_contract import SheetCuttingContract
+
+    try:
+        state = _manual_sheet_procurement_state(db, item, component, snapshot=snapshot)
+    except WarehouseInventoryError as error:
+        raise HTTPException(error.status_code, str(error)) from error
+    accepted_components = [component, 'whole'] if component != 'whole' else ['whole']
+    active_rows = list(db.scalars(
+        select(RequisitionItem)
+        .join(RequisitionItemBomSource, RequisitionItemBomSource.requisition_item_id == RequisitionItem.id)
+        .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+        .where(
+            RequisitionItemBomSource.sales_order_item_bom_component_id == snapshot.id,
+            RequisitionItemBomSource.component_type.in_(accepted_components),
+            func.lower(RequisitionItem.status).notin_(INACTIVE_REQUISITION_ITEM_STATUSES),
+            func.lower(Requisition.status).notin_(INACTIVE_REQUISITION_ITEM_STATUSES),
+        ).distinct()
+    ))
+    if (
+        not active_rows or state['committed_piece_qty'] > 0 or
+        {row.id for row in active_rows} != {row.id for row in state['mutable_rows']}
+    ):
+        raise HTTPException(409, '组件已有采购、收料或冻结用途，不能重新预检开料；请核对原单据')
+
+    def contract_key(value):
+        return SheetCuttingContract.from_snapshot(value).to_snapshot() if value else None
+
+    results = []
+    original_keys = []
+    try:
+        for row in active_rows:
+            source = state['sources'][row.id]
+            actual = int(source.actual_yield_per_sheet) if source.actual_yield_per_sheet is not None else None
+            original = _bom_snapshot_requirements(db, snapshot, component_type=component,
+                cutting_mode=row.special_process, actual_yield_per_sheet=actual,
+                sheet_cutting_snapshot=row.sheet_cutting_snapshot)
+            mode = payload.special_process if 'special_process' in payload.model_fields_set else row.special_process
+            if normalize_cutting_mode(mode, strict=True) != normalize_cutting_mode(row.special_process, strict=True):
+                raise HTTPException(409, '内部报料已冻结开料出数，只能按原开料重算剩余需求')
+            if (Decimal(str(payload.cardboard_len)), Decimal(str(payload.cardboard_width))) != (
+                    Decimal(str(row.cardboard_len)), Decimal(str(row.cardboard_width))):
+                raise HTTPException(409, '内部报料已冻结供应商尺寸，只能按原尺寸重算剩余需求')
+            selected = _bom_snapshot_requirements(db, snapshot, component_type=component,
+                cutting_mode=mode,
+                actual_yield_per_sheet=payload.actual_yield_per_sheet if payload.actual_yield_per_sheet is not None else actual,
+                sheet_cutting_snapshot=payload.sheet_cutting_snapshot if payload.sheet_cutting_snapshot is not None else row.sheet_cutting_snapshot)
+            original_key = (normalize_cutting_mode(original['cutting_mode'], strict=True),
+                original['yield_per_sheet'], Decimal(str(original['report_length_mm'])),
+                Decimal(str(original['report_width_mm'])), contract_key(original['sheet_cutting_snapshot']))
+            selected_key = (normalize_cutting_mode(selected['cutting_mode'], strict=True),
+                selected['yield_per_sheet'], Decimal(str(selected['report_length_mm'])),
+                Decimal(str(selected['report_width_mm'])), contract_key(selected['sheet_cutting_snapshot']))
+            if original_key != selected_key:
+                raise HTTPException(409, '内部报料已冻结长宽份数、模数和供应商尺寸，只能按原开料重算剩余需求')
+            # A source with conflicting old dimensions must not be silently
+            # replaced by the current BOM report dimensions even for display.
+            if original_key[2:4] != (Decimal(str(row.cardboard_len)), Decimal(str(row.cardboard_width))):
+                raise HTTPException(409, '原内部报料尺寸与冻结BOM开料不一致，请核对原明细')
+            original_keys.append(original_key)
+            results.append(selected)
+    except HTTPException as error:
+        if error.status_code == 409:
+            raise
+        raise HTTPException(409, '原内部报料开料资料不能安全重算：' + str(error.detail)) from error
+    except (ValueError, ArithmeticError, KeyError) as error:
+        raise HTTPException(409, '原内部报料开料资料不能安全重算，请核对原明细') from error
+    if any(key != original_keys[0] for key in original_keys[1:]):
+        raise HTTPException(409, '同一组件的原内部报料开料合同不同，请按原明细核对')
+    result = results[0]
+    result.update(
+        read_only_internal_requisition_preview=True,
+        internal_requisition_versions=[
+            {'id': row.id, 'version': row.version, 'requisition_qty': row.requisition_qty}
+            for row in active_rows
+        ],
+    )
+    return result
+
+
 @router.post("/bom-sheet-cutting/preview")
 def preview_bom_sheet_cutting(payload: RequisitionLinePayload, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
     snapshot = db.get(SalesOrderItemBomComponent, payload.bom_snapshot_id) if payload.bom_snapshot_id else None
@@ -12985,10 +13071,11 @@ def preview_bom_sheet_cutting(payload: RequisitionLinePayload, db: Session = Dep
     _require_order_item_customer_access(db, item, user)
     component = _bom_snapshot_component_type(snapshot, payload.component_type)
     if _bom_snapshot_has_active_requisition(db, snapshot.id, component_type=component):
-        raise HTTPException(409, "组件已有正式报料，不能改变冻结开料方式")
-    result = _bom_snapshot_requirements(db, snapshot, component_type=component,
-        cutting_mode=payload.special_process, actual_yield_per_sheet=payload.actual_yield_per_sheet,
-        sheet_cutting_snapshot=payload.sheet_cutting_snapshot)
+        result = _internal_bom_sheet_preview(db, item, snapshot, component, payload)
+    else:
+        result = _bom_snapshot_requirements(db, snapshot, component_type=component,
+            cutting_mode=payload.special_process, actual_yield_per_sheet=payload.actual_yield_per_sheet,
+            sheet_cutting_snapshot=payload.sheet_cutting_snapshot)
     quantity = int(result["requisition_qty"])
     result.update(cardboard_len=result["report_length_mm"], cardboard_width=result["report_width_mm"],
         special_process=result["cutting_mode"], expected_product_version=result["product_version"],

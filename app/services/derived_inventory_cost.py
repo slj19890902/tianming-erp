@@ -41,6 +41,38 @@ def derived_cost(db, lot, visited):
                 quantity=qty, total_cost=str(total), basis='inherited_entry_cost_not_new_purchase')
         if lot.cost_snapshot_source=='stock_preparation':
             from app.models.stock_preparation import StockPreparationJob
+            if detail.get('automatic_batch'):
+                qty=int(detail['output_quantity']);total=Decimal(detail['total_cost'])
+                anchor=db.get(StockPreparationJob,lot.source_ref_id)
+                if (not anchor or anchor.status!='completed' or anchor.output_lot_id!=lot.id
+                        or anchor.actual_output!=qty or qty<=0 or not isinstance(detail.get('inputs'),list)):
+                    return None, {'validation_issue':'补库自动成品来源不一致'}
+                calculated=Decimal(0);evidence=[];seen=set()
+                for row in detail['inputs']:
+                    job=db.get(StockPreparationJob,row['job_id']);reservation=db.get(InventoryReservation,row['reservation_id'])
+                    origin=db.get(InventoryLot,row['lot_id']);movement=db.scalar(select(InventoryMovement).where(
+                        InventoryMovement.idempotency_key==row['movement_key']))
+                    if (row['job_id'] in seen or not job or not reservation or not origin or not movement
+                            or job.receipt_item_id!=row['receipt_item_id'] or job.reservation_id!=reservation.id
+                            or job.product_id!=row['product_id'] or job.status!='completed'
+                            or job.input_quantity!=row['quantity'] or job.output_lot_id not in (None,lot.id)
+                            or reservation.inventory_lot_id!=origin.id or reservation.status!='consumed'
+                            or reservation.reserved_stock_quantity!=row['quantity']
+                            or reservation.consumed_stock_quantity!=row['quantity']
+                            or movement.inventory_lot_id!=origin.id or movement.reservation_id!=reservation.id
+                            or movement.movement_type!='consume' or movement.quantity!=row['quantity']):
+                        return None, {'validation_issue':'补库自动成品投入缺少一致的消耗记录'}
+                    seen.add(row['job_id']);unit,basis=frozen_cost(origin,db,visited)
+                    stored=Decimal(str(origin.estimated_unit_cost_snapshot)) if origin.estimated_unit_cost_snapshot is not None else None
+                    if unit is None or stored is None or abs(unit-stored)>Decimal('.0001') or abs(stored-Decimal(row['unit_cost']))>Decimal('.0001'):
+                        return None, {'validation_issue':'补库自动成品投入成本待核对'}
+                    calculated+=stored*row['quantity'];evidence.append(dict(lot_id=origin.id,quantity=row['quantity'],basis=basis))
+                if (not seen or sum(int(r['quantity']) for r in detail['inputs'])!=int(detail['input_quantity'])
+                        or abs(calculated-total)>Decimal('.01')
+                        or abs(total/qty-Decimal(str(lot.estimated_unit_cost_snapshot)))>Decimal('.0001')):
+                    return None, {'validation_issue':'补库自动成品数量或成本不守恒'}
+                return total/qty,dict(currency='CNY',cost_label='补库实收自动成品继承成本',inputs=evidence,
+                    quantity=qty,total_cost=str(total),basis='inherited_entry_cost_not_new_purchase')
             job=db.get(StockPreparationJob,lot.source_ref_id)
             origin=db.get(InventoryLot,detail.get('source_lot_id'))
             qty=int(detail['output_quantity']); take=int(detail['input_quantity']); total=Decimal(detail['total_cost'])
@@ -80,7 +112,13 @@ def derived_cost(db, lot, visited):
                 calculated+=stored*row['quantity'];evidence.append(dict(lot_id=origin.id,quantity=row['quantity'],basis=basis))
             if abs(calculated-total)>Decimal('.01') or abs(total/qty-Decimal(str(lot.estimated_unit_cost_snapshot)))>Decimal('.0001'):
                 return None, {'validation_issue':'备库组套成本不守恒'}
-            return total/qty,dict(**{k:detail[k] for k in ('assembly_standard','standard_labour_unit_cost','standard_labour_missing','product_unit') if k in detail},currency='CNY',cost_label='备库组套继承成本',quantity=qty,total_cost=str(total),inputs=evidence,basis='inherited_entry_cost_not_new_purchase')
+            consumed_spec=detail.get('consumed_assembly_spec')
+            if consumed_spec is not None:
+                from app.services.bom_entry_cost import consumed_assembly_spec_issues
+                issues=consumed_assembly_spec_issues(consumed_spec,lot.finished_detail.physical_basis_json,
+                    [dict(lot_id=r['lot_id'],product_id=r['product_id'],quantity=r['quantity']) for r in command['inputs']])
+                if issues:return None, {'validation_issue':'；'.join(issues)}
+            return total/qty,dict(**{k:detail[k] for k in ('assembly_standard','standard_labour_unit_cost','standard_labour_missing','product_unit','consumed_assembly_spec') if k in detail},currency='CNY',cost_label='备库组套继承成本',quantity=qty,total_cost=str(total),inputs=evidence,basis='inherited_entry_cost_not_new_purchase')
         if lot.cost_snapshot_source == 'stock_preparation_finish':
             from app.models.stock_preparation import StockPreparationCommand, StockPreparationJob
             from app.services.finished_stock_identity import matches_stock_identity
@@ -201,7 +239,13 @@ def derived_cost(db, lot, visited):
             result=assembly.total_cost/assembly.quantity
             if lot.estimated_unit_cost_snapshot is None or abs(result-Decimal(str(lot.estimated_unit_cost_snapshot)))>Decimal('.0001'):
                 return None, {'validation_issue':'组套产出单价与来源不一致'}
-            return result,dict(**{k:detail[k] for k in ('assembly_standard','standard_labour_unit_cost','standard_labour_missing','product_unit') if k in detail},currency='CNY',cost_label='组套继承成本',assembly_id=assembly.id,
+            consumed_spec=detail.get('consumed_assembly_spec')
+            if consumed_spec is not None:
+                from app.services.bom_entry_cost import consumed_assembly_spec_issues
+                issues=consumed_assembly_spec_issues(consumed_spec,lot.finished_detail.physical_basis_json,
+                    [dict(lot_id=r.lot_id,product_id=r.product_id,quantity=r.quantity) for r in inputs])
+                if issues:return None, {'validation_issue':'；'.join(issues)}
+            return result,dict(**{k:detail[k] for k in ('assembly_standard','standard_labour_unit_cost','standard_labour_missing','product_unit','consumed_assembly_spec') if k in detail},currency='CNY',cost_label='组套继承成本',assembly_id=assembly.id,
                 total_cost=str(assembly.total_cost),quantity=assembly.quantity,inputs=evidence,basis='inherited_entry_cost_not_new_purchase')
     except (ValueError,TypeError,KeyError,ArithmeticError):
         return None, {'validation_issue':'加工或组套成本记录格式不完整'}

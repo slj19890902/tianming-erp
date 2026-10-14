@@ -61,12 +61,15 @@ def test_completion_lot_pallet_and_ground_occupancy_use_same_target_and_replay_i
     from app.services.multilevel_bom_semi_production import preview_semi_production
     factory, slots, source_lot_id, reservation_id = semi_case
     target=slots[1] if explicit else None
-    expected=slots[1] if explicit else slots[0]
     with factory() as db:
         before=_facts(db)
         _, _, default=preview_semi_production(db,order_item_id=1,product_id=2)
         _, _, none=preview_semi_production(db,order_item_id=1,product_id=2,target_location_id=None)
-        assert default==none and default['production_location']['id']==slots[0]
+        # The unified putaway rule reuses this real product's existing formal
+        # raw/semi location.  An explicit eligible target still wins for this
+        # one operation and never relocates the historical source lot.
+        assert default==none
+        expected=slots[1] if explicit else default['production_location']['id']
         _, _, review=preview_semi_production(db,order_item_id=1,product_id=2,target_location_id=target)
         assert review['ready'] and review['production_location']['id']==expected
         assert _facts(db)==before

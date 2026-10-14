@@ -3,7 +3,8 @@ from sqlalchemy import select, update
 from app.models.receipt_putaway import ProductStoragePreference, ReceiptStagingArea
 from app.models.product import Product
 from app.models.user import User
-from app.models.warehouse_inventory import WarehouseArea, WarehouseFloor, WarehouseLocation, InventoryLot
+from app.models.warehouse_inventory import (WarehouseArea, WarehouseFloor, WarehouseLocation, InventoryLot,
+    FinishedGoodsInventoryDetail, SemiFinishedLotAllowedProduct)
 from app.services.fixed_shelf import ShelfError, location_info
 from app.services.location_candidates import operational_location_issue, claim_active_placed_location
 
@@ -25,6 +26,39 @@ def location_issue(db, location, inventory_type="finished"):
         return "货位不存在"
     return operational_location_issue(db, location, warehouse_types={inventory_type, "shared"},
         require_published=True, require_map_geometry=True, required_inventory_type=inventory_type)
+
+
+def _existing_product_locations(db, product_id, customer_id, inventory_type):
+    lot_ids=set(db.scalars(select(FinishedGoodsInventoryDetail.inventory_lot_id).where(
+        FinishedGoodsInventoryDetail.product_id==product_id,
+        FinishedGoodsInventoryDetail.owner_customer_id==customer_id)))
+    lot_ids.update(db.scalars(select(SemiFinishedLotAllowedProduct.inventory_lot_id).where(
+        SemiFinishedLotAllowedProduct.product_id==product_id)))
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.stock_replenishment import StockReplenishmentOrderItem
+    from app.models.order import OrderItem
+    lot_ids.update(db.scalars(select(IncomingReceiptItem.received_inventory_lot_id).join(
+        StockReplenishmentOrderItem,
+        StockReplenishmentOrderItem.id==IncomingReceiptItem.stock_replenishment_item_id).where(
+        IncomingReceiptItem.status=='posted',IncomingReceiptItem.received_inventory_lot_id.is_not(None),
+        StockReplenishmentOrderItem.customer_id==customer_id,
+        (StockReplenishmentOrderItem.product_id==product_id)
+        | (StockReplenishmentOrderItem.reference_product_id==product_id))))
+    lot_ids.update(db.scalars(select(IncomingReceiptItem.received_inventory_lot_id).join(
+        OrderItem,OrderItem.id==IncomingReceiptItem.order_item_id).where(
+        IncomingReceiptItem.status=='posted',IncomingReceiptItem.received_inventory_lot_id.is_not(None),
+        OrderItem.product_id==product_id)))
+    lot_ids.discard(None)
+    if not lot_ids:return []
+    rows=list(db.scalars(select(InventoryLot).where(InventoryLot.id.in_(lot_ids),
+        InventoryLot.status.in_(['active','frozen']),
+        InventoryLot.quantity_available+InventoryLot.quantity_reserved+InventoryLot.quantity_damaged>0)))
+    locations=[]
+    for location_id in sorted({row.warehouse_location_id for row in rows}):
+        location=db.get(WarehouseLocation,location_id)
+        if location_issue(db,location,inventory_type) is None:
+            locations.append(location)
+    return locations
 
 
 def info(db, product_id):
@@ -110,8 +144,6 @@ def remember_stocktake(db, lot, operator_id, *, follow_position=False):
 def resolve(db, *, product_id=None, customer_id=None, claim=False, inventory_type="finished"):
     """None means installation has not yet configured the new receipt workflow."""
     staging_ids = set(db.scalars(select(ReceiptStagingArea.area_id)).all())
-    if not staging_ids:
-        return None
     warning = None
     pref = None
     if product_id is not None:
@@ -122,7 +154,7 @@ def resolve(db, *, product_id=None, customer_id=None, claim=False, inventory_typ
             db.execute(update(Product).where(Product.id == product_id).values(product_code=Product.product_code))
         pref = db.get(ProductStoragePreference, product_id, populate_existing=True)
     candidates = []
-    if pref and pref.area_id and inventory_type == "finished":
+    if pref and pref.area_id:
         if pref.location_id:
             candidates = [db.get(WarehouseLocation, pref.location_id)]
         else:
@@ -130,15 +162,16 @@ def resolve(db, *, product_id=None, customer_id=None, claim=False, inventory_typ
             if area:
                 candidates = list(db.scalars(select(WarehouseLocation).where(WarehouseLocation.warehouse_floor == area.floor.floor_number,
                     WarehouseLocation.area_code == area.area_code, WarehouseLocation.is_active.is_(True)).order_by(WarehouseLocation.id)).all())
-        warning = "默认货位不可用，已转待归位"
-    elif pref is None and product_id and inventory_type == "finished":
+        warning = "产品默认货位不可用"
+    elif pref is None and product_id:
         from app.services.fixed_shelf import incoming_primary_location
-        try:
-            old = incoming_primary_location(db, product_id=product_id, customer_id=customer_id, claim=claim)
-            if old:
-                return old, "fixed_shelf", None
-        except ShelfError as exc:
-            warning = f"默认货位不可用，已转待归位：{exc}"
+        if inventory_type == 'finished':
+            try:
+                old = incoming_primary_location(db, product_id=product_id, customer_id=customer_id, claim=claim)
+                if old:
+                    return old, "fixed_shelf", None
+            except ShelfError as exc:
+                warning = f"固定货位不可用：{exc}"
     for loc in candidates:
         if loc is None or location_issue(db, loc, inventory_type):
             continue
@@ -147,8 +180,38 @@ def resolve(db, *, product_id=None, customer_id=None, claim=False, inventory_typ
         binding = db.get(ShelfBinding, loc.id)
         if binding and binding.product_id != product_id:
             continue
+        if pref is not None and pref.location_id == loc.id:
+            return loc, "product_storage", None
         if not claim or claim_active_placed_location(db, loc.id, expected_layout_version=loc.floor3_layout.version):
             return loc, "product_storage", None
+    if pref and pref.location_id:
+        issue=location_issue(db,db.get(WarehouseLocation,pref.location_id),inventory_type)
+        raise ShelfError(f"产品默认货位不可用：{issue or '固定货位被其他产品占用'}；请重新选择正式货位")
+    if pref and not pref.location_id:
+        raise ShelfError("该产品默认货位已取消；请在本次收料前重新选择正式货位")
+    if product_id is not None:
+        existing=_existing_product_locations(db,product_id,customer_id,inventory_type)
+        if len(existing)>1:
+            names='、'.join(f"{row.location_code}（{row.location_name}）" for row in existing[:6])
+            raise ShelfError(f"该产品现有多个正式货位：{names}；请员工一次选定默认入库位置")
+        if len(existing)==1:
+            location=existing[0]
+            area=db.scalar(select(WarehouseArea).join(WarehouseFloor).where(
+                WarehouseFloor.floor_number==location.warehouse_floor,
+                WarehouseArea.area_code==location.area_code))
+            if area is None:
+                raise ShelfError("现存货位缺少正式区域身份，请先在仓库地图核对")
+            # Projection/preflight is read-only.  The posting path repeats the
+            # same resolution under the product row lock and is the only path
+            # allowed to persist the stable default.
+            if claim:
+                db.add(ProductStoragePreference(product_id=product_id,area_id=area.id,
+                    location_id=location.id,version=1));db.flush()
+            return location,'product_storage',None
+    if not staging_ids:
+        return None
+    if product_id is not None:
+        raise ShelfError("该产品尚无正式默认货位；请在收料流程中选择一次正式货位后再提交")
     staging = []
     blocked_areas = []
     for area in db.scalars(select(WarehouseArea).where(WarehouseArea.id.in_(staging_ids))).all():

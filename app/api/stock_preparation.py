@@ -187,9 +187,9 @@ def completion_result(receipt_id:int,body:CompletionResultRequest,response:Respo
 
 
 class GroupJobAction(BaseModel):
-    job_id: int = Field(gt=0,strict=True)
-    job_version: int = Field(gt=0,strict=True)
-    lot_version: int = Field(gt=0,strict=True)
+    job_id: int | None = Field(default=None,gt=0,strict=True)
+    job_version: int = Field(default=0,ge=0,strict=True)
+    lot_version: int = Field(default=0,ge=0,strict=True)
     actual_output: int = Field(default=0,ge=0,strict=True)
     output_version: int = Field(default=0,ge=0,strict=True)
     location_id: int | None = None

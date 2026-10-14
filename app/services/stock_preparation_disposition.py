@@ -134,6 +134,12 @@ def assemble(db,payload,actor,*,result_builder=None):
     from app.services.finished_stock_identity import product_basis,_with_assembly,_child_basis
     basis=_with_assembly(parent_basis,[
         _child_basis(c['product_id'],c['per_set'],json.loads(next(j for j in jobs if j.product_id==c['product_id']).product_snapshot)['physical_basis']) for c in recipe['children']])
+    from app.services.bom_entry_cost import freeze_consumed_assembly_spec
+    try:
+        consumed_spec=freeze_consumed_assembly_spec(db,parent_basis=basis,output_quantity=sets,
+            sources=[(db.get(InventoryLot,r['lot_id']),r['quantity'],r['product_id']) for r in inputs])
+    except ValueError as error:
+        prep.fail(str(error))
     output=manual_finished_in(db,customer_id=recipe['customer_id'],product_id=recipe['parent_id'],location_id=payload['location_id'],quantity=sets,
         stock_date=beijing_today(),source_type='transfer',remarks='备库子件已组装成套',operator_id=actor.id,idempotency_key='prep-kit:'+key,
         source_ref_type='preparation_assembly',source_ref_id=jobs[0].id,expected_layout_version=payload['layout_version'],
@@ -143,7 +149,7 @@ def assemble(db,payload,actor,*,result_builder=None):
     output.estimated_unit_cost_snapshot=total_cost/sets if cost_known else None
     from app.services.bom_entry_cost import freeze_assembly_standard
     labour=freeze_assembly_standard(db,recipe['parent_id'],[(db.get(InventoryLot,r['lot_id']),r['quantity']) for r in inputs],sets)
-    output.cost_snapshot_source='stock_preparation_assembly';output.cost_snapshot_detail_json=encode(dict(inputs=inputs,total_cost=str(total_cost) if cost_known else None,**labour))
+    output.cost_snapshot_source='stock_preparation_assembly';output.cost_snapshot_detail_json=encode(dict(inputs=inputs,total_cost=str(total_cost) if cost_known else None,consumed_assembly_spec=consumed_spec,**labour))
     for source in inputs:release_empty_output_pallet(db,db.get(InventoryLot,source['lot_id']),actor)
     result['output_lot_id']=output.id;result['placed_at_utc']=utc_now_naive().isoformat()
     if result_builder is not None:

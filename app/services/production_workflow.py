@@ -668,7 +668,10 @@ def lock_order_rows_for_production_transition(
         claimed = db.execute(
             update(Order)
             .where(Order.id == order_id)
-            .values(status=Order.status)
+            # This is a serialization write, not a business edit.  Preserve
+            # the business timestamp so an idempotent replay is byte-for-byte
+            # invisible to order facts even when it crosses a clock second.
+            .values(status=Order.status, updated_at=Order.updated_at)
             .execution_options(synchronize_session=False)
         )
         if claimed.rowcount != 1:
@@ -2079,12 +2082,14 @@ def _receipt_auto_finished_ground_target(
     excluded_location_ids: set[int] | None = None,
     customer_id: int | None = None,
     product_id: int | None = None,
+    inventory_type: str = "finished",
 ) -> ReceiptAutoFinishedGroundTarget:
     excluded = excluded_location_ids or set()
     from app.services.receipt_putaway import resolve
     from app.services.fixed_shelf import ShelfError
     try:
-        resolved = resolve(db, product_id=product_id, customer_id=customer_id, claim=claim)
+        resolved = resolve(db, product_id=product_id, customer_id=customer_id, claim=claim,
+            inventory_type=inventory_type)
     except ShelfError as exc:
         raise ProductionWorkflowError(str(exc), 409) from exc
     if resolved is not None:
@@ -2328,6 +2333,8 @@ def receipt_auto_finished_location_projection(
     db: Session,
     *,
     customer_id: int | None = None,
+    product_id: int | None = None,
+    inventory_type: str = "finished",
 ) -> dict[str, object]:
     """Return the authoritative employee-safe real receipt destination."""
 
@@ -2336,6 +2343,8 @@ def receipt_auto_finished_location_projection(
             db,
             claim=False,
             customer_id=customer_id,
+            product_id=product_id,
+            inventory_type=inventory_type,
         )
     except ProductionWorkflowError as error:
         return {
@@ -2529,7 +2538,7 @@ def _bind_direct_completion_lots_to_system_pallet(
                 active_slot is None
                 or total_physical_quantity <= 0
                 or int(occupancy.capacity_quantity or 0)
-                != total_physical_quantity
+                < total_physical_quantity
             ):
                 raise ProductionWorkflowError("真实地堆占用数量或位置事实不一致", 409)
             placement_key = _stable_key(
@@ -3127,6 +3136,7 @@ def _stock_completion_lot(
     source_type: str = "production_surplus",
     movement_reason: str = "生产完工入库",
     semi_cost_detail: dict | None = None,
+    ground_capacity_quantity: int | None = None,
 ) -> InventoryLot:
     snapshot = (
         db.get(SalesOrderItemBomComponent, task.sales_order_item_bom_component_id)
@@ -3293,6 +3303,7 @@ def _stock_completion_lot(
             and location.floor3_layout is not None
             else command.expected_layout_version
         ),
+        ground_capacity_quantity=ground_capacity_quantity,
     )
     if snapshot is None:
         reserve_quantity = max(
@@ -5110,7 +5121,9 @@ def post_automatic_receipt_completion(
             raise ProductionWorkflowError("半成品生产确认与真实预占、数量或成本不一致", 409)
         cost_detail = {**cost_detail, "bom_semi_confirmation": True}
     from app.services.unfinished_components import unfinished_reservations
-    if processing_manual:
+    automatic_component_processing = bool(cost_detail.get("automatic_component_processing"))
+    processing_confirmation = bool(processing_manual or automatic_component_processing)
+    if processing_confirmation:
         from app.services.component_processing import plan_processing
         _, _, processing_plan, _, _ = plan_processing(db,item.id,int(cost_detail.get('processing_product_id') or 0))
         if (before != processing_plan['before'] or after != processing_plan['after']
@@ -5159,6 +5172,13 @@ def post_automatic_receipt_completion(
         product_id=graph_snapshot.component_product_id if graph_snapshot is not None else item.product_id,
     ))
     location = ground_target.location
+    existing_location_physical = int(db.scalar(select(func.coalesce(func.sum(
+        InventoryLot.quantity_available + InventoryLot.quantity_reserved
+        + InventoryLot.quantity_damaged), 0)).where(
+            InventoryLot.warehouse_location_id == location.id,
+            InventoryLot.inventory_type == "finished",
+            InventoryLot.status.in_(("active", "frozen")),
+        )) or 0)
     existing_posted = db.scalar(
         select(ProductionCompletion.id)
         .where(
@@ -5224,13 +5244,13 @@ def post_automatic_receipt_completion(
         initial_disposition="stock" if is_assembly_body else "direct",
         warehouse_location_id=location.id,
         inventory_lot_id=None,
-        remarks="确认按冻结订单要求完成部件加工" if processing_manual else "确认半成品预占加工完成" if semi_only else "收料后按冻结订单用途自动形成理论成品",
+        remarks="收料后按冻结需求自动完成部件加工" if automatic_component_processing else "确认按冻结订单要求完成部件加工" if processing_manual else "确认半成品预占加工完成" if semi_only else "收料后按冻结订单用途自动形成理论成品",
         completed_by=operator_id,
         completed_at=now,
     )
     db.add(completion)
     db.flush()
-    if graph_snapshot is not None or processing_manual:
+    if graph_snapshot is not None or processing_confirmation:
         from app.services.multilevel_bom_receipts import consume_node_semi_inputs
         consume_node_semi_inputs(db, completion=completion,
             inputs=cost_detail.get("bom_material_inputs", []), operator_id=operator_id)
@@ -5246,7 +5266,7 @@ def post_automatic_receipt_completion(
         material_input_quantity=int(material_input_delta),
         actual_output_quantity=delta,
         direct_delivery_quantity=0 if is_assembly_body else delta,
-        remarks="半成品加工完成进入当前真实成品位置" if (semi_only or processing_manual) else "收料自动成品进入当前真实成品位置",
+        remarks="半成品加工完成进入当前真实成品位置" if (semi_only or processing_confirmation) else "收料自动成品进入当前真实成品位置",
     )
     lot = _stock_completion_lot(
         db,
@@ -5260,8 +5280,17 @@ def post_automatic_receipt_completion(
         location_id_override=location.id,
         finished_ground_target=ground_target,
         source_type="production_completion",
-        movement_reason="半成品预占加工完成入库" if (semi_only or processing_manual) else "订单用途来料自动形成成品并进入当前真实成品位置",
+        movement_reason="半成品预占加工完成入库" if (semi_only or processing_confirmation) else "订单用途来料自动形成成品并进入当前真实成品位置",
         semi_cost_detail=cost_detail if semi_only else None,
+        # The first partial receipt must not freeze a ground slot's quantity
+        # ceiling at that first delta.  Keep the same formal product position
+        # while recording at least the frozen requirement and every later
+        # cumulative output.
+        ground_capacity_quantity=max(
+            existing_location_physical,
+            max(existing_location_physical - before, 0)
+            + max(required_quantity, after),
+        ),
     )
     completion.inventory_lot_id = lot.id
     if is_assembly_body:
@@ -5291,7 +5320,7 @@ def post_automatic_receipt_completion(
     ).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
     lot.estimated_square_price_snapshot = None
     lot.estimated_cost_area_m2_snapshot = None
-    lot.cost_snapshot_source = ("component_processing_actual" if cost_detail.get('actual') else "component_processing_estimate") if processing_manual else "semi_finished_estimate" if semi_only else "purchase_receipt_actual"
+    lot.cost_snapshot_source = ("component_processing_actual" if cost_detail.get('actual') else "component_processing_estimate") if processing_confirmation else "semi_finished_estimate" if semi_only else "purchase_receipt_actual"
     lot.cost_snapshot_detail_json = json.dumps(
         {
             **cost_detail,
@@ -5318,7 +5347,7 @@ def post_automatic_receipt_completion(
     task.ordered_quantity_snapshot = required_quantity
     task.material_received_quantity = received_before if semi_only else int(material_input_cumulative)
     task.material_input_quantity = int(material_input_cumulative)
-    task.readiness_basis = "component_processing_confirmation" if processing_manual else "semi_finished_confirmation" if semi_only else "automatic_receipt"
+    task.readiness_basis = "component_processing_confirmation" if processing_confirmation else "semi_finished_confirmation" if semi_only else "automatic_receipt"
     task.ready_at = task.ready_at or now
     task.version = max(int(task.version or 1), 1) + 1
     db.flush()

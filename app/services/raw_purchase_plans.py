@@ -275,6 +275,24 @@ def on_receipt(db,receipt,lot,price,actor):
             task.planned_quantity=item.quantity if allocated==required else 0
         task.readiness_basis='raw_purchase_processing'
     db.flush()
+    # Latest business rule: a frozen, fully received order route is completed in
+    # this receipt transaction.  Incomplete pairs remain real reserved pieces.
+    from app.services.component_processing import preview_processing,confirm_processing
+    from app.services.bom_subkits import SubkitError
+    for item_id in sorted(items):
+        product_ids=sorted({d.product_id for d in demands if d.order_item_id==item_id})
+        for product_id in product_ids:
+            try:
+                reviewed=preview_processing(db,order_item_id=item_id,product_id=product_id)
+            except SubkitError as error:
+                if any(text in str(error) for text in ('尚未全部到齐','尚未形成可加工齐套数量','当前没有待加工')):
+                    continue
+                raise
+            confirm_processing(db,order_item_id=item_id,product_id=product_id,
+                reviewed_hash=reviewed['reviewed_hash'],
+                operation_key=f'raw-receipt-auto:{receipt.id}:{item_id}:{product_id}',
+                actor=actor,automatic=True)
+    db.flush()
 
 
 def validate_reservation(db,reservation,lot,requirement,*,delivery=False):
@@ -364,9 +382,15 @@ def production_summaries(db,item_ids):
     for item_id,demands in grouped.items():
         item=db.get(OrderItem,item_id);summary=_empty_summary();states=[];credits={};capacities=[]
         completions=[c for c,d in processing_completions(db,item_id) if d['processing_product_id']==item.product_id]
-        manual=sum(c.actual_output_quantity for c in completions)
-        summary.update(manual_processing_output_qty=manual,manual_processing_reserved_qty=sum(c.order_reserved_quantity for c in completions),
-            manual_processing_surplus_qty=sum(c.surplus_finished_quantity for c in completions),requires_component_processing=True,raw_purchase_processing=True)
+        automatic=sum(c.actual_output_quantity for c in completions if c.origin=='receipt_auto')
+        manual=sum(c.actual_output_quantity for c in completions if c.origin=='manual')
+        total=automatic+manual
+        summary.update(automatic_finished_output_qty=automatic,
+            automatic_order_reserved_quantity=sum(c.order_reserved_quantity for c in completions if c.origin=='receipt_auto'),
+            automatic_surplus_finished_quantity=sum(c.surplus_finished_quantity for c in completions if c.origin=='receipt_auto'),
+            manual_processing_output_qty=manual,manual_processing_reserved_qty=sum(c.order_reserved_quantity for c in completions if c.origin=='manual'),
+            manual_processing_surplus_qty=sum(c.surplus_finished_quantity for c in completions if c.origin=='manual'),
+            requires_component_processing=False,raw_purchase_processing=True)
         for demand in demands:
             requirement=db.get(OrderItemSemiRequirement,demand.requirement_id);row=json.loads(demand.snapshot_json)
             allocations=list(db.scalars(select(RawPurchaseReceiptAllocation).where(RawPurchaseReceiptAllocation.demand_id==demand.id)))
@@ -385,13 +409,17 @@ def production_summaries(db,item_ids):
         if db.get(OrderBomGraph,item_id):
             from app.services.multilevel_bom_receipt_projection import project_graph_receipts
             project_graph_receipts(db,item_id,summary,states,credits)
-            from app.services.unfinished_components import unfinished_reservations
-            summary['requires_component_processing']=bool(summary['remaining_order_purpose_sheet_qty'] or unfinished_reservations(db,item_id))
+            # Frozen raw-plan receipts now drive component processing and graph assembly
+            # inside the receipt transaction.  Incomplete receipts remain "待收料" or
+            # retained child inventory; they must not recreate the old daily
+            # "待加工" action after projection has populated the graph summary.
+            summary['requires_component_processing']=False
+            summary['pending_processing_quantity']=0
         else:
             capacity=min(capacities,default=0)
-            pending=max(capacity-manual,0)
-            summary.update(component_progress=states,current_theoretical_finished_capacity_qty=capacity,pending_processing_quantity=pending,
-                currently_unposted_finished_capacity_qty=0,requires_component_processing=bool(pending or summary['remaining_order_purpose_sheet_qty']),
-                projection_inconsistent=manual>capacity)
+            pending=max(capacity-total,0)
+            summary.update(component_progress=states,current_theoretical_finished_capacity_qty=capacity,pending_processing_quantity=0,
+                currently_unposted_finished_capacity_qty=pending,requires_component_processing=False,
+                projection_inconsistent=total>capacity)
         result[item_id]=summary
     return result

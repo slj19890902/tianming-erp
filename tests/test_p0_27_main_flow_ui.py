@@ -84,15 +84,19 @@ def test_delivery_finance_headers_and_controlled_invoice_task_rule_are_visible()
     assert "statement.invoice_status==='invoiced'" in finance_current
 
 
-def test_production_defaults_to_history_adjustment_and_staging_placement() -> None:
+def test_production_defaults_to_history_and_keeps_legacy_tasks_explicit() -> None:
     assert 'productionTab: "history"' in INDEX
     production = INDEX.split("<template v-else-if=\"activePage === 'production'\">", 1)[1].split(
         "<template v-else-if=\"activePage === 'deliveries'\">", 1
     )[0]
-    assert "生产与成品" in production
+    assert "生产工作台" in production
     assert "@click=\"productionTab='pending'\"" not in production
-    assert "完工历史" in production
-    assert "待送成品归位" in production
+    assert "待收料" in production
+    assert "可组套子件" in production
+    assert "已入库 / 成品" in production
+    assert "记录与异常" in production
+    assert "历史待核对" in production
+    assert "不会批量改成成品，也不会隐藏未完成任务" in production
     assert "modifyProductionActualQuantity(row)" in production
     assert "productionPlacement" in production
     assert ">归位</button>" in production
@@ -108,8 +112,15 @@ def test_production_defaults_to_history_adjustment_and_staging_placement() -> No
     assert "confirm(" in adjust
 
     transfer = _method(
-        "async transferProductionCompletionToStock(row)",
+        "async transferProductionCompletionToStock(row, selectedLocation = null)",
         "async modifyProductionActualQuantity(row)",
     )
     assert "confirm(" not in transfer
     assert "loadProductionPlacement" in transfer
+
+
+def test_incoming_location_blocker_offers_one_time_formal_location_selection() -> None:
+    assert "选择 / 修正该产品正式货位" in INDEX
+    assert "row.finished_location_ready===false" in INDEX
+    save = _method("async saveReceiptStorage(clear)", "customerPhoneAnalysis(value)")
+    assert "loadIncomingPendingPage" in save

@@ -20,6 +20,7 @@ from app.models import Base
 from app.models.access_control import UserCustomerScope, UserPermissionOverride
 from app.models.audit import OperationLog
 from app.models.customer import Customer
+from app.models.material import Material
 from app.models.product import Product
 from app.models.receipt_putaway import ProductStoragePreference
 from app.models.stocktake import StocktakeItem, StocktakeOrder
@@ -288,8 +289,23 @@ def stocktake_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         )
         db.add_all([admin, operator, other, customer, other_customer])
         db.flush()
+        material = Material(
+            code="K=A",
+            paper_composition="K=A",
+            layer_count=3,
+            flute_type="B",
+            quote_price=Decimal("2.5000"),
+            price_unit="元/㎡",
+            purchase_currency="CNY",
+            purchase_tax_included=True,
+            supplier_name="P1-47D 测试供应商",
+            is_active=True,
+        )
+        db.add(material)
+        db.flush()
         product = Product(
             customer_id=customer.id,
+            material_id=material.id,
             product_code="P147D-FG",
             customer_material_code="P147D-FG",
             product_name="五层加强纸箱",

@@ -4,10 +4,15 @@ GET projections never call these mutations. Splitting a task records the old
 reservation release and fresh batch reservations in the caller's transaction.
 """
 import json
-from sqlalchemy import select
+from decimal import Decimal
+from math import ceil
+from sqlalchemy import func, select, update
+from app.core.time_contract import beijing_today, utc_now_naive
+from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.product import Product
 from app.models.raw_purchase_plan import RawPurchasePlan
 from app.models.stock_preparation import StockPreparationJob as Job, StockPreparationCommand as Command
+from app.models.warehouse_inventory import InventoryLot, InventoryReservation
 from app.services import stock_preparation as prep
 from app.services.stock_preparation_groups import encode, digest
 
@@ -22,8 +27,6 @@ def processing_block(db, item, lot):
         return '统一原片已按订单分配，请使用订单加工入口'
     if not (item.reference_product_id or item.product_id):
         return '通用备料未指定加工产品'
-    if lot.quantity_available > 0 and lot.quantity_available*item.stock_yield_per_sheet//item.pieces_per_box<=0:
-        return '本批材料不足一个产品的投入，请保留原纸等待继续处理'
     from app.services.warehouse_goods import goods_profile
     profile = goods_profile(db, lot) or {}
     if profile.get('output_piece') or profile.get('dimension_basis') == 'source_board':
@@ -84,6 +87,189 @@ def auto_plan_receipt(db, receipt, lot, actor):
         return None
     return prep.mutate(db, receipt_id=receipt.id, actor=actor, frozen_snapshot=snapshot,
         payload=dict(action='plan', operation_key=key, lot_version=lot.version, quantity=planned_input))
+
+
+def auto_complete_receipt(db, receipt, lot, actor):
+    """Consume cumulative replenishment inputs and post only the new output delta."""
+    _, item, _ = prep.source(db, receipt.id)
+    block = processing_block(db, item, lot)
+    if block:
+        return None
+    key = 'auto-stock-complete:' + str(receipt.id)
+    previous = db.get(Command, key)
+    if previous:
+        return json.loads(previous.result_json)
+    snapshot = freeze_snapshot(db, item, lot)
+    factor = int(snapshot['factor']); pieces = int(snapshot['pieces_per_box'])
+    planned = int(receipt.planned_quantity)
+    cumulative = min(int(receipt.cumulative_received_quantity), planned)
+    target_output = cumulative * factor // pieces
+    receipt_ids = list(db.scalars(select(IncomingReceiptItem.id).where(
+        IncomingReceiptItem.stock_replenishment_item_id == item.id,
+        IncomingReceiptItem.status == 'posted').order_by(IncomingReceiptItem.id)))
+    completed = list(db.scalars(select(Job).where(
+        Job.receipt_item_id.in_(receipt_ids), Job.status == 'completed')))
+    produced = sum(int(row.actual_output or 0) for row in completed)
+    output_delta = target_output - produced
+    if output_delta <= 0:
+        return None
+    target_consumed = min(ceil(target_output * pieces / factor), planned)
+    consumed = sum(int(row.input_quantity or 0) for row in completed)
+    input_delta = target_consumed - consumed
+    if input_delta <= 0:
+        prep.fail('累计实收产出增加但冻结投入没有增加，请核对数量换算')
+    candidates = list(db.scalars(select(InventoryLot).join(IncomingReceiptItem,
+        IncomingReceiptItem.received_inventory_lot_id == InventoryLot.id).where(
+        IncomingReceiptItem.stock_replenishment_item_id == item.id,
+        IncomingReceiptItem.status == 'posted', InventoryLot.status == 'active',
+        InventoryLot.inventory_type == 'semi_finished', InventoryLot.quantity_available > 0)
+        .order_by(IncomingReceiptItem.id, InventoryLot.id)))
+    remaining=input_delta;sources=[]
+    for source in candidates:
+        if remaining<=0:break
+        take=min(remaining,int(source.quantity_available or 0))
+        source_receipt=db.scalar(select(IncomingReceiptItem).where(
+            IncomingReceiptItem.received_inventory_lot_id==source.id,
+            IncomingReceiptItem.stock_replenishment_item_id==item.id,
+            IncomingReceiptItem.status=='posted').order_by(IncomingReceiptItem.id).limit(1))
+        if take<=0 or source_receipt is None:continue
+        if processing_block(db,item,source):
+            prep.fail(f'来源批次 {source.lot_number} 已不满足冻结加工条件')
+        sources.append((source_receipt,source,take));remaining-=take
+    if remaining:
+        prep.fail('累计实收原料可用量不足，不能自动形成应产成品')
+    total=Decimal(0);input_rows=[];jobs=[]
+    for source_receipt,source,take in sources:
+        from app.services.inventory_valuation import require_inherited_entry_cost
+        require_inherited_entry_cost(db,source)
+        reservation=InventoryReservation(reservation_number='SPA-'+digest([key,source.id])[:20],
+            inventory_lot_id=source.id,reservation_type='semi_order',reserved_stock_quantity=take,
+            consumed_stock_quantity=take,status='consumed',reserved_by=actor.id,reserved_at=utc_now_naive(),
+            consumed_by=actor.id,consumed_at=utc_now_naive(),idempotency_key='prep:'+digest([key,source.id])[:60],
+            warning_codes='stock_preparation_auto',reservation_group_key=key)
+        db.add(reservation);db.flush()
+        expected=max(take*factor//pieces,1)
+        job=Job(receipt_item_id=source_receipt.id,reservation_id=reservation.id,
+            product_id=snapshot['product_id'],product_snapshot=encode(dict(snapshot,automatic_completion=True,
+                cumulative_received_quantity=cumulative,cumulative_target_output=target_output)),
+            input_quantity=take,expected_output=expected,actual_output=0,status='completed')
+        db.add(job);db.flush();before=prep._balances(source)
+        changed=db.execute(update(InventoryLot).where(InventoryLot.id==source.id,
+            InventoryLot.version==source.version,InventoryLot.status=='active',
+            InventoryLot.quantity_available>=take).values(
+                quantity_available=InventoryLot.quantity_available-take,
+                quantity_consumed=InventoryLot.quantity_consumed+take,
+                version=InventoryLot.version+1,last_movement_at=utc_now_naive()))
+        if changed.rowcount!=1:prep.fail('自动加工来源库存已变化，请刷新重试')
+        db.refresh(source);movement_key='prep-auto:'+digest([key,source.id])[:50]
+        prep._movement(db,lot=source,movement_type='consume',quantity=take,before=before,
+            operator_id=actor.id,reservation_id=reservation.id,reason='补库实收自动形成产品',
+            idempotency_key=movement_key)
+        unit=Decimal(str(source.estimated_unit_cost_snapshot));total+=unit*take
+        input_rows.append(dict(lot_id=source.id,receipt_item_id=source_receipt.id,
+            job_id=job.id,reservation_id=reservation.id,product_id=snapshot['product_id'],
+            quantity=take,unit_cost=str(unit),movement_key=movement_key))
+        jobs.append(job)
+    anchor=jobs[-1];anchor.actual_output=output_delta
+    contract=snapshot.get('frozen_bom_plan')
+    output_kind='semi' if contract and contract.get('parent_product_id')!=snapshot['product_id'] else 'finished'
+    from app.services.production_workflow import _receipt_auto_finished_ground_target
+    target_product_id=(snapshot['product_id'] if output_kind=='semi' else snapshot['product_id'])
+    from app.services.receipt_putaway import location_issue
+    from app.models.receipt_putaway import ProductStoragePreference
+    from app.models.warehouse_inventory import WarehouseArea,WarehouseFloor,WarehouseLocation
+    source_location_ids={source.warehouse_location_id for _,source,_ in sources}
+    if len(source_location_ids)==1 and db.get(ProductStoragePreference,target_product_id) is None:
+        source_location=db.get(WarehouseLocation,next(iter(source_location_ids)))
+        inventory_type='semi_finished' if output_kind=='semi' else 'finished'
+        if location_issue(db,source_location,inventory_type) is None:
+            area=db.scalar(select(WarehouseArea).join(WarehouseFloor).where(
+                WarehouseFloor.floor_number==source_location.warehouse_floor,
+                WarehouseArea.area_code==source_location.area_code))
+            if area is not None:
+                db.execute(update(Product).where(Product.id==target_product_id).values(
+                    product_code=Product.product_code))
+                db.add(ProductStoragePreference(product_id=target_product_id,area_id=area.id,
+                    location_id=source_location.id,version=1));db.flush()
+    target=_receipt_auto_finished_ground_target(db,claim=True,customer_id=item.customer_id,
+        product_id=target_product_id,inventory_type='semi_finished' if output_kind=='semi' else 'finished')
+    payload=dict(location_id=target.location.id,layout_version=target.layout_version)
+    if output_kind=='semi':
+        from app.services.stock_preparation_disposition import semi_output
+        output=semi_output(db,anchor,sources[-1][1],item,output_delta,target.location,payload,actor)
+    else:
+        from app.services.warehouse_inventory import manual_finished_in
+        output=manual_finished_in(db,customer_id=item.customer_id,product_id=snapshot['product_id'],
+            location_id=target.location.id,quantity=output_delta,stock_date=beijing_today(),source_type='transfer',
+            remarks='补库实收自动成品',operator_id=actor.id,idempotency_key='prep-auto-out:'+str(receipt.id),
+            source_ref_type='stock_preparation',source_ref_id=anchor.id,
+            expected_layout_version=target.layout_version,movement_reason='补库实收自动形成成品',
+            physical_basis_json=snapshot['physical_basis'])
+    anchor.output_lot_id=output.id
+    output.estimated_unit_cost_snapshot=total/output_delta
+    output.cost_snapshot_source='stock_preparation'
+    output.cost_snapshot_detail_json=encode(dict(automatic_batch=True,source_lot_id=input_rows[-1]['lot_id'],
+        input_quantity=input_delta,output_quantity=output_delta,total_cost=str(total),inputs=input_rows,
+        cumulative_received_quantity=cumulative,cumulative_target_output=target_output))
+    result=dict(action='automatic_complete',receipt_item_id=receipt.id,input_quantity=input_delta,
+        output_quantity=output_delta,output_lot_id=output.id,output_kind=output_kind,
+        location_id=target.location.id,job_ids=[row.id for row in jobs])
+    db.flush()
+    # Automatic receipt completion must honor the same explicitly confirmed
+    # cross-customer physical-stock policy as the former manual completion.
+    # Enrol only after the output identity and frozen cost evidence are final.
+    from app.services.shared_bom_stock import enroll_completed_bom
+    enroll_completed_bom(db,output,operator_id=actor.id)
+    assembly=_auto_assemble_frozen_parent(db,receipt,item,snapshot,actor)
+    if assembly is not None:
+        result['assembly']=assembly
+    if receipt.stock_replenishment_item_id is not None:
+        from app.services.order_replenishment_supply import reconcile_outputs
+        reconcile_outputs(db,operator_id=actor.id,source_item_ids=[receipt.stock_replenishment_item_id])
+    db.add(Command(operation_key=key,receipt_item_id=receipt.id,request_json=encode(dict(
+        action='automatic_complete',receipt_item_id=receipt.id,
+        cumulative_received_quantity=cumulative,target_output=target_output)),
+        result_json=encode(result),actor_id=actor.id))
+    from app.services.audit_log import append_audit_event
+    append_audit_event(db,event_category='business',result='success',source='system',module_code='incoming',
+        action_code='stock_preparation.automatic_complete',resource='incoming_receipt',actor=actor,
+        entity_type='incoming_receipt_item',entity_id=receipt.id,details=dict(result,inputs=input_rows))
+    return result
+
+
+def _auto_assemble_frozen_parent(db, receipt, item, snapshot, actor):
+    contract=snapshot.get('frozen_bom_plan')
+    if not contract or contract.get('parent_product_id')==snapshot.get('product_id'):
+        return None
+    parent_id=int(contract['parent_product_id']);target_sets=int(contract.get('finished_quantity') or 0)
+    if target_sets<=0:prep.fail('冻结BOM缺少目标套数')
+    completed=0
+    for command in db.scalars(select(Command).where(Command.operation_key.like('auto-stock-assembly:%'))):
+        try:
+            value=json.loads(command.result_json)
+        except (TypeError,ValueError):
+            continue
+        if value.get('action')!='assemble' or value.get('recipe',{}).get('parent_id')!=parent_id:
+            continue
+        input_jobs=[db.get(Job,row.get('job_id')) for row in value.get('inputs',[])]
+        input_receipts=[db.get(IncomingReceiptItem,row.receipt_item_id) for row in input_jobs if row]
+        if input_receipts and all(row.stock_replenishment_item_id==item.id for row in input_receipts):
+            completed+=int(value.get('sets') or 0)
+    remaining=target_sets-completed
+    if remaining<=0:return None
+    from app.services.stock_preparation_assembly import preview,assemble_stock
+    first=preview(db,parent_id,1)
+    if first['shortages'] or first['available_sets']<=0:
+        return None
+    sets=min(remaining,int(first['available_sets']))
+    plan=preview(db,parent_id,sets)
+    if plan['shortages'] or not plan['sources']:
+        return None
+    from app.services.production_workflow import _receipt_auto_finished_ground_target
+    target=_receipt_auto_finished_ground_target(db,claim=True,customer_id=item.customer_id,product_id=parent_id)
+    return assemble_stock(db,dict(action='assemble_stock',parent_id=parent_id,sets=sets,
+        basis_hash=plan['basis_hash'],jobs=plan['sources'],location_id=target.location.id,
+        layout_version=target.layout_version,operation_key=f'auto-stock-assembly:{receipt.id}:{parent_id}'),actor)
 
 
 def process(db, receipt_id, payload, actor, *, result_builder=None):

@@ -977,6 +977,9 @@ async function mutateJson<T>(path: string, method: "POST" | "PUT" | "PATCH" | "D
   });
   const payload = response.status === 204 ? null : await response.json().catch(() => ({}));
   if (!response.ok) {
+    const detail = payload && typeof payload === "object" && "detail" in payload
+      ? (payload as {detail?:unknown}).detail : null;
+    if (detail && typeof detail === "object") window.TMEntryProduct?.offerRepair(detail);
     const error = new Error(apiErrorMessage(payload, response.status)) as Error & { status?: number };
     error.status = response.status;
     throw error;
@@ -1755,6 +1758,11 @@ export function WarehouseTwinApp() {
   const [stocktakeProductCandidates, setStocktakeProductCandidates] = useState<ProductCandidate[]>([]);
   const [stocktakeProductId, setStocktakeProductId] = useState("");
   const [entryProductRevision,setEntryProductRevision]=useState(0);
+  useEffect(() => {
+    const refresh = () => setEntryProductRevision((value) => value + 1);
+    window.addEventListener("inventory-entry-product-updated", refresh);
+    return () => window.removeEventListener("inventory-entry-product-updated", refresh);
+  }, []);
   useEffect(() => { setStocktakeStage("complete"); }, [stocktakeProductId]);
   const [stocktakeAddQuantity, setStocktakeAddQuantity] = useState("");
   const [stocktakeSupplementConfirmed, setStocktakeSupplementConfirmed] = useState(false);

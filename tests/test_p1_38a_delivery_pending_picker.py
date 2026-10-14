@@ -103,6 +103,17 @@ def test_prefetched_rows_are_reused_when_picker_opens() -> None:
     assert "await this.loadDeliveryBatchItems()" in toggle
 
 
+def test_delivery_picker_keeps_selection_and_quantity_first_with_left_import() -> None:
+    start=INDEX.index('<div v-if="deliveryForm.customer_id" class="panel delivery-unified-picker">')
+    end=INDEX.index('<div v-else class="empty">请先选择客户</div>',start)
+    block=INDEX[start:end]
+    head=block[block.index('<thead>'):block.index('</thead>')]
+    assert head.index('选择本页货物') < head.index('>本次数量<') < head.index('>存货编码<')
+    footer=block[block.rindex('<div class="toolbar" style="margin-top:10px">'):]
+    assert footer.index('>导入所选 {{ deliveryUnifiedSelectedCount() }}<') < footer.index('共 {{ deliveryBatchPicker.total }} 条')
+    assert 'common-picker-sticky-select' in block and 'common-picker-sticky-quantity' in block
+
+
 def test_real_pending_api_returns_complete_ten_row_pages_without_keyword(
     delivery_scaling_app,
 ) -> None:

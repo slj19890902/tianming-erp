@@ -56,23 +56,29 @@ def test_raw_45_plan_preserves_20_cover_20_base_and_no_inventory_before_receipt(
         received=client.put(f"/api/incoming/receive/sr{result.json()['stock_item_id']}",json={'received_quantity':45,'idempotency_key':'r08-receive-45'})
         assert received.status_code==200,received.text
         with factory() as db:
-            lot=db.scalar(select(InventoryLot))
-            assert lot.inventory_type=='semi_finished'
-            assert (lot.quantity_available,lot.quantity_reserved,lot.quantity_consumed)==(5,40,0)
+            lot=db.scalar(select(InventoryLot).where(InventoryLot.inventory_type=='semi_finished'))
+            finished=db.scalar(select(InventoryLot).where(InventoryLot.inventory_type=='finished'))
+            assert (lot.quantity_available,lot.quantity_reserved,lot.quantity_consumed)==(5,0,40)
+            assert finished.quantity_reserved==20
             from app.core.inventory_entry_guard import validate_entries
             from app.services.inventory_valuation import cost_payload
             db.info['new_inventory_entry_ids']={lot.id}
             validate_entries(db)
             assert Decimal(cost_payload(lot,db)['unit_cost']) == lot.estimated_unit_cost_snapshot
-            reservations=list(db.scalars(select(InventoryReservation)))
+            reservations=list(db.scalars(select(InventoryReservation).where(
+                InventoryReservation.reservation_type=='semi_order')))
             assert len(reservations)==2 and sum(r.credited_requirement_quantity for r in reservations)==40
             from app.services.receipt_managed_production import receipt_purpose_summaries_by_order_item_ids
             summary=receipt_purpose_summaries_by_order_item_ids(db,[1])[1]
-            assert summary['requires_component_processing'] and summary['pending_processing_quantity']==20
-            assert summary['automatic_finished_output_qty']==0
+            assert not summary['requires_component_processing'] and summary['pending_processing_quantity']==0
+            assert summary['automatic_finished_output_qty']==20
+            from app.models.production import ProductionCompletion
+            automatic_completion=db.scalar(select(ProductionCompletion).where(
+                ProductionCompletion.origin=='receipt_auto'))
+            completion_id=automatic_completion.id
         listing=client.get('/api/requisition/raw-plans')
         assert listing.status_code==200,listing.text
-        assert listing.json()['items'][0]['receipts'][0]['reserved']==40
+        assert listing.json()['items'][0]['receipts'][0]['reserved']==0
         printed=client.get(f"/api/requisition/supplier-orders/{result.json()['supplier_order_id']}")
         assert printed.status_code==200,printed.text
         assert printed.json()['raw_purchase_plans'][0]['requirements'][1]['report_length_mm']==780
@@ -80,10 +86,7 @@ def test_raw_45_plan_preserves_20_cover_20_base_and_no_inventory_before_receipt(
         app.include_router(processing_router,prefix='/api/orders')
         with factory() as db:pid=db.get(OrderItem,1).product_id
         process=client.post('/api/orders/items/1/component-processing/preview',json={'product_id':pid})
-        assert process.status_code==200,process.text
-        assert process.json()['quantity']==20
-        saved=client.post('/api/orders/items/1/component-processing/execute',json=dict(product_id=pid,reviewed_hash=process.json()['reviewed_hash'],operation_key='r08-processing'))
-        assert saved.status_code==200,saved.text
+        assert process.status_code==409,process.text
         with factory() as db:
             raw=db.scalar(select(InventoryLot).where(InventoryLot.inventory_type=='semi_finished'))
             finished=db.scalar(select(InventoryLot).where(InventoryLot.inventory_type=='finished'))
@@ -91,7 +94,7 @@ def test_raw_45_plan_preserves_20_cover_20_base_and_no_inventory_before_receipt(
             assert finished.quantity_reserved==20
             summary=receipt_purpose_summaries_by_order_item_ids(db,[1])[1]
             assert not summary['requires_component_processing'] and not summary['projection_inconsistent']
-            assert summary['manual_processing_output_qty']==20
+            assert summary['automatic_finished_output_qty']==20
             from app.services.multilevel_bom_cost_lineage import graph_material_sources
             assert finished.cost_snapshot_source=='component_processing_actual'
             db.info['new_inventory_entry_ids']={finished.id}
@@ -99,20 +102,14 @@ def test_raw_45_plan_preserves_20_cover_20_base_and_no_inventory_before_receipt(
             assert Decimal(cost_payload(finished,db)['unit_cost']) == finished.estimated_unit_cost_snapshot
             evidence=graph_material_sources(db,finished)
             assert len(evidence)==2 and all(r['raw_receipt_allocation_id'] for r in evidence)
-        undone=client.post(f"/api/orders/items/1/component-processing/{saved.json()['completion_id']}/revert")
-        assert undone.status_code==200,undone.text
-        with factory() as db:
-            raw=db.scalar(select(InventoryLot).where(InventoryLot.inventory_type=='semi_finished'))
-            assert (raw.quantity_available,raw.quantity_reserved,raw.quantity_consumed)==(5,40,0)
-        process=client.post('/api/orders/items/1/component-processing/preview',json={'product_id':pid})
-        saved=client.post('/api/orders/items/1/component-processing/execute',json=dict(product_id=pid,reviewed_hash=process.json()['reviewed_hash'],operation_key='r08-processing-again'))
-        assert saved.status_code==200,saved.text
         from app.api.deliveries import router as delivery_router
         from app.core.time_contract import beijing_today
         app.include_router(delivery_router,prefix='/api/deliveries')
         draft=client.post('/api/deliveries',json=dict(customer_id=1,delivery_date=beijing_today().isoformat(),items=[dict(order_item_id=1,delivered_quantity=4)]))
         assert draft.status_code==201,draft.text
-        dispatched=client.put(f"/api/deliveries/{draft.json()['id']}/dispatch")
+        from tests.test_delivery_dispatch_commands import command as dispatch_command
+        dispatch_body=dispatch_command(client,draft.json()['id'],'r08-auto-finished-dispatch')
+        dispatched=client.put(f"/api/deliveries/{draft.json()['id']}/dispatch",json=dispatch_body)
         assert dispatched.status_code==200,dispatched.text
         from app.models.graph_material_cost import FinanceDeliveryGraphCostFact
         from app.models.raw_purchase_plan import RawPurchaseDeliveryCostPortion
@@ -125,8 +122,8 @@ def test_raw_45_plan_preserves_20_cover_20_base_and_no_inventory_before_receipt(
             assert graph_cost_report_sources(db,[fact.delivery_item_id])
         cancelled=client.put(f"/api/deliveries/{draft.json()['id']}/cancel")
         assert cancelled.status_code==200,cancelled.text
-        undone=client.post(f"/api/orders/items/1/component-processing/{saved.json()['completion_id']}/revert")
-        # Existing downstream-history gate stays intact after dispatch/cancel.
+        undone=client.post(f"/api/orders/items/1/component-processing/{completion_id}/revert")
+        # Automatic receipt completion cannot be independently reversed as a manual action.
         assert undone.status_code==409,undone.text
         with factory() as db:
             raw=db.scalar(select(InventoryLot).where(InventoryLot.inventory_type=='semi_finished'))
@@ -196,16 +193,22 @@ def test_two_up_partial_raw_receipts_do_not_mix_sheets_and_pieces(requisition_ap
             assert client.put(f"/api/incoming/receive/sr{created['stock_item_id']}",json=body).status_code==200
             with factory() as db:
                 summary=receipt_purpose_summaries_by_order_item_ids(db,[1])[1]
-                assert summary['pending_processing_quantity']==(0 if n==0 else 20)
+                assert summary['pending_processing_quantity']==0
+                assert summary['automatic_finished_output_qty']==(0 if n==0 else 20)
         with factory() as db:
             lots=list(db.scalars(select(InventoryLot)));res=list(db.scalars(select(InventoryReservation)))
             assert sum(l.quantity_available+l.quantity_reserved for l in lots)==25
-            assert sum(r.reserved_stock_quantity for r in res)==20
-            assert sum(r.credited_requirement_quantity for r in res)==40
+            raw_res=[r for r in res if r.reservation_type=='semi_order']
+            finished_res=[r for r in res if r.reservation_type=='finished_order']
+            assert sum(r.reserved_stock_quantity for r in raw_res)==20
+            assert sum(r.consumed_stock_quantity for r in raw_res)==20
+            assert sum(r.credited_requirement_quantity for r in raw_res)==40
+            assert sum(r.reserved_stock_quantity for r in finished_res)==20
             allocations=list(db.scalars(select(RawPurchaseReceiptAllocation)))
             assert sum(a.raw_quantity for a in allocations)==20
             # Per-receipt allocation plus spare material retains the exact frozen total.
-            total=sum(Decimal(json.loads(l.cost_snapshot_detail_json)['total_cost']) for l in lots)
+            total=sum(Decimal(json.loads(l.cost_snapshot_detail_json)['total_cost']) for l in lots
+                if l.inventory_type=='semi_finished')
             assigned=sum(a.total_cost for a in allocations)
             assert assigned>0 and total>assigned
         assert client.put(f"/api/requisition/supplier-orders/{created['supplier_order_id']}/void").status_code==409
@@ -222,7 +225,7 @@ def test_raw_graph_each_real_product_waits_for_processing(composite_requisition_
     from app.models.warehouse_inventory import InventoryLot
     from app.services.receipt_managed_production import receipt_purpose_summaries_by_order_item_ids
     app,factory=composite_requisition_app;app.include_router(router,prefix='/api/orders')
-    seed_graph(factory,a3=True)
+    seed_graph(factory,a3=True,pure_parent_without_spec=True)
     with TestClient(app) as client:
         graph_login(client)
         choices=client.post('/api/requisition/raw-plans/choices',json={'order_item_ids':[1]})
@@ -237,14 +240,15 @@ def test_raw_graph_each_real_product_waits_for_processing(composite_requisition_
         receipt=client.put(f"/api/incoming/receive/sr{created.json()['stock_item_id']}",json=dict(received_quantity=105,idempotency_key='r08-graph-in'))
         assert receipt.status_code==200,receipt.text
         with factory() as db:
-            assert not list(db.scalars(select(ProductionCompletion)))
-            assert receipt_purpose_summaries_by_order_item_ids(db,[1])[1]['requires_component_processing']
+            completions=list(db.scalars(select(ProductionCompletion)))
+            assert sorted(row.actual_output_quantity for row in completions)==[30,40]
+            summary=receipt_purpose_summaries_by_order_item_ids(db,[1])[1]
+            assert not summary['requires_component_processing']
+            from app.models.multilevel_bom import BomAssembly
+            assert sum(row.quantity for row in db.scalars(select(BomAssembly)))==10
         for pid,qty in ((2,30),(3,40)):
             review=client.post('/api/orders/items/1/component-processing/preview',json={'product_id':pid})
-            assert review.status_code==200,review.text
-            assert review.json()['quantity']==qty
-            saved=client.post('/api/orders/items/1/component-processing/execute',json=dict(product_id=pid,reviewed_hash=review.json()['reviewed_hash'],operation_key=f'r08-graph-process-{pid}'))
-            assert saved.status_code==200,saved.text
+            assert review.status_code==409,review.text
         with factory() as db:
             lot=db.scalar(select(InventoryLot).where(InventoryLot.cost_snapshot_source=='raw_purchase_receipt'))
             assert (lot.quantity_available,lot.quantity_reserved,lot.quantity_consumed)==(5,0,100)
@@ -283,7 +287,7 @@ def test_raw_migration_immutable_facts_and_nonempty_downgrade_refused(requisitio
         assert conn.execute(text('SELECT count(*) FROM raw_purchase_demands')).scalar_one()==2
 
 
-def test_explicit_raw_plan_for_ordinary_box_requires_real_processing(requisition_app):
+def test_explicit_raw_plan_for_ordinary_box_auto_completes_real_processing(requisition_app):
     from app.models.product import Product
     from app.models.order import OrderItem
     from app.api.bom_cutover import router
@@ -298,7 +302,11 @@ def test_explicit_raw_plan_for_ordinary_box_requires_real_processing(requisition
         assert result.status_code==200,result.text
         receipt=client.put(f"/api/incoming/receive/sr{result.json()['stock_item_id']}",json=dict(received_quantity=25,idempotency_key='r08-a1-in'))
         assert receipt.status_code==200,receipt.text
-        review=client.post('/api/orders/items/1/component-processing/preview',json={'product_id':pid});assert review.status_code==200,review.text
-        assert review.json()['quantity']==20
-        result=client.post('/api/orders/items/1/component-processing/execute',json=dict(product_id=pid,reviewed_hash=review.json()['reviewed_hash'],operation_key='r08-a1-process'))
-        assert result.status_code==200,result.text
+        review=client.post('/api/orders/items/1/component-processing/preview',json={'product_id':pid})
+        assert review.status_code==409,review.text
+        from app.models.production import ProductionCompletion
+        from app.models.warehouse_inventory import InventoryLot
+        with factory() as db:
+            completion=db.scalar(select(ProductionCompletion).where(ProductionCompletion.origin=='receipt_auto'))
+            finished=db.scalar(select(InventoryLot).where(InventoryLot.inventory_type=='finished'))
+            assert completion.actual_output_quantity==20 and finished.quantity_reserved==20

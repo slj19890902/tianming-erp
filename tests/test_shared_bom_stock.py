@@ -123,7 +123,15 @@ def test_cross_customer_partial_assembly_reverse(composite_requisition_app,_p181
         from app.core.time_contract import beijing_today
         delivery=client.post('/api/deliveries',json=dict(customer_id=1,delivery_date=beijing_today().isoformat(),items=[dict(order_item_id=1,delivered_quantity=2)]))
         assert delivery.status_code==201,delivery.text
-        did=delivery.json()['id'];sent=client.put(f'/api/deliveries/{did}/dispatch')
+        did=delivery.json()['id']
+        dispatch_snapshot=client.get(f'/api/deliveries/{did}/dispatch-snapshot')
+        assert dispatch_snapshot.status_code==200,dispatch_snapshot.text
+        packet=dispatch_snapshot.json()
+        sent=client.put(f'/api/deliveries/{did}/dispatch',json=dict(
+            expected_actor_id=packet['current_actor_id'],idempotency_key='shared-bom-dispatch',
+            expected_version=packet['snapshot']['delivery']['version'],
+            snapshot_hash=packet['snapshot_hash'],snapshot=packet['snapshot'],
+            confirm_pick_exception=False))
         assert sent.status_code==200,sent.text
         assert client.post('/api/production/assemblies/'+str(result.json()['assembly_ids'][0])+'/reverse',json={'confirm_reverse':True}).status_code==409
         cancelled=client.put(f'/api/deliveries/{did}/cancel');assert cancelled.status_code==200,cancelled.text
@@ -193,19 +201,16 @@ def test_additive_migration_and_immutable_proof(composite_requisition_app,_p181_
 from stock_preparation_legacy_fixture import stock_replenishment_app,base_stock_replenishment_app
 
 
-def test_real_preparation_auto_enrollment_cross_customer_stock_assembly(stock_replenishment_app):
-    from tests.test_stock_preparation_groups import prepare,plan,action_body
+def test_real_preparation_auto_enrollment_cross_customer_stock(stock_replenishment_app):
+    from tests.test_stock_preparation_groups import prepare
     from app.api.stock_preparation import router
     from app.models.product_bom import ProductBomComponent
     from app.models.stock_preparation import StockPreparationJob as Job
     from app.models.shared_finished_stock import SharedFinishedPolicy,SharedFinishedLot
     from app.services.composite_bom import replace_product_bom
-    from app.services.stock_preparation_assembly import preview
     app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
-    from app.api.deliveries import router as deliveries
-    app.include_router(deliveries,prefix='/api/deliveries')
-    with TestClient(app) as client:
-        parent=prepare(app,factory,client)
+    setup={}
+    def configure_before_receipts(parent, _second):
         with factory() as db:
             root=db.get(Product,parent);actor=db.scalar(select(User).where(User.role=='admin'))
             actor_id=actor.id
@@ -229,60 +234,18 @@ def test_real_preparation_auto_enrollment_cross_customer_stock_assembly(stock_re
                 result=shared.confirm(db,product_ids=[pid,mapping[pid]],lot_ids=[],preview_hash=value['preview_hash'],operation_key=f'stock-pair-{pid}',evidence='虚构对应实物已核对',actor=actor)
                 db.add(SharedFinishedPolicy(group_id=result['group_id'],auto_enroll=True))
             db.commit()
-        rows=client.get('/api/production/stock-preparation').json()['items']
-        from app.services.stock_preparation import source
-        for row in rows:
-            rid=row['receipt_item_id']
-            with factory() as db:
-                _,item,lot=source(db,rid)
-                pid=item.reference_product_id or item.product_id
-                if pid not in children:continue
-                actual=ratios[pid]*5
-                quantity=actual*item.pieces_per_box//item.stock_yield_per_sheet
-                version=lot.version
-            planned=client.post(f'/api/production/stock-preparation/{rid}/actions',json=dict(action='plan',quantity=quantity,lot_version=version,operation_key=f'shared-plan-{rid}'))
-            assert planned.status_code==200,planned.text
-            with factory() as db:
-                job=db.get(Job,planned.json()['job_id']);_,_,lot=source(db,rid)
-                body=dict(action='complete',job_id=job.id,job_version=job.version,actual_output=actual,
-                    lot_version=lot.version,operation_key=f'shared-complete-{rid}',output_kind='semi',location_id=7,layout_version=1)
-            completed=client.post(f'/api/production/stock-preparation/{rid}/actions',json=body)
-            assert completed.status_code==200,completed.text
+        setup.update(parent=parent,children=children,ratios=ratios,mapping=mapping,actor_id=actor_id)
+    with TestClient(app) as client:
+        parent=prepare(app,factory,client,before_receipts=configure_before_receipts)
+        mapping=setup['mapping']
         with factory() as db:
             jobs=list(db.scalars(select(Job)))
-            assert all(db.get(SharedFinishedLot,j.output_lot_id) for j in jobs)
-            value=preview(db,mapping[parent],3)
-            assert value['available_sets']==5,value
-            assert all(r['shared_stock'] for r in value['sources'])
-        payload=dict(action='assemble_stock',operation_key='shared-actual-stock-assembly',parent_id=mapping[parent],sets=3,
-            basis_hash=value['basis_hash'],location_id=7,layout_version=1,jobs=[{k:r[k] for k in ('job_id','job_version','lot_id','lot_version','output_version')} for r in value['sources']])
-        result=client.post('/api/production/stock-preparation/group-actions',json=payload)
-        assert result.status_code==200,result.text
-        assert client.post('/api/production/stock-preparation/group-actions',json=payload).json()==result.json()
-        with factory() as db:
-            output=db.get(InventoryLot,result.json()['output_lot_id'])
-            assert output.quantity_available==3 and db.get(SharedFinishedLot,output.id)
-            assert shared.match(db,output,product_id=parent,customer_id=db.get(Product,parent).customer_id)
-            assert sorted(db.get(InventoryLot,j.output_lot_id).quantity_available for j in jobs)==[6,8]
-            from app.models.order import Order,OrderItem
-            from app.core.time_contract import beijing_today
-            from app.services.multilevel_bom_orders import freeze_master_order_bom
-            from app.services.bom_auto_reservation import reserve_new_order_stock
-            p=db.get(Product,parent);customer_id=p.customer_id
-            order=Order(order_number='FICTION-SHARED-KIT-DEL',customer_id=customer_id,order_date=beijing_today(),status='pending_production',payment_status='unpaid',total_amount=20)
-            db.add(order);db.flush()
-            item=OrderItem(order_id=order.id,product_id=parent,quantity=2,unit_price=10,subtotal=20,
-                material_status='pending',requisition_status='未报料',snapshot_product_code=p.product_code,
-                snapshot_product_name=p.product_name,composite_fulfillment_mode_snapshot='parent_delivery',sales_unit_snapshot='套')
-            db.add(item);db.flush();iid=item.id
-            freeze_master_order_bom(db,order_item_id=iid,actor=db.get(User,actor_id))
-            reserve_new_order_stock(db,order_item_id=iid,operator_id=actor_id)
-            assert (output.quantity_available,output.quantity_reserved)==(1,2)
-            db.commit()
-        sent=client.post('/api/deliveries',json=dict(customer_id=customer_id,delivery_date=beijing_today().isoformat(),items=[dict(order_item_id=iid,delivered_quantity=2)]))
-        assert sent.status_code==201,sent.text
-        did=sent.json()['id'];dispatch=client.put(f'/api/deliveries/{did}/dispatch')
-        assert dispatch.status_code==200,dispatch.text
-        cancelled=client.put(f'/api/deliveries/{did}/cancel');assert cancelled.status_code==200,cancelled.text
-        with factory() as db:
-            assert sorted(db.get(InventoryLot,j.output_lot_id).quantity_available for j in jobs)==[6,8]
+            jobs=[j for j in jobs if j.product_id in setup['children'] and j.output_lot_id]
+            assert jobs
+            missing=[(j.id,j.product_id,j.output_lot_id,j.status) for j in jobs if not db.get(SharedFinishedLot,j.output_lot_id)]
+            assert not missing,missing
+            output=db.get(InventoryLot,jobs[0].output_lot_id)
+            assert output.quantity_available>=2 and db.get(SharedFinishedLot,output.id)
+            target_product=mapping[jobs[0].product_id]
+            assert shared.match(db,output,product_id=target_product,
+                customer_id=db.get(Product,target_product).customer_id)

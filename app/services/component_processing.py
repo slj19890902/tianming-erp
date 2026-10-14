@@ -19,15 +19,18 @@ def digest(value):
 
 def processing_completions(db,item_id,posted=True):
     rows=db.execute(select(ProductionCompletion,InventoryLot).join(InventoryLot,InventoryLot.id==ProductionCompletion.inventory_lot_id)
-        .where(ProductionCompletion.order_item_id==item_id,ProductionCompletion.origin=='manual')).all()
+        .where(ProductionCompletion.order_item_id==item_id)).all()
     return [(row,json.loads(lot.cost_snapshot_detail_json or '{}')) for row,lot in rows
         if (not posted or row.status=='posted') and json.loads(lot.cost_snapshot_detail_json or '{}').get('component_processing_confirmation')]
 
 
 def completed_units(db,item_id):
     automatic=sum(row.actual_output_quantity for row in db.scalars(select(ProductionCompletion).where(
-        ProductionCompletion.order_item_id==item_id,ProductionCompletion.origin=='receipt_auto',ProductionCompletion.status=='posted')))
-    return automatic+sum(row.actual_output_quantity for row,_ in processing_completions(db,item_id))
+        ProductionCompletion.order_item_id==item_id,ProductionCompletion.origin=='receipt_auto',
+        ProductionCompletion.status=='posted')))
+    manual=sum(row.actual_output_quantity for row,_ in processing_completions(db,item_id)
+        if row.origin=='manual')
+    return automatic+manual
 
 
 def plan_processing(db,item_id,product_id):
@@ -195,10 +198,11 @@ def preview_processing(db,*,order_item_id,product_id):
         production_location=dict(id=target.location.id,name=target.location.location_name),target_locations={pid:loc.id for pid,loc in targets.items()},target_names={pid:loc.location_name for pid,loc in targets.items()},remaining_processes=['按原订单完成裁切、压线、开槽及成型'] if any(p[2].get('raw_purchase_plan_id') for p in pending) else ['打钉'],map_hash=document['map_hash'])
 
 
-def confirm_processing(db,*,order_item_id,product_id,reviewed_hash,operation_key,actor):
+def confirm_processing(db,*,order_item_id,product_id,reviewed_hash,operation_key,actor,automatic=False):
     from app.services.production_workflow import lock_order_rows_for_production_transition,post_automatic_receipt_completion,refresh_order_production_status
     from app.services.audit_log import append_audit_event
-    if not actor.is_active or actor.role!='admin': raise SubkitError('仅活动管理员可确认实际加工完成')
+    if not actor.is_active or (not automatic and actor.role!='admin'):
+        raise SubkitError('仅活动管理员可确认实际加工完成')
     key='component-processing:'+hashlib.sha256(operation_key.encode()).hexdigest()
     request=digest(dict(item=order_item_id,product=product_id,review=reviewed_hash,key=operation_key,actor=actor.id))
     with atomic_bom(db):
@@ -216,19 +220,32 @@ def confirm_processing(db,*,order_item_id,product_id,reviewed_hash,operation_key
         completion=post_automatic_receipt_completion(db,order_item_id=order_item_id,previous_theoretical_quantity=plan['before'],new_theoretical_quantity=plan['after'],
             material_input_delta=max(1,sum(e.get('stock_after',0)-e.get('stock_before',0) for e in plan['detail']['bom_material_inputs'])),
             material_input_cumulative=max(1,sum(a.receipt_order_purpose_sheet_qty for a in allocations),sum(db.get(InventoryReservation,e['id']).reserved_stock_quantity for e in plan['detail']['bom_material_inputs'] if e['kind']=='reservation')),operator_id=actor.id,idempotency_key=key,
-            capitalized_material_cost=plan['total_cost'],cost_detail={**plan['detail'],'processing_request_hash':request},
-            bom_snapshot_id=graph.snapshot.id if graph else None,processing_manual=True)
+            capitalized_material_cost=plan['total_cost'],cost_detail={**plan['detail'],'processing_request_hash':request,
+                'automatic_component_processing':bool(automatic)},
+            bom_snapshot_id=graph.snapshot.id if graph else None,processing_manual=not automatic)
         if completion.warehouse_location_id!=preview['production_location']['id']: raise SubkitError('加工入库位置已变化')
         if graph:
+            from app.services.bom_pending_assembly import preview as preview_assembly
             from app.services.multilevel_bom_receipts import assemble_graph_order_receipt,refresh_graph_main_task
-            assemblies=assemble_graph_order_receipt(db,compiled=graph.compiled,order_item_id=item.id,operation_key=f'component-processing:{completion.id}',operator_id=actor.id)
+            assembly_preview=preview_assembly(db,item.id)
+            output_rows=list(assembly_preview['outputs'])
+            if any(row.get('location_id') is None for row in output_rows):
+                raise SubkitError('自动组套缺少父件正式位置，请先为具体产品选择一次正式货位')
+            confirmed=dict(source_lot_versions=assembly_preview['source_lot_versions'],
+                available_lot_ids=assembly_preview['available_lot_ids'],expected_outputs=assembly_preview['expected_outputs'],
+                target_locations={int(row['product_id']):int(row['location_id']) for row in output_rows})
+            assemblies=assemble_graph_order_receipt(db,compiled=graph.compiled,order_item_id=item.id,
+                operation_key=f'component-processing:{completion.id}',operator_id=actor.id,confirmed_command=confirmed)
             if any(db.get(InventoryLot,row.output_lot_id).warehouse_location_id!=preview['target_locations'][row.output_product_id] for row in assemblies if row.output_lot_id):
                 raise SubkitError('后续组装位置与预览不一致')
             refresh_graph_main_task(db,item,create_if_missing=True)
         from app.services.multilevel_bom_semi_production import _map_hash
         if _map_hash()!=preview['map_hash']: raise SubkitError('加工过程中地图发生变化，请重新核对')
         refresh_order_production_status(db,item.order_id)
-        append_audit_event(db,event_category='business',result='success',source='web',module_code='orders',action_code='confirm_component_processing',resource='production_completion',actor=actor,entity_type='production_completion',entity_id=completion.id,customer_id=db.get(Product,product_id).customer_id,details=dict(preview=preview,input_plan=plan,request_hash=request))
+        append_audit_event(db,event_category='business',result='success',source='system' if automatic else 'web',module_code='orders',
+            action_code='auto_component_processing' if automatic else 'confirm_component_processing',resource='production_completion',
+            actor=actor,entity_type='production_completion',entity_id=completion.id,
+            customer_id=db.get(Product,product_id).customer_id,details=dict(preview=preview,input_plan=plan,request_hash=request,automatic=automatic))
         return dict(completion_id=completion.id,lot_id=completion.inventory_lot_id,quantity=completion.quantity)
 
 
@@ -237,7 +254,8 @@ def reverse_processing(db,*,order_item_id,completion_id,actor):
     from app.services.multilevel_bom_inventory import reverse_order_assembly
     if not actor.is_active or actor.role!='admin': raise SubkitError('仅活动管理员可撤销加工确认')
     with atomic_bom(db):
-        matches=[(r,d) for r,d in processing_completions(db,order_item_id,posted=False) if r.id==completion_id]
+        matches=[(r,d) for r,d in processing_completions(db,order_item_id,posted=False)
+            if r.id==completion_id and r.origin=='manual']
         if not matches: raise SubkitError('该完工不是本订单专用部件加工确认')
         completion,detail=matches[0]
         if completion.status=='reversed': return dict(completion_id=completion.id,status='reversed')

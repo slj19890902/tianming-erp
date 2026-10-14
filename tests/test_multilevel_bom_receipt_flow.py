@@ -99,17 +99,19 @@ def test_graph_receipt_delivery_api_dispatch_and_cancel(composite_requisition_ap
         from app.services import graph_delivery_cost
         from app.models.graph_material_cost import FinanceDeliveryGraphCostFact, FinanceDeliveryGraphCostPortion
         from app.models.delivery import Delivery
+        from tests.test_delivery_dispatch_commands import command as dispatch_command
+        dispatch_payload = dispatch_command(client, did, f"graph-receipt-dispatch-{liner}")
         with monkeypatch.context() as patch:
             def fail_portion(**kwargs):
                 raise SubkitError("模拟成本明细写入失败")
             patch.setattr(graph_delivery_cost, "Portion", fail_portion)
-            failed = client.put(f"/api/deliveries/{did}/dispatch")
+            failed = client.put(f"/api/deliveries/{did}/dispatch", json=dispatch_payload)
             assert failed.status_code == 409, failed.text
         with factory() as db:
             assert db.get(Delivery, did).status == "pending"
             assert db.get(OrderItem, 1).delivered_quantity == 0
             assert list(db.scalars(select(FinanceDeliveryGraphCostFact))) == []
-        dispatched = client.put(f"/api/deliveries/{did}/dispatch")
+        dispatched = client.put(f"/api/deliveries/{did}/dispatch", json=dispatch_payload)
         assert dispatched.status_code == 200, dispatched.text
         detail = client.get(f"/api/deliveries/{did}")
         assert detail.status_code == 200, detail.text
@@ -242,7 +244,7 @@ def test_split_movement_keeps_receipt_cost_and_finished_coverage(
                 assert sum(a.quantity for a in active) == 10
 
 
-def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, separate=False, quantity=None, cutting_modes=None, finished_slot_count=8, accompany=False, two_piece=False):
+def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, separate=False, quantity=None, cutting_modes=None, finished_slot_count=8, accompany=False, two_piece=False, pure_parent_without_spec=False):
     from app.models.warehouse_inventory import WarehouseLocation
     from app.models.product import Product
     from app.models.product_bom import SalesOrderItemBomComponent
@@ -270,6 +272,9 @@ def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, sepa
             p.box_style = "隔板"
             p.report_length_mm = 1000
             p.report_width_mm = 700
+            if pid != 1:
+                p.length_mm = 1000
+                p.width_mm = 700
             p.pieces_per_box = 1
             p.default_cutting_mode = "一开一"
             if accompany:
@@ -320,6 +325,10 @@ def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, sepa
             p = db.get(Product, 2)
             p.pieces_per_box = 2
             p.default_cutting_mode = "一开四"
+        if pure_parent_without_spec:
+            root=db.get(Product,1)
+            root.length_mm=root.width_mm=root.height_mm=None
+            root.material_id=None;root.legacy_material_text=None;root.flute_type=None
         compiled = freeze_master_order_bom(db, order_item_id=1, actor=actor)
         db.commit()
         snapshots = [(s.id, s.component_product_id) for s in compiled.snapshots

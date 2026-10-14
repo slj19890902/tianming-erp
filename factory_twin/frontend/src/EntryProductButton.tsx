@@ -2,7 +2,11 @@ import {useEffect,useState} from 'react';
 
 declare global {
   interface Window {
-    TMEntryProduct: {open(options:{productId:number;stockStage?:string}):Promise<unknown>;preview(id:number,stage?:string):Promise<string>};
+    TMEntryProduct: {
+      open(options:{productId:number;stockStage?:string;focusField?:string|null}):Promise<unknown>;
+      preview(id:number,stage?:string):Promise<string>;
+      offerRepair(detail:unknown):void;
+    };
   }
 }
 

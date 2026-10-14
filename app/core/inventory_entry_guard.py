@@ -107,7 +107,9 @@ def track_entries(session, _context):
     from app.models.warehouse_inventory import InventoryLot
     ids = session.info.setdefault('new_inventory_entry_ids', set())
     for row in session.new:
-        if isinstance(row, InventoryLot) and (row.source_type not in {'transfer', 'delivery_return'} or row.source_ref_type in {'bom_assembly', 'subkit_conversion', 'stock_preparation_assembly', 'stock_preparation_finish', 'physical_kit_correction_20261014'}):
+        if isinstance(row, InventoryLot) and (row.source_type not in {'transfer', 'delivery_return'}
+                or row.source_ref_type in {'bom_assembly', 'subkit_conversion', 'preparation_assembly', 'stock_preparation_assembly', 'stock_preparation_finish', 'physical_kit_correction_20261014'}
+                or (row.source_ref_type == 'stock_preparation' and row.inventory_type == 'finished')):
             ids.add(row.id)
 
 
@@ -123,6 +125,7 @@ def validate_entries(session):
         if lot is None:
             continue
         missing = []
+        issues = []
         try:
             cost = Decimal(str(lot.estimated_unit_cost_snapshot or 0))
             if not cost.is_finite() or cost <= 0:
@@ -138,6 +141,8 @@ def validate_entries(session):
             missing.append(cost_detail.get('validation_issue') or '可核验的冻结成本')
         detail = lot.finished_detail
         if detail:
+            from app.models.product import Product
+            product = session.get(Product, detail.product_id) if detail.product_id else None
             try:
                 basis = json.loads(detail.physical_basis_json or '{}')
             except (ValueError, TypeError):
@@ -146,6 +151,9 @@ def validate_entries(session):
                 basis = {}
             if not basis.get('unit'):
                 missing.append('实物单位')
+                issues.append(dict(field='unit', label='实物单位',
+                    reason='本次入库必须冻结实际计量单位', source='entry_snapshot',
+                    repairable=False, repair_page=None, repair_field='unit'))
             components = cost_detail.get('components') or []
             has_sheet = any(isinstance(part, dict) and part.get('length_mm') and part.get('width_mm') for part in components)
             rule = cost_detail.get('cost_rule') or {}
@@ -162,21 +170,77 @@ def validate_entries(session):
                 and cost_detail.get('external_receipt_item_id') == lot.source_ref_id)
             has_external_spec = external_source and isinstance(external_spec, dict) and bool(external_spec)
             has_assembly_spec = _assembled_specifications(cost_detail, basis)
+            consumed_spec_issues = []
+            if (lot.cost_snapshot_source in {'stock_preparation_assembly','bom_assembly','subkit_conversion'}
+                    and cost_detail.get('consumed_assembly_spec') is not None):
+                from app.services.bom_entry_cost import consumed_assembly_spec_issues
+                consumed_spec_issues = consumed_assembly_spec_issues(
+                    cost_detail.get('consumed_assembly_spec'), basis)
+                has_assembly_spec = not consumed_spec_issues
             if lot.cost_snapshot_source == 'physical_kit_correction_20261014':
                 has_assembly_spec = _physical_kit_specifications(cost_detail, basis)
-            if not basis.get('spec') and not (detail.length_mm and detail.width_mm) and not has_sheet and not has_external_spec and not has_assembly_spec:
-                missing.append('实物规格')
+            # Report/cutting sheet dimensions explain material cost, but do not
+            # become a finished product's length/width.  Production receipts may
+            # keep their already frozen manufacturing evidence; manual/stocktake
+            # entries must use the operation-specific product/assembly/external
+            # identity.
+            legal_frozen_spec = bool(
+                has_external_spec or has_assembly_spec or (
+                    has_sheet and lot.source_type not in {'manual', 'stocktake'}
+                )
+            )
+            from app.services.product_readiness import inventory_entry_issues
+            physical_issues = inventory_entry_issues(
+                product,
+                inventory_type='finished',
+                basis=basis,
+                has_legal_frozen_spec=legal_frozen_spec,
+            )
+            if consumed_spec_issues:
+                physical_issues = [dict(field='assembly_evidence', label=issue,
+                    reason='组套输出与本次真实子件消耗依据不一致', source='assembly',
+                    repairable=False, repair_page=None, repair_field=None,
+                    product_id=detail.product_id,
+                    product_code=getattr(product, 'product_code', None),
+                    product_name=getattr(product, 'product_name', None))
+                    for issue in consumed_spec_issues]
+            issues.extend(physical_issues)
+            missing.extend([str(issue.get('label') or issue.get('field')) for issue in physical_issues])
         elif lot.semi_finished_detail:
             sheet = lot.semi_finished_detail
-            if not sheet.board_length_mm or not sheet.board_width_mm or not sheet.material_code_snapshot:
-                missing.append('片料长宽和材质')
+            from app.models.product import Product
+            from app.services.product_readiness import inventory_entry_issues
+            product = session.get(Product, sheet.product_id) if getattr(sheet, 'product_id', None) else None
+            semi_issues = inventory_entry_issues(product, inventory_type='semi_finished',
+                semi_length=sheet.board_length_mm, semi_width=sheet.board_width_mm,
+                semi_material=sheet.material_code_snapshot)
+            issues.extend(semi_issues)
+            missing.extend([str(issue.get('label') or issue.get('field')) for issue in semi_issues])
         elif lot.inventory_type != 'assembly_body':
             missing.append('实物明细')
         if missing:
+            # Preserve the legacy ``missing`` labels while giving every client a
+            # single actionable list.  Cost/system issues are administrator work,
+            # not a reason to send an employee back to an unrelated material page.
+            represented = {str(issue.get('label')) for issue in issues}
+            for label in missing:
+                if label not in represented:
+                    issues.append(dict(field='cost_or_entry_evidence', label=label,
+                        reason='本次入库缺少可核验的冻结成本或流水依据',
+                        source='frozen_source', repairable=False, repair_page=None,
+                        repair_field=None, product_id=detail.product_id if detail else None))
+            product_issues = [issue for issue in issues if issue.get('repairable')]
+            if product_issues:
+                message = '本次入库尚未保存：' + '、'.join(
+                    str(issue.get('label')) for issue in issues) + '未填写或依据不足'
+            else:
+                message = ('产品资料完整，但本次入库未正确生成可核验依据。本次未保存，'
+                           '原表单可继续保留；请管理员处理，不需要重复修改产品资料')
             raise HTTPException(422, detail=dict(code='INVENTORY_ENTRY_INCOMPLETE', lot_number=lot.lot_number,
-                missing=missing, message='本次入库尚未保存：请补齐'+'、'.join(missing)+'后继续',
+                missing=missing, issues=issues, message=message,
                 product_id=detail.product_id if detail else None,
-                repair_url='/?page=products&subpage=materials'))
+                repair_url=(product_issues[0].get('repair_page') if product_issues else None),
+                retry_action='refresh_preflight'))
 
 
 @event.listens_for(ReceiptPriceGuardSession, 'after_transaction_end')

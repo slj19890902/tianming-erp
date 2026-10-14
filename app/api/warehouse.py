@@ -9842,7 +9842,7 @@ def confirm_twin_stocktake_batch(
             db.rollback()
             raise HTTPException(
                 status_code=error.status_code,
-                detail=str(error),
+                detail=error.detail if error.detail is not None else str(error),
             ) from error
         except Floor3LocationError as error:
             db.rollback()

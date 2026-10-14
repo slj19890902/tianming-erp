@@ -121,7 +121,7 @@
        if(refreshed!==true){this.restoreOrderContextView(savedView.view);this.showToast('常用箱已保存，但待报料未刷新。请刷新后核对。',true);return false;}
        const validKeys=new Set((this.requisitionPending||[]).filter(row=>this.isPendingRowSelectable(row)).map(row=>this.pendingRowKey(row)));
        this.selectedPendingKeys=savedView.selectedKeys.filter(key=>validKeys.has(key));
-       this.showToast(this.commonBoxReadiness(product).ready?'常用箱资料已完善，已返回原报料筛选':'已保存；仍有资料待完善，请按缺项补充');
+       this.showToast(this.commonBoxReadiness(product).ready?'报料资料完整，已返回原报料筛选':'已保存；仍有报料资料待完善，请按缺项补充');
       }
       this.restoreOrderContextView(savedView.view);
       return true;
@@ -145,7 +145,7 @@
      if(context.pickerVisible)this.orderCommonBoxPicker.visible=true;
      this.restoreOrderContextView(context.view);
      if(product){
-      this.showToast(this.commonBoxReadiness(product).ready?'常用箱资料已完善，原订单已保留':'已保存；仍有资料待完善，请按缺项补充');
+      this.showToast(this.commonBoxReadiness(product).ready?'报料资料完整，原订单已保留':'已保存；仍有报料资料待完善，请按缺项补充');
       for(const [line,customerId] of refreshed)this.refreshOrderLineInventory(line,customerId);
      }
      return true;

@@ -628,10 +628,20 @@ def _ensure_finished_projection_postcondition(
                 .limit(1)
             )
             if controlled_capacity is not None:
-                raise WarehouseInventoryError(
-                    "地堆位置现场容量不足，不能增加成品数量",
-                    409,
+                requested_capacity = (
+                    int(ground_capacity_quantity)
+                    if ground_capacity_quantity is not None
+                    else 0
                 )
+                if requested_capacity < pallet_physical_quantity:
+                    raise WarehouseInventoryError(
+                        "地堆位置现场容量不足，不能增加成品数量",
+                        409,
+                    )
+                existing_occupancy.capacity_quantity = requested_capacity
+                existing_occupancy.version = int(existing_occupancy.version or 0) + 1
+                db.flush()
+                return current_pallet
             if operator_id is None:
                 raise WarehouseInventoryError("更新自动空间投影必须记录操作人", 409)
             secondary_ids = active_location_ids - {int(location.id)}

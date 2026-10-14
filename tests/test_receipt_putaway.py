@@ -105,6 +105,37 @@ def test_no_configured_staging_retains_old_installation_contract(setup):
         assert service.resolve(db,product_id=pid,customer_id=cid) is None
 
 
+def test_existing_product_stock_becomes_stable_default_without_moving_history(setup):
+    factory,pid,cid,ids=setup
+    with factory() as db:
+        existing=incoming(db,pid,cid,ids[0])
+        location,kind,_=service.resolve(db,product_id=pid,customer_id=cid,claim=True)
+        assert (location.id,kind)==(ids[0],'product_storage')
+        assert db.get(ProductStoragePreference,pid).location_id==ids[0]
+        assert existing.warehouse_location_id==ids[0]
+
+
+def test_multiple_historical_locations_require_one_explicit_default(setup):
+    factory,pid,cid,ids=setup
+    with factory() as db:
+        first=incoming(db,pid,cid,ids[0])
+        second=incoming(db,pid,cid,ids[1],key='other-location')
+        with pytest.raises(ShelfError,match='多个正式货位'):
+            service.resolve(db,product_id=pid,customer_id=cid)
+        assert db.get(ProductStoragePreference,pid) is None
+        assert (first.warehouse_location_id,second.warehouse_location_id)==(ids[0],ids[1])
+
+
+def test_new_product_never_falls_back_to_receipt_staging(setup):
+    factory,pid,cid,ids=setup
+    with factory() as db:
+        loc=db.get(WarehouseLocation,ids[0])
+        area=db.scalar(select(WarehouseArea).where(WarehouseArea.area_code==loc.area_code))
+        db.add(ReceiptStagingArea(area_id=area.id));db.flush()
+        with pytest.raises(ShelfError,match='选择一次正式货位'):
+            service.resolve(db,product_id=pid,customer_id=cid)
+
+
 def test_api_admin_idempotency_employee_and_customer_scope(setup):
     from app.api import fixed_shelf as api
     from app.models.user import User

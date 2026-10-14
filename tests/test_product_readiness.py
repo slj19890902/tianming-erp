@@ -28,7 +28,7 @@ def test_readiness_ignores_manual_modified_and_requires_active_master_data():
 
 def test_readiness_requires_complete_crease_and_a3_base_data():
     invalid = product_readiness(_product(crease_right_mm=90))
-    assert invalid["status"] == "待完善"
+    assert invalid["status"] == "报料资料待完善"
     assert "crease" in invalid["missing_fields"]
     lid = product_readiness(_product(box_style="A3 天地盖"))
     assert lid["ready"] is False
@@ -43,6 +43,16 @@ def test_readiness_requires_product_identity_layer_and_flute():
     assert {"product_code", "product_name", "layer_count", "flute_type"} <= set(
         result["missing_fields"]
     )
+
+
+def test_pure_assembly_parent_requires_identity_and_bom_not_parent_board_spec():
+    parent=_product(id=80012500,product_code='80012500',unit='套',is_composite=True,
+        material=None,layer_count=None,flute_type=None,report_length_mm=None,report_width_mm=None,
+        crease_type=None,crease_left_mm=None,crease_middle_mm=None,crease_right_mm=None)
+    profile=SimpleNamespace(source='assembled',delivery_mode='parent')
+    result=product_readiness(parent,bom_profiles={80012500:profile})
+    assert result['ready'] is True
+    assert result['missing_fields']==[]
 
 
 def test_material_comparison_uses_first_code_token_and_unknown_for_empty_values():

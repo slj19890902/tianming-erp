@@ -28,7 +28,11 @@ class StockPreparationJob(Base):
 class StockPreparationCommand(Base):
     __tablename__ = "stock_preparation_commands"
     operation_key: Mapped[str] = mapped_column(String(80), primary_key=True)
-    receipt_item_id: Mapped[int] = mapped_column(ForeignKey("incoming_receipt_items.id", ondelete="RESTRICT"), index=True)
+    # Inventory-first manual assembly may start from a qualified stocktake or
+    # historical child lot and therefore has no incoming-receipt fiction.
+    receipt_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("incoming_receipt_items.id", ondelete="RESTRICT"), index=True,
+        nullable=True)
     request_json: Mapped[str] = mapped_column(Text)
     result_json: Mapped[str] = mapped_column(Text)
     actor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))

@@ -73,9 +73,10 @@ class WarehouseStocktakeBatchItem:
 
 
 class WarehouseStocktakeBatchError(ValueError):
-    def __init__(self, message: str, status_code: int = 400):
+    def __init__(self, message: str, status_code: int = 400, detail: object | None = None):
         super().__init__(message)
         self.status_code = status_code
+        self.detail = detail
 
 
 def stocktake_batch_request_hash(
@@ -774,7 +775,30 @@ def _preflight_add(
         customer_id=item.customer_id,
         product_id=item.product_id,
     )
-    if item.inventory_type in {"semi_finished", "raw_material"}:
+    if item.inventory_type == "finished":
+        from app.services.finished_stock_identity import product_basis
+        from app.services.product_readiness import inventory_entry_issues
+        basis_json = product_basis(product)
+        try:
+            basis = json.loads(basis_json)
+        except (TypeError, ValueError):
+            basis = {}
+        issues = inventory_entry_issues(product, inventory_type="finished", basis=basis)
+        if issues:
+            repairable = [issue for issue in issues if issue.get("repairable")]
+            message = (
+                "本次入库尚未保存："
+                + "、".join(str(issue.get("label") or issue.get("field")) for issue in issues)
+                + "未填写或依据不足"
+                if repairable
+                else "产品资料完整，但本次入库未正确生成可核验依据；请管理员处理"
+            )
+            detail = dict(code="INVENTORY_ENTRY_INCOMPLETE", message=message,
+                product_id=product.id, missing=[str(issue.get("label")) for issue in issues],
+                issues=issues, repair_url=(repairable[0].get("repair_page") if repairable else None),
+                retry_action="refresh_preflight")
+            raise WarehouseStocktakeBatchError(message, 422, detail=detail)
+    elif item.inventory_type in {"semi_finished", "raw_material"}:
         _semi_product_facts(product)
     _assert_add_compatible(db, item=item)
 
@@ -1196,7 +1220,10 @@ def execute_warehouse_stocktake_batch(
     from app.services.receipt_putaway import remember_stocktake
     for result in results:
         if result["operation"] == "add" and result["inventory_type"] == "finished":
-            remember_stocktake(db, db.get(InventoryLot, result["lot_id"]), operator_id, follow_position=True)
+            # A multi-location stocktake may intentionally split one product.
+            # The first valid position establishes the stable default; later
+            # rows must not silently move that default to the last row.
+            remember_stocktake(db, db.get(InventoryLot, result["lot_id"]), operator_id)
     return {
         "message": "盘点批次已确认，正式库存与流水已原子提交",
         "batch_id": batch_id,

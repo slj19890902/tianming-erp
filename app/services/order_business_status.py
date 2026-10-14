@@ -486,32 +486,14 @@ def build_order_business_statuses(
             task_statuses_by_item[int(order_item_id)][
                 int(component_id) if component_id is not None else None
             ] = str(task_status)
-        for order_item_id, credited_quantity in db.execute(
-            select(
-                InventoryReservation.order_item_id,
-                func.coalesce(
-                    func.sum(
-                        func.coalesce(
-                            InventoryReservation.credited_requirement_quantity,
-                            0,
-                        )
-                        - InventoryReservation.released_requirement_quantity
-                    ),
-                    0,
-                ),
-            )
-            .where(
-                InventoryReservation.order_item_id.in_(item_id_chunk),
-                InventoryReservation.reservation_type == "finished_order",
-                InventoryReservation.sales_order_item_bom_component_id.is_(None),
-                InventoryReservation.status != "cancelled",
-            )
-            .group_by(InventoryReservation.order_item_id)
-        ):
-            if order_item_id is not None:
-                finished_coverage_by_item[int(order_item_id)] = max(
-                    int(credited_quantity or 0), 0
-                )
+        # Delivery, requisition shortage and the business badge must all read
+        # the same canonical credit.  This subtracts consumed/released credit
+        # and adds actual delivery once, instead of treating every historical
+        # reservation as still available.
+        from app.services.warehouse_inventory import active_finished_reservations_by_item_ids
+        finished_coverage_by_item.update(
+            active_finished_reservations_by_item_ids(db, list(item_id_chunk))
+        )
         semi_requirement_rows = db.execute(
             select(
                 OrderItemSemiRequirement.id,
@@ -734,6 +716,8 @@ def build_order_business_statuses(
         else:
             production_ready = tasks.get(None) in READY_PRODUCTION_STATUSES
         finished_coverage = finished_coverage_by_item.get(item_id, 0)
+        remaining_finished_coverage = max(finished_coverage - delivered_quantity, 0)
+        finished_shortage = max(remaining_quantity - remaining_finished_coverage, 0)
         from app.services.liner_direct_delivery import liner_direct_coverage
         direct_liner = liner_direct_coverage(
             db,
@@ -795,6 +779,10 @@ def build_order_business_statuses(
                 dispatched_document_count=len(
                     {delivery_id for _line_id, delivery_id, _qty in dispatched_rows}
                 ),
+                requirement_quantity=quantity,
+                delivered_quantity=delivered_quantity,
+                finished_inventory_coverage=remaining_finished_coverage,
+                material_shortage=finished_shortage,
             )
         elif (
             delivered_quantity > 0 and remaining_quantity == 0
@@ -882,6 +870,16 @@ def build_order_business_statuses(
                             "对应对账范围已完成结款",
                             statement_count=len(related_statement_ids),
                         )
+        elif remaining_quantity > 0 and remaining_finished_coverage >= remaining_quantity:
+            status = "pending_delivery"
+            evidence = _evidence(
+                "finished_inventory_fully_covers_remaining_delivery",
+                "已采用成品库存足额覆盖剩余交付需求",
+                requirement_quantity=quantity,
+                delivered_quantity=delivered_quantity,
+                finished_inventory_coverage=remaining_finished_coverage,
+                material_shortage=0,
+            )
         elif item.supply_mode_snapshot == "external_purchase":
             if external_receipt_complete:
                 status = "pending_delivery"
@@ -908,6 +906,10 @@ def build_order_business_statuses(
                 evidence = _evidence(
                     "no_confirmed_external_packaging_purchase",
                     "尚无有效正式外购包材采购",
+                    requirement_quantity=quantity,
+                    delivered_quantity=delivered_quantity,
+                    finished_inventory_coverage=remaining_finished_coverage,
+                    material_shortage=finished_shortage,
                 )
         elif has_external_requirement:
             if not has_formal_requisition or not external_purchase_complete:

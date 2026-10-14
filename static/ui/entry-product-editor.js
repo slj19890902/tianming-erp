@@ -28,7 +28,7 @@
     return `${e.cost_label||'材料参考成本'}：¥${data.unit_cost} / ${data.display_unit||'件'}。${data.note}`;
   }
   let opened=false;
-  async function open({productId, stockStage='complete'}) {
+  async function open({productId, stockStage='complete', focusField=null}) {
     if(opened)return null;
     if(!Number.isSafeInteger(Number(productId))||Number(productId)<=0)throw new Error('请先选择常用箱产品');
     opened=true;
@@ -61,6 +61,10 @@
       Object.entries(fields).forEach(([key,label])=>{
         const input=field(label,el('input'));input.type='number';input.min='1';input.step='1';input.value=product[key]??'';inputs[key]=input;
       });
+      if(focusField&&inputs[focusField]){
+        inputs[focusField].style.outline='2px solid #d5a530';
+        inputs[focusField].focus?.();
+      }
       const flute=field('楞型',el('select'));
       ['', 'NONE','A','B','C','E','F','AB','BC','BE','AE','AC','AAA','ABC'].forEach(v=>flute.append(new Option(v==='NONE'?'卡纸':v||'待完善',v)));
       flute.value=product.flute_type||'';
@@ -104,6 +108,9 @@
           if(!window.confirm(`保存以下常用箱变更？\n${changes}\n${(preview.warnings||[]).map(w=>typeof w==='string'?w:JSON.stringify(w)).join('\n')}`))return;
           payload.confirmation_token=preview.confirmation_token;writing=true;
           saved=await api(`/api/master/products/${productId}`,'PUT',payload);
+          if(typeof window.CustomEvent==='function'&&typeof window.dispatchEvent==='function'){
+            window.dispatchEvent(new window.CustomEvent('inventory-entry-product-updated',{detail:{product:saved,stockStage}}));
+          }
           save.hidden=true;grid.querySelectorAll('input,select').forEach(n=>n.disabled=true);
           status.textContent='常用箱已保存。';
           try{status.textContent+=' '+costText(await api(costPath(productId,stockStage)));}
@@ -122,9 +129,14 @@
     document.getElementById('entry-repair-notice')?.remove();
     const notice=el('aside');notice.id='entry-repair-notice';notice.setAttribute('role','alert');
     notice.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;max-width:min(420px,90vw);background:white;border:1px solid #d5a530;border-radius:12px;padding:16px;box-shadow:0 6px 24px #0002';
-    const message=el('p',detail.message+'。原录入内容保留，完善资料后回到原表单重新保存。');notice.append(message);
-    if(detail.product_id){const button=el('button','完善常用箱资料');button.type='button';button.onclick=async()=>{button.disabled=true;try{await open({productId:detail.product_id});}catch(e){message.textContent=e.message;}finally{button.disabled=false;}};notice.append(button);}
-    const link=el('a','维护供应商报价');link.href='/?page=products&subpage=materials';link.target='_blank';link.rel='noopener';link.style.margin='0 12px';notice.append(link);
+    const issues=Array.isArray(detail.issues)?detail.issues:[];
+    const message=el('p',detail.message+'。原录入数量、日期、位置、备注和选择均保留；保存资料后请在原表单重新核对。');notice.append(message);
+    if(issues.length){const list=el('ul');issues.forEach(issue=>{const item=el('li',`${issue.product_code?issue.product_code+' · ':''}${issue.label}：${issue.reason}${issue.repairable?'':'（需管理员处理）'}`);list.append(item);});notice.append(list);}
+    const firstRepair=issues.find(issue=>issue.repairable&&issue.product_id)||null;
+    const repairProductId=firstRepair?.product_id||detail.product_id;
+    if(repairProductId&&(firstRepair||!issues.length)){const button=el('button',firstRepair?`补充${firstRepair.label}`:'核对产品入库资料');button.type='button';button.onclick=async()=>{button.disabled=true;try{await open({productId:Number(repairProductId),focusField:firstRepair?.repair_field||null});message.textContent='产品资料已保存，请回到原表单重新核对。本次入库内容未被覆盖。';}catch(e){message.textContent=e.message;}finally{button.disabled=false;}};notice.append(button);}
+    const materialIssue=issues.find(issue=>['material_id','material_code_snapshot','external_supply'].includes(issue.field));
+    if(materialIssue){const link=el('a','维护供应商材质 / 报价');link.href=materialIssue.repair_page||'/?page=products&subpage=materials';link.target='_blank';link.rel='noopener';link.style.margin='0 12px';notice.append(link);}
     const close=el('button','关闭提示');close.type='button';close.onclick=()=>notice.remove();notice.append(close);document.body.append(notice);
   }
   window.TMEntryProduct={open,offerRepair,preview:async(id,stage)=>costText(await api(costPath(id,stage)))};

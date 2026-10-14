@@ -8,6 +8,98 @@ from app.services.flute_mapping import normalize_flute_type, validate_flute_for_
 from app.services.report_crease import crease_width_error
 
 
+def _issue(field: str, label: str, reason: str, source: str, *,
+           repair_page: str | None = None, repairable: bool = True,
+           product: object | None = None) -> dict[str, object]:
+    return {
+        "field": field,
+        "label": label,
+        "reason": reason,
+        "source": source,
+        "repair_page": repair_page,
+        "repair_field": field,
+        "repairable": repairable,
+        "product_id": _value(product, "id") if product is not None else None,
+        "product_code": _value(product, "product_code") if product is not None else None,
+        "product_name": _value(product, "product_name") if product is not None else None,
+    }
+
+
+def inventory_entry_issues(
+    product: object | None,
+    *,
+    inventory_type: str,
+    basis: dict | None = None,
+    has_legal_frozen_spec: bool = False,
+    semi_length: object | None = None,
+    semi_width: object | None = None,
+    semi_material: object | None = None,
+) -> list[dict[str, object]]:
+    """Return operation-specific inventory-entry gaps.
+
+    This is deliberately separate from requisition readiness.  In particular,
+    report sheet dimensions never stand in for a finished product's dimensions.
+    The transaction guard and entry preflight use this same representation.
+    """
+    basis = basis if isinstance(basis, dict) else {}
+    if inventory_type == "semi_finished":
+        result = []
+        for field, label, value in (
+            ("board_length_mm", "片料长度", semi_length),
+            ("board_width_mm", "片料宽度", semi_width),
+            ("material_code_snapshot", "片料材质", semi_material),
+        ):
+            if not str(value or "").strip() or (field != "material_code_snapshot" and not _positive(value)):
+                result.append(_issue(field, label, "半成品入库必须保留实际片料规格",
+                                     "entry", repairable=False, product=product))
+        return result
+    if product is None:
+        return [_issue("product_id", "真实产品", "本次入库没有可核验的真实产品身份",
+                       "entry", repairable=False)]
+    if inventory_type != "finished":
+        return []
+
+    profile = _bom_profile(product, None)
+    pure_assembly = bool(profile is not None and profile.source == "assembled"
+                         and profile.delivery_mode == "parent")
+    if pure_assembly:
+        if has_legal_frozen_spec:
+            return []
+        return [_issue("assembly_evidence", "真实子件组套依据",
+                       "纯组套父件必须由本次真实消耗的子件和有效冻结配方形成",
+                       "assembly", repairable=False, product=product)]
+
+    supply_mode = str(_value(product, "supply_mode") or "corrugated_production").strip()
+    if supply_mode == "external_purchase":
+        if has_legal_frozen_spec or str(basis.get("spec") or "").strip():
+            return []
+        return [_issue("external_packaging_specification_summary", "冻结外购规格",
+                       "外购品入库需要本次采购/收料冻结的适用规格",
+                       "frozen_source", repair_page="/?page=products", product=product)]
+
+    if has_legal_frozen_spec or str(basis.get("spec") or "").strip():
+        return []
+    result = []
+    if not _positive(_value(product, "length_mm")):
+        result.append(_issue("length_mm", "成品长度", "普通成品入库需要结构化成品规格；报料长度不能代替",
+                             "product_master", repair_page="/?page=products", product=product))
+    if not _positive(_value(product, "width_mm")):
+        result.append(_issue("width_mm", "成品宽度", "普通成品入库需要结构化成品规格；报料宽度不能代替",
+                             "product_master", repair_page="/?page=products", product=product))
+    if not result:
+        result.append(_issue("physical_basis_json", "实物规格依据",
+                             "产品主档规格完整，但本次入库未正确生成实物规格依据",
+                             "entry_snapshot", repairable=False, product=product))
+    return result
+
+
+def _positive(value: object) -> bool:
+    try:
+        return value is not None and float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _value(source: object, name: str) -> Any:
     return getattr(source, name, None)
 
@@ -57,6 +149,7 @@ def product_readiness(product: object, *, bom_profiles: dict | None = None) -> d
                  if category["needs_supply_completion"] else "模具费属于费用项目，请通过费用入口登记")
         return {"ready": False, "order_save_missing_labels": [label],
                 "status": "外购资料待完善" if category["needs_supply_completion"] else "费用项目",
+                "readiness_scope": "requisition",
                 "missing_fields": ["external_supply" if category["needs_supply_completion"] else "expense_item"],
                 "missing_labels": [label]}
     if not str(_value(product, "product_code") or "").strip():
@@ -64,14 +157,29 @@ def product_readiness(product: object, *, bom_profiles: dict | None = None) -> d
     if not str(_value(product, "product_name") or "").strip():
         missing.append(("product_name", "产品名称未填写"))
 
+    profile = _bom_profile(product, bom_profiles)
+    if profile is not None and profile.source == "assembled":
+        if not bool(_value(product, "is_composite")) or profile.delivery_mode != "parent":
+            missing.append(("bom_components", "纯组套父件的有效 BOM 配方尚未保存"))
+        if not str(_value(product, "unit") or "").strip():
+            missing.append(("unit", "成品单位未填写"))
+        return {
+            "ready": not missing,
+            "order_save_missing_labels": [label for _, label in missing],
+            "status": "报料资料完整" if not missing else "报料资料待完善",
+            "readiness_scope": "requisition",
+            "missing_fields": [field for field, _ in missing],
+            "missing_labels": [label for _, label in missing],
+        }
+
     if _value(product, "box_style") == "BOM组合":
-        profile = _bom_profile(product, bom_profiles)
         if not profile or profile.source != "assembled" or profile.delivery_mode != "parent" or not _value(product, "is_composite"):
             missing.append(("bom_components", "组套配方尚未保存"))
         return {
             "ready": not missing,
             "order_save_missing_labels": [label for _, label in missing],
-            "status": "资料已完善" if not missing else "待完善",
+            "status": "报料资料完整" if not missing else "报料资料待完善",
+            "readiness_scope": "requisition",
             "missing_fields": [field for field, _ in missing],
             "missing_labels": [label for _, label in missing],
         }
@@ -84,7 +192,8 @@ def product_readiness(product: object, *, bom_profiles: dict | None = None) -> d
         return {
             "ready": not missing,
             "order_save_missing_labels": [],
-            "status": "资料已完善" if not missing else "待完善",
+            "status": "报料资料完整" if not missing else "报料资料待完善",
+            "readiness_scope": "requisition",
             "missing_fields": fields,
             "missing_labels": labels,
         }
@@ -111,7 +220,8 @@ def product_readiness(product: object, *, bom_profiles: dict | None = None) -> d
         return {
             "ready": not missing,
             "order_save_missing_labels": [],
-            "status": "资料已完善" if not missing else "待完善",
+            "status": "报料资料完整" if not missing else "报料资料待完善",
+            "readiness_scope": "requisition",
             "missing_fields": fields,
             "missing_labels": labels,
         }
@@ -174,7 +284,8 @@ def product_readiness(product: object, *, bom_profiles: dict | None = None) -> d
     return {
         "ready": not missing,
         "order_save_missing_labels": _order_save_missing(product, missing, bom_profiles),
-        "status": "资料已完善" if not missing else "待完善",
+        "status": "报料资料完整" if not missing else "报料资料待完善",
+            "readiness_scope": "requisition",
         "missing_fields": fields,
         "missing_labels": labels,
     }

@@ -30,13 +30,17 @@ def _product_basis(product, source=None):
     material = product.material
     values = {key: getattr(product, key) for key in FIELDS}
     values["layer_count"] = material.layer_count if material else product.layer_count
+    source = getattr(source, "source", source)
     source = source or ("purchased" if product.supply_mode == "external_purchase" else "manufactured")
     from app.services.sheet_cutting_settings import component_settings
     setting = component_settings(product.sheet_cutting_settings) if source == "manufactured" else None
     die_cut = source == "manufactured" and (setting.is_die_cut if setting else product.box_category == "die_cut")
     values.update(mold_tool_id=product.mold_tool_id if die_cut else None,
                   die_cut_path=product.die_cut_path if die_cut else None)
-    return _document(product.id, product.unit, product_dimension_specification(product),
+    specification = product_dimension_specification(product)
+    if source == "purchased":
+        specification = str(product.external_packaging_specification_summary or "").strip() or specification
+    return _document(product.id, product.unit, specification,
         material.code if material else product.legacy_material_text,
         product.flute_type or (material.flute_type if material else None), values)
 

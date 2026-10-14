@@ -671,7 +671,7 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
         "issue": None,
     }
     finished_projection_by_customer: dict[
-        int | None, dict[str, object]
+        tuple[int | None, int | None], dict[str, object]
     ] = {}
 
     from app.services.unfinished_components import unfinished_reservations
@@ -771,14 +771,18 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
             customer_id = (
                 int(raw_customer_id) if raw_customer_id is not None else None
             )
-            if customer_id not in finished_projection_by_customer:
-                finished_projection_by_customer[customer_id] = (
+            raw_product_id = row.get("product_id")
+            product_id = int(raw_product_id) if raw_product_id is not None else None
+            projection_key = (customer_id, product_id)
+            if projection_key not in finished_projection_by_customer:
+                finished_projection_by_customer[projection_key] = (
                     receipt_auto_finished_location_projection(
                         db,
                         customer_id=customer_id,
+                        product_id=product_id,
                     )
                 )
-            finished_projection = finished_projection_by_customer[customer_id]
+            finished_projection = finished_projection_by_customer[projection_key]
         finished_after = reserve_disposition_finished_after
         fact = latest_fact_by_snapshot.get(int(snapshot.id))
         variance = latest_variance_by_snapshot.get(int(snapshot.id))

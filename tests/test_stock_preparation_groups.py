@@ -12,7 +12,7 @@ from app.models.stock_preparation import StockPreparationJob, StockPreparationCo
 from app.models.warehouse_inventory import InventoryLot
 
 
-def prepare(app,factory,client):
+def prepare(app,factory,client,before_receipts=None):
     with factory() as db:
         original=db.get(Product,1)
         values={column.name:getattr(original,column.name) for column in Product.__table__.columns if column.name not in {'id','product_code','customer_material_code'}}
@@ -22,6 +22,8 @@ def prepare(app,factory,client):
         for index,(child,count) in enumerate([(original,3),(second,4)],1):
             db.add(ProductBomComponent(parent_product_id=parent.id,component_product_id=child.id,quantity_per_set=count,display_order=index,internal_component_code=f'PART-{index}',is_required=True))
         parent_id=parent.id;second_id=second.id;db.commit()
+    if before_receipts is not None:
+        before_receipts(parent_id, second_id)
     _login(client)
     payload=_customer_replenishment_payload(30)
     payload['idempotency_key']='stock-preparation-group-draft'

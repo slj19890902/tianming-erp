@@ -1,5 +1,8 @@
 /* Uses the existing mobile stocktake session, formal product master and ledger. */
 const inbound = { generation: 0, context: null, attempt: null, busy: false, type: "finished", stockLot: null };
+window.addEventListener("inventory-entry-product-updated", () => {
+  if (!inbound.busy && !inbound.attempt && Number($("inboundProduct")?.value)) refreshInboundContext();
+});
 function inboundAttemptStorageKey() { return `erp-initial-inbound:${state.user?.id}`; }
 function persistInboundAttempt() {
   try {

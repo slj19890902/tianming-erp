@@ -427,19 +427,6 @@ def _frozen_receipt_purpose_summaries_by_order_item_ids(
             )
         ).all()
     } if completion_ids else {}
-    receipt_auto_completions_by_item: dict[int, list[ProductionCompletion]] = {}
-    for completion in db.scalars(
-        select(ProductionCompletion)
-        .where(
-            ProductionCompletion.order_item_id.in_(normalized_ids),
-            ProductionCompletion.status == "posted",
-            ProductionCompletion.origin == "receipt_auto",
-        )
-        .order_by(ProductionCompletion.id)
-    ).all():
-        receipt_auto_completions_by_item.setdefault(
-            int(completion.order_item_id), []
-        ).append(completion)
     semi_credits_by_item_component: dict[tuple[int, str], int] = {}
     for requirement, credited in db.execute(
         select(
@@ -600,6 +587,10 @@ def _frozen_receipt_purpose_summaries_by_order_item_ids(
     from app.services.unfinished_components import unfinished_reservations
     import json
     unfinished_items={r.order_item_id for r,_,_ in unfinished_reservations(db,normalized_ids)}
+    from app.models.raw_purchase_plan import RawPurchaseDemand, RawPurchasePlan
+    receipt_auto_items=set(db.scalars(select(RawPurchaseDemand.order_item_id).join(
+        RawPurchasePlan,RawPurchasePlan.id==RawPurchaseDemand.plan_id).where(
+        RawPurchaseDemand.order_item_id.in_(normalized_ids),RawPurchasePlan.status=='active')))
     manual_by_item={}
     for completion,encoded,root_product_id in db.execute(select(ProductionCompletion,InventoryLot.cost_snapshot_detail_json,OrderItem.product_id)
             .join(InventoryLot,InventoryLot.id==ProductionCompletion.inventory_lot_id)
@@ -613,7 +604,7 @@ def _frozen_receipt_purpose_summaries_by_order_item_ids(
         summary['manual_processing_output_qty']=sum(r.actual_output_quantity for r in manual_rows)
         summary['manual_processing_reserved_qty']=sum(r.order_reserved_quantity for r in manual_rows)
         summary['manual_processing_surplus_qty']=sum(r.surplus_finished_quantity for r in manual_rows)
-        summary['requires_component_processing']=order_item_id in unfinished_items
+        summary['requires_component_processing']=order_item_id in unfinished_items and order_item_id not in receipt_auto_items
         from app.models.multilevel_bom import OrderBomGraph
         if db.get(OrderBomGraph, order_item_id) is not None:
             from app.services.multilevel_bom_receipt_projection import project_graph_receipts
@@ -687,9 +678,10 @@ def _frozen_receipt_purpose_summaries_by_order_item_ids(
                 == minimum_capacity
                 and int(row["remaining_order_sheet_qty"]) > 0
             )
-        posted_auto_completions = receipt_auto_completions_by_item.get(
-            order_item_id, []
-        )
+        posted_auto_completions = list(db.scalars(select(ProductionCompletion).where(
+            ProductionCompletion.order_item_id == order_item_id,
+            ProductionCompletion.status == "posted",
+            ProductionCompletion.origin == "receipt_auto").order_by(ProductionCompletion.id)))
         if posted_auto_completions:
             posted_output = sum(
                 max(int(row.actual_output_quantity or 0), 0)

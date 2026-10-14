@@ -61,6 +61,15 @@ def test_p1_02_picker_is_customer_scoped_and_keeps_cross_filter_selection() -> N
     assert "page_size:this.orderCommonBoxPicker.page_size" in INDEX
 
 
+def test_common_box_picker_keeps_selection_and_quantity_first_with_left_import() -> None:
+    block = _picker_template()
+    head = block[block.index('<thead>'):block.index('</thead>')]
+    assert head.index('>选择<') < head.index('>订单数量<') < head.index('>存货编码<')
+    summary = block[block.index('<div class="order-common-box-summary">'):]
+    assert summary.index('导入所选') < summary.index('已选 {{ orderCommonBoxSelectedCount() }} 款')
+    assert 'common-picker-sticky-select' in block and 'common-picker-sticky-quantity' in block
+
+
 def test_p1_02_import_preserves_blank_or_entered_quantity_and_avoids_duplicates() -> None:
     assert 'selection.quantity === "" ? null : Number(selection.quantity)' in INDEX
     assert "Number(item.product_id) === Number(product.id)" in INDEX

@@ -1292,7 +1292,7 @@ def test_frozen_500_600_receipts_split_450_580_600_and_block_duplicate_overrecei
     assert third["reserve_planned_sheet_qty"] == 100
     assert third["reserve_actual_sheet_qty"] == 100
     assert third["reserve_variance_sheet_qty"] == 0
-    assert third["finished_location_name"] == "一楼 匿名真实成品待送区-02"
+    assert third["finished_location_name"] == "一楼 匿名真实成品待送区-01"
     assert third["reserve_location_name"] == "三楼 匿名三楼左区原料备料区-01"
     assert "F1-DISPATCH-01" not in third["finished_location_name"]
 
@@ -1330,6 +1330,7 @@ def test_frozen_500_600_receipts_split_450_580_600_and_block_duplicate_overrecei
         assert {lot.warehouse_location_id for lot in finished_lots}.issubset(
             fin_location_ids
         )
+        assert len({lot.warehouse_location_id for lot in finished_lots}) == 1
         reserve_details = list(
             session.scalars(
                 select(SemiFinishedInventoryDetail).where(
@@ -1984,7 +1985,9 @@ def test_receipt_auto_composite_finished_stock_can_dispatch_and_cancel(
         )
         assert created.status_code == 201, created.text
         delivery_id = int(created.json()["id"])
-        dispatched = client.put(f"/api/deliveries/{delivery_id}/dispatch")
+        from tests.test_delivery_dispatch_commands import command as dispatch_command
+        dispatched = client.put(f"/api/deliveries/{delivery_id}/dispatch",
+            json=dispatch_command(client,delivery_id,'p181-composite-auto-dispatch'))
         assert dispatched.status_code == 200, dispatched.text
         with session_factory() as session:
             item = session.get(OrderItem, 1)

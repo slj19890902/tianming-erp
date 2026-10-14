@@ -212,6 +212,7 @@ def assemble_subkit_inventory(
         cost = Decimal(0)
         cost_sources = []
         labour_sources = []
+        physical_sources = []
         for lot in sorted(lots, key=inventory_fifo_sort_key):
             pid = product_by_lot[lot.id]
             take = min(free_by_lot[lot.id] + reserved_qty.get(lot.id, 0), to_consume[pid])
@@ -221,6 +222,7 @@ def assemble_subkit_inventory(
             available_take = take - reserved_take
             from app.services.bom_subkit_costs import source_cost
             part_cost, lineage = source_cost(db, lot, take)
+            evidence = None
             if graph_product_id is not None:
                 from app.services.shared_bom_stock import consumed_evidence
                 from app.services.finished_stock_identity import compiled_product_bases
@@ -229,6 +231,7 @@ def assemble_subkit_inventory(
                     lineage={**lineage,'shared_bom':evidence}
             cost_sources.append({**lineage, "lot_id": lot.id, "quantity": take, "cost": str(part_cost)})
             labour_sources.append((lot, take))
+            physical_sources.append((lot, take, pid, evidence))
             currencies = {r["currency"] for r in cost_sources if r["currency"]}
             if len(currencies) > 1:
                 raise SubkitError("原片采购币种不同，请先确认换算成本，不能直接合并")
@@ -283,9 +286,20 @@ def assemble_subkit_inventory(
             output.finished_detail.product_name_snapshot = snapshot.kit_name_snapshot
             output.estimated_unit_cost_snapshot = (cost / plan.kit_quantity).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
             output.cost_snapshot_source = source_ref
-            from app.services.bom_entry_cost import freeze_assembly_standard
+            from app.services.bom_entry_cost import freeze_assembly_standard, freeze_consumed_assembly_spec
             labour = freeze_assembly_standard(db, snapshot.kit_product_id, labour_sources, plan.kit_quantity)
-            output.cost_snapshot_detail_json = json.dumps({"conversion_id": conversion.id, "total_cost": str(cost), "quantity": plan.kit_quantity, **labour})
+            assembly_spec = None
+            from app.models.multilevel_bom import ProductBomProfile
+            profile = db.get(ProductBomProfile, output.finished_detail.product_id)
+            if profile is not None and profile.source == 'assembled':
+                try:
+                    assembly_spec = freeze_consumed_assembly_spec(db,
+                        parent_basis=output.finished_detail.physical_basis_json,
+                        output_quantity=plan.kit_quantity,sources=physical_sources)
+                except ValueError as error:
+                    raise SubkitError(str(error)) from error
+            output.cost_snapshot_detail_json = json.dumps({"conversion_id": conversion.id, "total_cost": str(cost), "quantity": plan.kit_quantity,
+                **({"consumed_assembly_spec":assembly_spec} if assembly_spec else {}), **labour})
             output.cost_snapshot_at = utc_now_naive()
             conversion.output_lot_id = output.id
         conversion.total_cost = cost

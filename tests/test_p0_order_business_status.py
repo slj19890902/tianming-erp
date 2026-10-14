@@ -198,6 +198,50 @@ def _add_completed_task(db: Session, item_id: int) -> None:
     db.flush()
 
 
+def test_80020549_class_finished_credit_precedes_external_purchase_branch(status_app) -> None:
+    from app.models.warehouse_inventory import InventoryLot, InventoryReservation, WarehouseLocation
+
+    _app, factory = status_app
+    with factory() as db:
+        order, item = _add_order(db, suffix="80020549", quantity=10)
+        item.supply_mode_snapshot = "external_purchase"
+        item.external_packaging_category_code_snapshot = "carton"
+        item.external_packaging_specification_json_snapshot = '{"spec":"隔离外购规格"}'
+        item.external_packaging_specification_summary_snapshot = "隔离外购规格"
+        item.external_packaging_purchase_unit_snapshot = "只"
+        item.external_packaging_candidate_snapshot_json = '[{"supplier_product_id":1,"is_default":true}]'
+        item.external_packaging_product_version_snapshot = 1
+        item.external_packaging_order_quantity_basis_snapshot = 1
+        item.external_packaging_purchase_quantity_basis_snapshot = 1
+        item.external_packaging_quantity_per_finished_unit_snapshot = 1
+        location = WarehouseLocation(location_code="STATUS-FG", location_name="状态隔离位", warehouse_type="finished")
+        db.add(location); db.flush()
+        lot = InventoryLot(lot_number="FG-80020549", inventory_type="finished",
+            warehouse_location_id=location.id, quantity_available=0, quantity_reserved=10,
+            unit="boxes", status="active", source_type="transfer", stock_date=date(2026, 10, 15),
+            last_movement_at=datetime(2026, 10, 15))
+        db.add(lot); db.flush()
+        reservation = InventoryReservation(reservation_number="RSV-80020549",
+            inventory_lot_id=lot.id, reservation_type="finished_order", order_id=order.id,
+            order_item_id=item.id, reserved_stock_quantity=10,
+            credited_requirement_quantity=10, idempotency_key="rsv-80020549",
+            status="active", reserved_at=datetime(2026, 10, 15))
+        db.add(reservation); db.flush()
+        projection = _projection(db, order.id)
+        assert projection["business_status"] == "pending_delivery"
+        row = projection["items"][item.id]
+        assert row["business_status_evidence"]["finished_inventory_coverage"] == 10
+        assert row["business_status_evidence"]["material_shortage"] == 0
+
+        reservation.released_stock_quantity = 6
+        reservation.released_requirement_quantity = 6
+        reservation.status = "partial"
+        db.flush()
+        projection = _projection(db, order.id)
+        assert projection["business_status"] == "pending_material"
+        assert projection["items"][item.id]["business_status_evidence"]["material_shortage"] == 6
+
+
 def test_line_status_progresses_only_on_formal_business_facts(status_app) -> None:
     from app.models.delivery import Delivery, DeliveryItem
     from app.models.finance import (

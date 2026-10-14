@@ -11,12 +11,17 @@ def physical_quantity(lot):
 
 def lot_location(lot, locations, contexts):
     location = locations.get(lot.warehouse_location_id)
+    context = contexts.get(location.id, {}) if location else {}
     pallet = lot.pallet_item.pallet if lot.pallet_item else None
     status, issue = 'located', None
     if lot.status not in {'active', 'frozen'}:
         status, issue = 'inventory_status_mismatch', '库存批次仍有数量但状态不可用，请核对仓库'
     elif location is None:
         status, issue = 'unlocated', '当前库存批次缺少有效库位，请核对仓库'
+    elif (not location.is_active
+          or getattr(context.get('area'), 'construction_status', None) == 'archived'
+          or getattr(context.get('policy'), 'status', None) == 'archived'):
+        status, issue = 'retired_location', '历史位置已退役；该批仍有库存，请核对实际位置后走正常移库'
     elif is_pending_relocation_location(location):
         # The designated logical pending location intentionally has no physical pallet.
         if pallet is not None:
@@ -30,7 +35,7 @@ def lot_location(lot, locations, contexts):
         status, issue = 'pallet_mismatch', '库存批次与实体栈板库位不一致，请核对仓库'
     if status != 'located':
         location = None
-    context = contexts.get(location.id, {}) if location else {}
+        context = {}
     projection = warehouse_location_projection(location, **context) if location else {}
     return dict(
         inventory_lot_id=lot.id,

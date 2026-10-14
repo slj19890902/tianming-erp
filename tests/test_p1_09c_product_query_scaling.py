@@ -211,7 +211,7 @@ def test_product_summary_omits_editor_only_relations_and_keeps_list_contract(
     assert first["product_code"] == "P1-09C-P-000"
     assert first["material_code"] == "P1M000"
     assert first["material_supplier_name"] == "Supplier 0"
-    assert first["readiness"]["status"] in {"资料已完善", "待完善"}
+    assert first["readiness"]["status"] in {"报料资料完整", "报料资料待完善"}
     assert first["version"] == 1
     assert "drawings" not in first
     assert "mold_tool" not in first

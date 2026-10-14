@@ -236,7 +236,7 @@ if(message.includes("List should")||message.includes("validation"))throw new Err
 
 
 def test_template_exposes_exact_receipt_execution_blocker() -> None:
-    table = INDEX.split('<table class="incoming-table incoming-compact-table">', 1)[1].split(
+    table = INDEX.split('<table class="incoming-table incoming-compact-table"', 1)[1].split(
         "</data-panel>", 1
     )[0]
     assert "incomingReceiptExecutionIssue(row)" in table

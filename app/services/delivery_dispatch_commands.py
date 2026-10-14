@@ -8,6 +8,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
+from copy import deepcopy
+from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from fractions import Fraction
 
@@ -37,6 +40,10 @@ from app.services.delivery_quantities import for_item, item_physical_quantity, c
 ACTION = 'delivery_dispatch_command'
 PRESERVE = 'X-Delivery-Dispatch-Preserve'
 REJECTED = 'X-Delivery-Dispatch-Rejected'
+ORIGINAL_INVALID = 'X-Delivery-Dispatch-Original-Invalid'
+MAP_COORDINATE_ENCODING = 'decimal-string-v1'
+MAP_COORDINATES = ('left_pct', 'top_pct', 'width_pct', 'height_pct')
+MAP_DECIMAL = re.compile(r'(?:0|[1-9]\d{0,2})(?:\.\d{0,3}[1-9])?')
 
 
 def headers(**extra):
@@ -98,6 +105,99 @@ def canonical(value):
 
 def digest(value):
     return hashlib.sha256(canonical(value).encode('utf-8')).hexdigest()
+
+
+def _map_points(frozen):
+    task = frozen.get('pick_task')
+    if task is not None:
+        if not isinstance(task, dict) or not isinstance(task.get('items'), list):
+            raise ValueError('pick_task')
+        for item in task['items']:
+            if not isinstance(item, dict) or not isinstance(item.get('location_lines'), list):
+                raise ValueError('pick_task item')
+            for line in item['location_lines']:
+                if not isinstance(line, dict):
+                    raise ValueError('location line')
+                point = line.get('map_point')
+                if point is not None:
+                    if not isinstance(point, dict):
+                        raise ValueError('map_point')
+                    yield point
+
+
+def _coordinate_text(value):
+    # The source projection is a percentage rounded to four decimals. Keep
+    # it out of JSON's binary-number representation; quantities remain ints.
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        raise ValueError('map coordinate type')
+    number = Decimal(str(value))
+    if not number.is_finite() or not 0 <= number <= 100:
+        raise ValueError('map coordinate range')
+    if not number:
+        return '0'
+    text = format(number, 'f')
+    return text.rstrip('0').rstrip('.') if '.' in text else text
+
+
+def _encode_map_coordinates(frozen, encoding):
+    if encoding is None:
+        return frozen
+    if encoding != MAP_COORDINATE_ENCODING:
+        raise ValueError('unsupported map coordinate encoding')
+    frozen['map_coordinate_encoding'] = encoding
+    for point in _map_points(frozen):
+        for name in MAP_COORDINATES:
+            point[name] = _coordinate_text(point[name])
+    return frozen
+
+
+def _original_error(reason):
+    raise HTTPException(409, f'原请求{reason}；原内容已保留，请查看原单并联系管理员核账，勿换标识重发。',
+        headers=headers(**{ORIGINAL_INVALID: '1'}))
+
+
+def verified_original(delivery_id, payload, *, key=None):
+    """Recover only v1 map float spelling, and only under its original digest.
+
+    Do not change canonical()/digest(): completed and closed v1 ledger rows
+    bind their full original Python representation through request_hash.
+    """
+    if key is not None and key != payload.idempotency_key:
+        _original_error('标识与查询地址不一致')
+    frozen = payload.snapshot
+    delivery = frozen.get('delivery')
+    if not isinstance(delivery, dict) or type(delivery.get('id')) is not int or delivery['id'] != delivery_id:
+        _original_error('送货单标识不一致')
+    if type(delivery.get('version')) is not int or delivery['version'] != payload.expected_version:
+        _original_error('版本与保存快照不一致')
+    if type(frozen.get('schema_version')) is not int or frozen['schema_version'] != 1:
+        _original_error('快照格式不受支持')
+    encoding = frozen.get('map_coordinate_encoding')
+    if 'map_coordinate_encoding' in frozen and encoding != MAP_COORDINATE_ENCODING:
+        _original_error('地图坐标编码不受支持')
+    try:
+        for point in _map_points(frozen):
+            for name in MAP_COORDINATES:
+                value = point[name]
+                if encoding is None:
+                    _coordinate_text(value)  # finite numeric percentages only
+                elif (not isinstance(value, str) or MAP_DECIMAL.fullmatch(value) is None
+                        or _coordinate_text(Decimal(value)) != value):
+                    raise ValueError('noncanonical map coordinate')
+        if digest(frozen) == payload.snapshot_hash:
+            return payload
+        if encoding is None:
+            restored = deepcopy(frozen)
+            # _map_number always returned float, including integer-valued
+            # coordinates. No IDs, quantities, versions or other fields change.
+            for point in _map_points(restored):
+                for name in MAP_COORDINATES:
+                    point[name] = float(point[name])
+            if digest(restored) == payload.snapshot_hash:
+                return payload.model_copy(update={'snapshot': restored})
+    except (KeyError, TypeError, ValueError, InvalidOperation, OverflowError):
+        _original_error('地图坐标或快照格式损坏，无法验证')
+    _original_error('快照摘要不匹配，已知地图数值兼容仍无法还原')
 
 
 def request_value(payload):
@@ -186,7 +286,8 @@ def _line(db, row, api, *, customer_quantity=None, dispatched=False):
         order_delivered_quantity=int(order_item.delivered_quantity or 0) if order_item else None, allocation_mode='explicit_unordered' if row.source_type=='unordered_finished' else 'on_dispatch', allocations=allocations)
 
 
-def snapshot(db, delivery_id, user, api, *, pick_action='none', refresh=False):
+def snapshot(db, delivery_id, user, api, *, pick_action='none', refresh=False,
+             map_coordinate_encoding=MAP_COORDINATE_ENCODING):
     delivery = api._delivery_for_user(db, delivery_id, user)
     if delivery.status != 'pending':
         raise HTTPException(409, '送货单已不在待发货状态，请查看原单和原结果。')
@@ -233,6 +334,7 @@ def snapshot(db, delivery_id, user, api, *, pick_action='none', refresh=False):
     frozen = dict(schema_version=1, delivery=dict(id=delivery.id, customer_id=delivery.customer_id, status=delivery.status,
         version=int(delivery.version or 1), source_mode=delivery.source_mode, delivery_date=delivery.delivery_date.isoformat(), vehicle_number=delivery.vehicle_number),
         items=items, pick_task=jsonable_encoder(pick), pick_action=pick_action, expected_final_items=final)
+    _encode_map_coordinates(frozen, map_coordinate_encoding)
     # Display is deliberately separate from the business snapshot. No future
     # FIFO allocation is promised by an order's current location hints.
     display_items=[]
@@ -417,10 +519,7 @@ def _trace(row):
 
 def resolve(db,delivery_id,key,payload,user,api):
     actor_guard(user,payload.expected_actor_id);actor_guard(user,payload.original_request.expected_actor_id)
-    original=payload.original_request
-    if (key != original.idempotency_key or original.snapshot.get('delivery',{}).get('id')!=delivery_id
-            or original.snapshot.get('delivery',{}).get('version')!=original.expected_version or digest(original.snapshot)!=original.snapshot_hash):
-        raise HTTPException(409,'原请求标识或送货单不一致，请保留原内容核对。')
+    original=verified_original(delivery_id,payload.original_request,key=key)
     require_activation(db)
     with db.no_autoflush:
         consistent_read(db)
@@ -510,8 +609,7 @@ def build_receipt(db,delivery_id,payload,user,api,first_movement_id):
 
 def execute(db,delivery_id,payload,user,api):
     actor_guard(user,payload.expected_actor_id);require_activation(db)
-    if payload.snapshot.get('delivery',{}).get('id')!=delivery_id or payload.snapshot.get('delivery',{}).get('version')!=payload.expected_version or digest(payload.snapshot)!=payload.snapshot_hash:
-        raise HTTPException(409,'发货快照或版本不一致，请保留原请求核对。')
+    payload=verified_original(delivery_id,payload)
     # Exact historical evidence precedes all fresh status/stock qualifications.
     value,record=_matched_record(db,delivery_id,payload,user,api)
     if record:
@@ -530,7 +628,8 @@ def execute(db,delivery_id,payload,user,api):
         if claimed.rowcount!=1:raise HTTPException(404,'送货单不存在。')
         row=api._delivery_for_user(db,delivery_id,user);db.refresh(row)
         if row.version!=payload.expected_version:raise HTTPException(409,'送货单版本已变化，请核对原数量；不能直接发后来修改的数量。')
-        actual=snapshot(db,delivery_id,user,api,pick_action=payload.snapshot.get('pick_action'),refresh=True)['snapshot']
+        actual=snapshot(db,delivery_id,user,api,pick_action=payload.snapshot.get('pick_action'),refresh=True,
+            map_coordinate_encoding=payload.snapshot.get('map_coordinate_encoding'))['snapshot']
         if canonical(actual)!=canonical(payload.snapshot):raise HTTPException(409,'送货明细或实际拿货已变化，请重新核对，不会自动采用新数量。')
         first_movement_id=int(db.scalar(select(func.coalesce(func.max(InventoryMovement.id),0))) or 0)
         if actual['pick_action']=='apply':
@@ -569,10 +668,7 @@ def close(db, delivery_id, key, payload, user, api):
     original = payload.original_request
     actor_guard(user, original.expected_actor_id)
     require_activation(db)
-    if (key != original.idempotency_key or original.snapshot.get('delivery', {}).get('id') != delivery_id
-            or original.snapshot.get('delivery', {}).get('version') != original.expected_version
-            or digest(original.snapshot) != original.snapshot_hash):
-        raise HTTPException(409, '原请求标识、版本或快照不一致，请保留原内容核对。')
+    original = verified_original(delivery_id, original, key=key)
     value, record = _matched_record(db, delivery_id, original, user, api)
     if record:
         if value:

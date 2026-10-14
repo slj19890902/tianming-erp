@@ -19,6 +19,7 @@
     requireValue(object(value) && value.schema_version === 1 && value.current_actor_id === actor && /^[a-f0-9]{64}$/.test(value.snapshot_hash));
     const s = value.snapshot, d = s?.delivery;
     requireValue(object(s) && s.schema_version === 1 && positive(d?.id) && d.id === id && positive(d.customer_id) && positive(d.version) && d.status === 'pending');
+    requireValue(!('map_coordinate_encoding' in s) || s.map_coordinate_encoding === 'decimal-string-v1', '原请求地图坐标编码不受支持，请保留记录并查看原单核账');
     if (positive(version) && d.version !== version) throw new Error('送货内容已变化，请刷新原单后重新核对；没有发货');
     requireValue(['order', 'unordered_finished', 'mixed'].includes(d.source_mode) && /^\d{4}-\d{2}-\d{2}$/.test(d.delivery_date) && nullableText(d.vehicle_number));
     requireValue(Array.isArray(s.items) && s.items.length > 0 && Array.isArray(s.expected_final_items) && s.expected_final_items.length === s.items.length && ['none', 'apply'].includes(s.pick_action));
@@ -44,6 +45,16 @@
       const taskIds = new Set();
       for (const item of task.items) {
         requireValue(positive(item.task_item_id) && !taskIds.has(item.task_item_id) && ids.has(item.delivery_item_id) && nullableId(item.order_item_id) && nonnegative(item.original_physical_quantity) && nonnegative(item.picked_physical_quantity) && typeof item.pick_status === 'string' && typeof item.location_plan_complete === 'boolean' && Array.isArray(item.location_lines));
+        for (const line of item.location_lines) {
+          if (line.map_point === null || line.map_point === undefined) continue;
+          requireValue(object(line.map_point));
+          for (const name of ['left_pct','top_pct','width_pct','height_pct']) {
+            const coordinate = line.map_point[name];
+            const encoded = s.map_coordinate_encoding === 'decimal-string-v1';
+            requireValue(encoded ? typeof coordinate === 'string' && /^(0|[1-9]\d{0,2})(\.\d{0,3}[1-9])?$/.test(coordinate) : typeof coordinate === 'number', '原请求地图坐标格式损坏，请保留记录并查看原单核账');
+            requireValue(Number.isFinite(Number(coordinate)) && Number(coordinate) >= 0 && Number(coordinate) <= 100);
+          }
+        }
         taskIds.add(item.task_item_id);
       }
     }

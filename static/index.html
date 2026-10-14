@@ -41367,7 +41367,9 @@
                 try { controller.unknown(record.key); } catch (storageError) { this.deliveryDispatchStorageError = this.errorMessage(storageError); }
                 printSession?.abort("发货结果待核对，请在原页面查原结果");
                 this.refreshDeliveryDispatchRecovery();
-                this.showToast(`原发货结果待核对：${this.errorMessage(error)}。请查原结果，不要新建发货`,true);
+                const invalid = error?.response?.headers?.["x-delivery-dispatch-original-invalid"] === "1";
+                if (invalid) this.deliveryDispatchNotRecorded = {...this.deliveryDispatchNotRecorded,[record.key]:false};
+                this.showToast(`原发货结果待核对：${this.errorMessage(error)}。${invalid ? "请保留记录，通过查看原单核账；重复提交不能修复原请求" : "请查原结果，不要新建发货"}`,true);
               }
               return false;
             } finally { if (Number(this.user?.id) === context.actor && this.authGeneration === context.auth && this.deliveryDispatchEpoch === context.epoch) this.deliveryDispatchBusy = false; }
@@ -41404,7 +41406,7 @@
               this.refreshDeliveryDispatchRecovery();
               if (["completed","closed"].includes(data.status) && this.modal?.type === "deliveryDispatch") this.modal = null;
               return true;
-            } catch (error) { if (context.current()) this.showToast(`核对失败，原发货内容已保留：${this.errorMessage(error)}。请查看原单并联系管理员核对`,true); return false; }
+            } catch (error) { if (context.current()) { if (this.deliveryDispatchNotRecorded?.[record.key]) this.deliveryDispatchNotRecorded = {...this.deliveryDispatchNotRecorded,[record.key]:false}; this.showToast(`核对失败，原发货内容已保留：${this.errorMessage(error)}。请查看原单并联系管理员核对`,true); } return false; }
             finally { if (Number(this.user?.id) === context.actor && this.authGeneration === context.auth && this.deliveryDispatchEpoch === context.epoch) this.deliveryDispatchBusy = false; }
           },
           async closeDeliveryDispatchRequest(record) {
@@ -41427,7 +41429,7 @@
               this.refreshDeliveryDispatchRecovery();
               if (["confirmed","closed"].includes(terminal.state) && this.modal?.type === "deliveryDispatch") this.modal = null;
               return true;
-            } catch (error) { if (context.current()) { this.refreshDeliveryDispatchRecovery(); this.showToast(`结束结果仍待核对：${this.errorMessage(error)}；请查原结果或再次结束本次确认，不要重发原发货`,true); } return false; }
+            } catch (error) { if (context.current()) { this.refreshDeliveryDispatchRecovery(); const invalid = error?.response?.headers?.["x-delivery-dispatch-original-invalid"] === "1"; if (invalid) this.deliveryDispatchNotRecorded = {...this.deliveryDispatchNotRecorded,[record.key]:false}; this.showToast(`结束结果仍待核对：${this.errorMessage(error)}；${invalid ? "请保留记录，通过查看原单核账；重复结束不能修复原请求" : "请查原结果或再次结束本次确认，不要重发原发货"}`,true); } return false; }
             finally { if (Number(this.user?.id) === context.actor && this.authGeneration === context.auth && this.deliveryDispatchEpoch === context.epoch) this.deliveryDispatchBusy = false; }
           },
           async viewDeliveryDispatchOriginal(record) {

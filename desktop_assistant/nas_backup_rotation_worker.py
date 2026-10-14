@@ -131,22 +131,30 @@ def capture_locked(manager,password,*,restart_allowed=None):
         manager.stop()
         inputs=manager._backup_inputs()
         with receipt.builder._private_creation():payload=manager._build_backup_payload(password,job,inputs)
-        facts=dict(cipher_sha256=payload['sha256'],raw_sha256=payload['raw_sha256'],
-            manifest_sha256=rotation.digest(payload['manifest']),database=payload['database'],source_time=payload['manifest']['created'])
-        plan=dict(type='tianming.nas-captured-task.v1',task_id=task_id,job_id=job.name,
-            filename=payload['encrypted'].name,sha256=payload['sha256'],size=payload['size'],
-            local_path=str(payload['encrypted']),proof=facts,roles=rotation.references(payload['state']),phase='captured')
-        _publish(adapter,_task_name(task_id),plan,locked=True)
-        with receipt.root_lease(binding.context) as root:
-            before,state=manage.record(root,'state.json',binding.context)
-            rotation.require(rotation.references(state)==plan['roles'],'capture state changed before readiness')
-            state['backup_rotation_task_id']=task_id
-            manage.replace_record(root,'state.json',state,before,binding.context,binding.check)
-        attempted=True
-        if running and (restart_allowed is None or restart_allowed()):manager.start()
-        rotation.require(manager._process() is not None and manager.state.get('manual_stop') is False,
-            'ERP readiness failed; retain this exact capture, do not generate another')
-        return plan
+        with _folder(binding,job) as (_,folder,held):
+            rotation.require(payload['encrypted'].parent==job,'captured cipher escaped its owned job')
+            source=held.enter_context(Lease(payload['encrypted'],uid=folder.uid,gid=folder.gid,mode=0o600,parent=folder))
+            rotation.require(os.fstat(source.fd).st_size==payload['size'] and work.digest(source)==payload['sha256'],
+                'captured cipher identity/hash/size changed before durability')
+            os.fsync(source.fd);os.fsync(folder.fd);os.fsync(folder.parent.fd)
+            source.check();binding.check()
+            facts=dict(cipher_sha256=payload['sha256'],raw_sha256=payload['raw_sha256'],
+                manifest_sha256=rotation.digest(payload['manifest']),database=payload['database'],source_time=payload['manifest']['created'])
+            plan=dict(type='tianming.nas-captured-task.v1',task_id=task_id,job_id=job.name,
+                filename=payload['encrypted'].name,sha256=payload['sha256'],size=payload['size'],
+                local_path=str(payload['encrypted']),proof=facts,roles=rotation.references(payload['state']),phase='captured')
+            _publish(adapter,_task_name(task_id),plan,locked=True)
+            with receipt.root_lease(binding.context) as root:
+                before,state=manage.record(root,'state.json',binding.context)
+                rotation.require(rotation.references(state)==plan['roles'],'capture state changed before readiness')
+                state['backup_rotation_task_id']=task_id
+                manage.replace_record(root,'state.json',state,before,binding.context,binding.check)
+            source.check();binding.check()
+            attempted=True
+            if running and (restart_allowed is None or restart_allowed()):manager.start()
+            rotation.require(manager._process() is not None and manager.state.get('manual_stop') is False,
+                'ERP readiness failed; retain this exact capture, do not generate another')
+            return plan
     except Exception:
         # Retained, unfinished package remains an active task, blocking a fourth.
         # Its owner must explicitly resolve it before asserting failed_closed.
@@ -326,11 +334,14 @@ def _local_retention(manager,binding,plan):
             path=value['local_copy']['path'];cipher_sha=value['sha256']
             rotation.require(cipher_sha not in rotation._protected_sha(fresh)
                 and cipher_sha not in active['active_sha256']+active['rehearsal_sha256']
-                and path not in active['active_paths']+active['rehearsal_paths'],
+                and not any(rotation._comparison_key(path)==rotation._comparison_key(name)
+                    for name in active['active_paths']+active['rehearsal_paths']),
                 'old local backup is an active restore/migration/rehearsal input')
             # Receipt references protect active owners, even when no path/hash
             # was recorded. Both original and binding-specific aliases count.
-            rotation.require(not any(receipt.matches_receipt_name(value,name) for name in active['active_receipts']),
+            protected_receipts={rotation._comparison_key(receipt.receipt_name(value['filename'])),
+                rotation._comparison_key(receipt.reauthenticated_receipt_name(value))}
+            rotation.require(not any(rotation._comparison_key(name) in protected_receipts for name in active['active_receipts']),
                 'old local backup has an active receipt owner')
             if fresh.get('update_backup')==path:
                 _closed_update_reference(manager,adapter,fresh,path,cipher_sha)

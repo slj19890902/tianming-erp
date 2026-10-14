@@ -417,9 +417,16 @@ def _protected_version(version, state, active=None):
     filenames = [Path(p).name for p in [state.get('last_backup') or '', stream.get('path') or '',
                                       *active.get('active_paths', []), *active.get('rehearsal_paths', [])]]
     receipt_names = [stream.get('receipt') or '', *active.get('active_receipts', [])]
+    from . import mac_smb_stream_receipt as existing
+    # Immutable original and current control-bound alias identify the same
+    # physical cipher, whichever legitimate name the active owner retained.
+    protected_names = {pointer['receipt'], existing.receipt_name(receipt['filename'])}
+    if _sha(receipt.get('control_sha256')):
+        protected_names.add(existing.reauthenticated_receipt_name(receipt))
+    protected_keys = {_comparison_key(name) for name in protected_names}
     return (receipt['sha256'] in _protected_sha(state) | set(active.get('active_sha256', [])) | set(active.get('rehearsal_sha256', []))
             or stream.get('receipt_sha256') == pointer['receipt_sha256']
-            or any(_comparison_key(name) == _comparison_key(pointer['receipt']) for name in receipt_names)
+            or any(_comparison_key(name) in protected_keys for name in receipt_names)
             or any(_comparison_key(name) == _comparison_key(receipt['filename']) for name in filenames))
 
 

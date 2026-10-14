@@ -212,7 +212,7 @@ def test_recovery_failure_preserves_kept_pair_and_replays_same_download(integrat
     assert case.adapter.read_index()[1]['staged'] is None
 
 
-@pytest.mark.parametrize('fault',['old_bytes','latest_bytes','active_reference','restore_reference','update_proof','unknown_cache','hardlink'])
+@pytest.mark.parametrize('fault',['old_bytes','latest_bytes','active_reference','restore_reference','update_proof','unknown_cache','hardlink','active_receipt_upper','active_path_upper'])
 def test_local_retention_refuses_changed_or_referenced_cipher_without_another_capture(integrated,monkeypatch,fault):
     case=integrated;establish_pair(case);captures=[]
     original_build=case.manager._build_backup_payload;original=worker._local_retention
@@ -224,6 +224,11 @@ def test_local_retention_refuses_changed_or_referenced_cipher_without_another_ca
         elif fault=='latest_bytes':latest.write_bytes(b'changed newest cipher')
         elif fault=='active_reference':
             case.adapter.record_job(worker._job('completion-'+'b'*32,'restore','active',old,sha(old)))
+        elif fault=='active_receipt_upper':
+            case.adapter.record_job(dict(job_id='completion-'+'b'*32,kind='restore',status='active',
+                backup_path='',backup_sha256=None,receipt=receipt.receipt_name(old.name).upper()))
+        elif fault=='active_path_upper':
+            case.adapter.record_job(worker._job('completion-'+'b'*32,'restore','active',str(old).upper()))
         elif fault=='restore_reference':
             state=manager.state;state['restored_backup_sha256']=sha(old);write_json(manager.root/'state.json',state)
         elif fault=='update_proof':
@@ -292,3 +297,39 @@ def test_first_authority_and_reauth_root_cleanup_resume_without_repeating_restor
     assert worker.reauthenticate_first(case.manager,PASSWORD)['status']=='first_authenticated_waiting_second'
     assert len(restores)==2 and case.actions==['download']
     assert worker.reserve_bootstrap_second(case.manager)['status']=='bootstrap_second_reserved'
+
+
+def test_capture_cipher_and_owned_directories_are_durable_before_start(integrated,monkeypatch):
+    case=integrated;establish_pair(case);flushed=set();fsync=os.fsync;start=case.manager.start
+    def record(fd):
+        info=os.fstat(fd);flushed.add((info.st_dev,info.st_ino));return fsync(fd)
+    def checked_start():
+        job=case.manager.root/'staging'/('smb-stream-'+case.manager.state['backup_rotation_task_id'])
+        sources=list(job.glob('*.tmbackup'));assert len(sources)==1
+        for path in (sources[0],job,job.parent):
+            info=path.stat();assert (info.st_dev,info.st_ino) in flushed
+        return start()
+    monkeypatch.setattr(os,'fsync',record);monkeypatch.setattr(case.manager,'start',checked_start)
+    case.manager.backup(PASSWORD,target.destination(case.binding.control))
+
+
+@pytest.mark.parametrize('fault',['hash','size','fsync'])
+def test_failed_capture_durability_retains_active_owner_before_publication(integrated,monkeypatch,fault):
+    case=integrated;establish_pair(case);before=case.manager.state['backup_rotation_task_id']
+    build=case.manager._build_backup_payload;fsync=os.fsync;cipher=[];captures=[]
+    def broken(*args,**kwargs):
+        payload=build(*args,**kwargs);captures.append(True);cipher.append(payload['encrypted'].stat().st_ino)
+        if fault=='hash':payload['sha256']='0'*64
+        elif fault=='size':payload['size']+=1
+        return payload
+    def failed(fd):
+        if fault=='fsync' and os.fstat(fd).st_ino in cipher:raise OSError('synthetic cipher fsync failure')
+        return fsync(fd)
+    monkeypatch.setattr(case.manager,'_build_backup_payload',broken);monkeypatch.setattr(os,'fsync',failed)
+    with pytest.raises((ValueError,OSError)):
+        case.manager.backup(PASSWORD,target.destination(case.binding.control))
+    assert case.live['running'] and case.manager.state['backup_rotation_task_id']==before
+    assert case.actions==[] and len(captures)==1
+    with pytest.raises(ValueError,match='active'):
+        case.manager.backup(PASSWORD,target.destination(case.binding.control))
+    assert len(captures)==1

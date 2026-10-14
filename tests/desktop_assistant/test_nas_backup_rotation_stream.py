@@ -279,3 +279,29 @@ def test_recovery_legacy_name_only_reads_the_same_receipt_identity(tmp_path):
     assert adapter.load_verified(p)['source_time']==report['source_time']
     report['receipt_sha256']='0'*64;legacy.write_bytes(records.canonical(report));legacy.chmod(0o600)
     with pytest.raises(ValueError,match='not bound'):adapter.load_verified(p)
+
+
+@pytest.mark.parametrize('pointer_alias',[False,True])
+@pytest.mark.parametrize('reference_alias',[False,True])
+@pytest.mark.parametrize('upper',[False,True])
+def test_original_or_control_alias_reference_protects_same_cipher(pointer_alias,reference_alias,upper):
+    from desktop_assistant.mac_smb_stream_receipt import reauthenticated_receipt_name
+    peer,value,versions,adapter=setup();oldest=versions[0]
+    original=oldest['pointer']['receipt'];alias=reauthenticated_receipt_name(oldest['receipt'])
+    if pointer_alias:
+        adapter.versions.pop(original);oldest['pointer']['receipt']=alias;adapter.versions[alias]=oldest
+    reference=alias if reference_alias else original
+    adapter.active['active_receipts']=[reference.upper() if upper else reference]
+    with pytest.raises(ValueError):run(peer,value,adapter)
+    assert not any(event[0]=='delete-held' for event in peer.events)
+    assert 'BoxERP\\mac-server-backups\\'+oldest['receipt']['filename'] in peer.nodes
+    assert adapter.index['retired']==[oldest['pointer']]
+
+
+def test_unrelated_control_alias_does_not_claim_same_cipher():
+    from desktop_assistant.mac_smb_stream_receipt import reauthenticated_receipt_name
+    peer,value,versions,adapter=setup();oldest=versions[0]
+    unrelated=dict(oldest['receipt'],control_sha256='0'*64)
+    adapter.active['active_receipts']=[reauthenticated_receipt_name(unrelated)]
+    assert run(peer,value,adapter)['status']=='removed'
+    assert not adapter.index['retired']

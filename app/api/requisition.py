@@ -18318,11 +18318,11 @@ def _supplier_order_purchase_lines(
             "cutting_mode": cutting_mode,
             "remark": remark,
         }
-        line_key = _purchase_line_key(order.supplier_name, spec)
-        if typed_snapshot:
-            # A typed source lacks the ordinary line's complete direction/net
-            # board contract; retain its own line rather than guessing a merge.
-            line_key += f":source:{item.id}"
+        from app.services.supplier_delivery_contract import delivery_contract
+        line_key, supplier_contract, contract_issues = delivery_contract(
+            order.supplier_name, spec, typed_snapshot=typed_snapshot)
+        if contract_issues:
+            line_key += f":incomplete:{item.id}"
         line = line_map.get(line_key)
         if line is None:
             crease_display = (
@@ -18333,6 +18333,8 @@ def _supplier_order_purchase_lines(
             line = {
                 "line_key": line_key,
                 **spec,
+                "supplier_delivery_contract": supplier_contract,
+                "supplier_delivery_contract_issues": contract_issues,
                 "crease_display": crease_display,
                 "dimension_warnings": _supplier_dimension_warnings(
                     order.supplier_name,
@@ -18438,6 +18440,7 @@ def _supplier_order_purchase_lines(
                 "stock_purpose_sheet_qty": item_stock_purpose,
                 "purpose_status": item_purpose_status,
                 "cutting_mode": item.cutting_mode or order.cutting_mode or DEFAULT_CUTTING_MODE,
+                "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
                 "pieces_per_box": item.pieces_per_box,
                 "required_piece_qty": item.required_piece_qty,
                 "customer_name": item.customer_name,

@@ -172,11 +172,25 @@ def find_mold_cell(value: str, *, floors: list[dict] | None = None, include_reti
         for rack in racks:
             cells=projected_cells(rack)
             if include_retired:
-                cells += projected_cells({**rack,"mold_cells":rack.get("retired_mold_cells") or []})
+                # A cell may retire and return more than once. Keep every
+                # archived spelling, but display its latest retired snapshot.
+                cells += projected_cells({**rack,"mold_cells":list(reversed(rack.get("retired_mold_cells") or []))})
             for cell in cells:
                 if str(cell["id"]).casefold() == identity.casefold():
                     return floor, rack, cell
     return None
+
+
+def current_mold_cell_alias_codes(value: str, *, floors: list[dict] | None = None) -> list[str]:
+    """Resolve a display alias for read-only search, never for a location write."""
+    alias = str(value or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{1,8}[1-9]\d*", alias):
+        return []
+    return sorted({cell_code(cell["id"])
+        for floor in (floors if floors is not None else published_mold_floors())
+        for rack in floor.get("racks") or []
+        for cell in rack.get("mold_cells") or []
+        if str(cell.get("alias") or "").strip().upper() == alias})
 
 
 def dynamic_mold_location_options(floor_layout: dict) -> list[dict]:
@@ -712,6 +726,8 @@ def mold_location_feature_codes(
 def normalize_mold_location_code(value: str) -> str:
     """Accept only canonical, physically addressable confirmed mold positions."""
 
+    if re.fullmatch(r"[A-Z]{1,8}[1-9]\d*", str(value or "").strip().upper()):
+        raise MoldLocationError("短号可能对应历史格位，请扫描现用格位二维码或在货架中选择具体层格", status_code=409)
     guide = describe_mold_location(value)
     if guide["kind"] == "storage_cell":
         return str(guide["location_code"])

@@ -93,6 +93,7 @@ export interface Rack {
   area_code?: string;
   mold_rack_code?: string;
   mold_cells?: Array<{ id: string; level: number; grid: number; alias: string; location_code?: string }>;
+  retired_mold_cells?: Array<{ id: string; level: number; grid: number; alias: string }>;
 }
 
 export interface Pallet {

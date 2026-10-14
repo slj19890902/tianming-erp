@@ -89,6 +89,7 @@ import {
   moldRackLevelUsage,
   moldRacksForArea
 } from "./moldRackView.mjs";
+import { previewMoldCellAliases } from "./moldCellAliases.mjs";
 import { filterShelfMolds, groupShelfProducts } from "./shelfDisplay.mjs";
 import { ShelfLotHistory } from "./ShelfLotHistory";
 import {
@@ -3103,6 +3104,7 @@ export function WarehouseTwinApp() {
   const selectedRackEditDraft = selectedRack
     ? (rackDrafts[selectedRack.id] || rackDraft(selectedRack))
     : null;
+  const selectedCellAliasPreview = previewMoldCellAliases(selectedRackEditDraft);
   const selectedPublishedMoldRack = selectedRackEditDraft
     && moldRackResponse?.rack.rack_id === selectedRackEditDraft.id
       ? moldRackResponse.rack
@@ -5366,6 +5368,8 @@ export function WarehouseTwinApp() {
 
   const saveRackDraftImmediately = async (rackId: string, draft: RackDraft) => {
     if (!layout || spatialEditBusy) return;
+    const aliasErrors = previewMoldCellAliases(draft).errors;
+    if (aliasErrors.length) { setLocationEditMessage(aliasErrors.join("；")); return; }
     const original = layout.racks.find((item) => item.id === rackId);
     if (!original) return;
     const expectedPublishedRevision = planningPublishedLayout?.source_sha256 || publishedFloorRevision;
@@ -7316,9 +7320,10 @@ export function WarehouseTwinApp() {
                     return <label className={machineBlocked ? "blocked" : ""} key={`${selectedRackEditDraft.id}-simple-grid-${level}`}><span>第 {level} 层格数{machineBlocked ? "（占用）" : usedCount ? `（已有 ${usedCount}）` : ""}</span><input type="number" min="0" max="50" disabled={machineBlocked} value={machineBlocked ? 0 : count} onChange={(event) => changeRackLevelCellCount(selectedRackEditDraft, index, Number(event.target.value))} /></label>;
                   })}
                 </div>
-                <div className="mold-cell-aliases">{(selectedRackEditDraft.mold_cells || []).map(cell => <label key={cell.id}><span>第{cell.level}层第{cell.grid}格 · 旧号对应</span><input maxLength={24} value={cell.alias} onChange={event => updateRackDraft(selectedRackEditDraft.id, {mold_cells: selectedRackEditDraft.mold_cells?.map(item => item.id === cell.id ? {...item, alias: event.target.value.toUpperCase()} : item)})} /></label>)}</div>
+                <div className="mold-cell-aliases">{selectedCellAliasPreview.cells.map(cell => <label key={`${cell.level}-${cell.grid}`}><span>第{cell.level}层第{cell.grid}格 · {cell.status === "current" ? "原格位" : cell.status === "restore" ? "恢复原格位" : cell.status === "ambiguous" ? "历史位置有多个身份，将建新格" : "新增格位"}</span><input maxLength={16} readOnly={!cell.id} value={cell.alias} onChange={event => updateRackDraft(selectedRackEditDraft.id, {mold_cells: selectedRackEditDraft.mold_cells?.map(item => item.id === cell.id ? {...item, alias: event.target.value.toUpperCase()} : item)})} />{cell.historyAliases.length > 0 && <small>此位置历史短号：{cell.historyAliases.join("、")}</small>}{cell.reused && <small>短号曾用于历史格位；二维码始终对应原格位</small>}{!cell.id && <small>保存后可修改短号</small>}</label>)}</div>
+                {selectedCellAliasPreview.errors.map(error => <p className="twin-mold-rack-structure-blocker" key={error}>{error}</p>)}
                 <div className="twin-mold-rack-planner-actions">
-                  <button type="button" className="primary" disabled={spatialEditBusy} title="保存并直接应用当前货架" onClick={saveSelectedRack}>保存并应用货架</button>
+                  <button type="button" className="primary" disabled={spatialEditBusy || selectedCellAliasPreview.errors.length > 0} title="保存并直接应用当前货架" onClick={saveSelectedRack}>保存并应用货架</button>
                   <button type="button" disabled={spatialEditBusy} onClick={() => setRackDrafts((current) => { const next = { ...current }; delete next[selectedRackEditDraft.id]; return next; })}>取消本次输入</button>
                 </div>
                 <p>已用格必须先移出模具再减少层格；增加空格保留既有格号。</p>

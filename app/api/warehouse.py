@@ -435,6 +435,7 @@ from app.services.mold_location import (
     mold_rack_structure,
     mold_rack_layout_usage_blockers,
     find_mold_cell,
+    current_mold_cell_alias_codes,
     published_mold_floors,
     dynamic_mold_location_options,
     mold_location_feature_codes,
@@ -20466,7 +20467,8 @@ def _mold_tools_query(
     normalized_rack_location = (rack_location or "").strip()
     if normalized_rack_location:
         query = query.where(
-            MoldTool.rack_location.like(f"%{normalized_rack_location}%")
+            or_(MoldTool.rack_location.like(f"%{normalized_rack_location}%"),
+                MoldTool.rack_location.in_(current_mold_cell_alias_codes(normalized_rack_location)))
         )
     if keyword:
         linked_scope_filters = []
@@ -20529,6 +20531,7 @@ def _mold_tools_query(
                     MoldTool.label_name.like(pattern),
                     MoldTool.chinese_short_name.like(pattern),
                     MoldTool.rack_location.like(pattern),
+                    MoldTool.rack_location.in_(current_mold_cell_alias_codes(token)),
                     MoldTool.remarks.like(pattern),
                     MoldTool.id.in_(linked_molds),
                     MoldTool.id.in_(associated_molds),

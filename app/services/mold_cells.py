@@ -24,6 +24,19 @@ def reconcile_mold_cells(rack: dict, previous: dict | None = None) -> dict:
     wanted = {(level, grid) for level,n in enumerate(counts,1) for grid in range(1,int(n)+1)}
     existing = {str(c["id"]):c for c in old.get("mold_cells") or []}
     retired = [dict(c) for c in old.get("retired_mold_cells") or []]
+    # Retired rows are history, not a permanent reservation of a display name.
+    # A reactivated ID can therefore be both current and present in history.
+    historical_slots = {}
+    retired_by_slot = {}
+    for c in [*existing.values(), *retired]:
+        identity = str(UUID(str(c["id"])))
+        slot = (int(c["level"]), int(c["grid"]))
+        if identity in historical_slots and historical_slots[identity] != slot:
+            raise ValueError("历史模具格身份对应多个物理层格，请先核对原位置")
+        historical_slots[identity] = slot
+    for c in retired:
+        slot = (int(c["level"]), int(c["grid"]))
+        retired_by_slot.setdefault(slot, {})[str(UUID(str(c["id"])))] = c
     supplied = rack.get("mold_cells")
     if previous is None and supplied:
         raise ValueError("新增模具格身份由系统生成，不能指定旧身份")
@@ -32,8 +45,6 @@ def reconcile_mold_cells(rack: dict, previous: dict | None = None) -> dict:
     else:
         cells = [dict(c) for c in supplied]
     used_ids=set(); used_slots=set(); used_aliases=set()
-    retired_ids={str(c["id"]) for c in retired}
-    retired_aliases={str(c["alias"]).upper() for c in retired}
     for c in cells:
         c["id"] = str(UUID(str(c["id"])))
         c["level"]=int(c["level"]); c["grid"]=int(c["grid"])
@@ -41,26 +52,33 @@ def reconcile_mold_cells(rack: dict, previous: dict | None = None) -> dict:
         slot=(c["level"],c["grid"])
         if c["id"] in existing and slot != (int(existing[c["id"]]["level"]),int(existing[c["id"]]["grid"])):
             raise ValueError("已保存的模具格身份不能重新绑定其他物理层格")
-        if c["alias"] in retired_aliases:
-            raise ValueError("已停用格的历史短号不能重新使用")
         if c["id"] in used_ids or slot in used_slots or c["alias"] in used_aliases:
             raise ValueError("模具格身份、层格和短号不能重复")
         if slot not in wanted or not re.fullmatch(re.escape(code)+r"[1-9]\d*",c["alias"]):
             raise ValueError("模具格短号或层格超出当前架结构")
-        if c["id"] in retired_ids or (previous and c["id"] not in existing):
+        if previous and c["id"] not in existing:
             raise ValueError("不能替换或复用已保存的模具格身份；新增格由系统生成")
         used_ids.add(c["id"]); used_slots.add(slot); used_aliases.add(c["alias"])
     if supplied is not None:
         retained={key for key,c in existing.items() if (int(c["level"]),int(c["grid"])) in wanted}
         if not retained.issubset(used_ids):
             raise ValueError("现存物理层格必须保留原格身份，只能调整显示短号")
-    retired.extend(dict(c) for key,c in existing.items() if key not in used_ids)
-    reserved=used_aliases | {str(c["alias"]) for c in retired}
+    for key, c in existing.items():
+        if key not in used_ids and c not in retired:
+            retired.append(dict(c))
+    reserved=set(used_aliases)
     sequence=1
     for level,grid in sorted(wanted-used_slots):
         while f"{code}{sequence}" in reserved: sequence+=1
         alias=f"{code}{sequence}"; reserved.add(alias)
-        cells.append({"id":str(uuid4()),"level":level,"grid":grid,"alias":alias})
+        candidates = retired_by_slot.get((level, grid), {})
+        # Only one historical identity at this same rack/level/grid is proof
+        # of continuity. Ambiguous or different slots receive a fresh UUID;
+        # their old QR codes remain retired, even if the short name is reused.
+        restored_id = next(iter(candidates)) if len(candidates) == 1 else None
+        identity = restored_id if restored_id and restored_id not in existing and restored_id not in used_ids else str(uuid4())
+        used_ids.add(identity)
+        cells.append({"id":identity,"level":level,"grid":grid,"alias":alias})
     rack["mold_rack_code"]=code
     rack["mold_cells"]=sorted(cells,key=lambda c:(c["level"],c["grid"]))
     rack["retired_mold_cells"]=retired

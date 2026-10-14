@@ -138,6 +138,9 @@ def test_cell_rack_counts_preview_scope_batch_denial_and_qr_labels(mold_app,dyna
         cell=client.get("/api/warehouse/molds/cell",params={"cell_id":target["id"]})
         assert cell.status_code==200,cell.text
         assert cell.json()["total"]==1 and cell.json()["items"][0]["mold_code"]=="ALLOW"
+        for query in ({"q":"A1"}, {"rack_location":"A1"}):
+            searched=client.get("/api/warehouse/molds",params=query)
+            assert searched.status_code==200 and [row["mold_code"] for row in searched.json()["items"]]==["ALLOW"],searched.text
         by_rack=client.get("/api/warehouse/molds/by-map-rack",params={"floor_code":"3F","rack_id":dynamic_floor["racks"][0]["id"]})
         assert by_rack.status_code==200,by_rack.text
         assert by_rack.json()["total"]==1
@@ -380,7 +383,10 @@ def test_retired_cell_preserves_readable_history_but_cannot_receive_molds(dynami
     assert guide["kind"]=="retired_cell" and guide["alias"]=="A12" and "已停用" in guide["prompt"]
     with pytest.raises(location.MoldLocationError): location.normalize_mold_location_code(code)
     changed["mold_cells"][0]["alias"]="A12"
-    with pytest.raises(ValueError): reconcile_mold_cells(changed,changed)
+    reconcile_mold_cells(changed,changed)
+    assert changed["mold_cells"][0]["id"] == prior["mold_cells"][0]["id"]
+    assert location.find_mold_cell(code) is None  # Display reuse never rebinds the old QR.
+    assert location.describe_mold_location(code)["kind"] == "retired_cell"
     app,_=mold_app
     with TestClient(app) as client:
         _login(client,"admin")

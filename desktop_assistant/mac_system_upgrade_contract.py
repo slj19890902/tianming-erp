@@ -17,6 +17,11 @@ import re
 
 BASE = '/Library/TianmingERP'
 PLAN = 'tianming.system-upgrade-plan.v1'
+FACTORY_PLAN = 'tianming.system-upgrade-preserve-activation-plan.v1'
+FACTORY_CAPABILITY = 'system_upgrade_preserve_activation_v1'
+ACTIVATION_NAME = 'factory-activation.json'
+OWNER_PUBLICATION_NAME = 'owner-current-mac-activation-publication.json'
+OWNER_FAILED_NAME = 'owner-current-mac-activation-failed.json'
 REQUEST = 'tianming.system-upgrade-request.v1'
 REPLY = 'tianming.system-upgrade-worker.v1'
 PHASES = frozenset({'stop', 'verify'})
@@ -30,6 +35,7 @@ PLAN_FIELDS = frozenset({'type', 'attempt_id', 'created_at', 'expires_at', 'uid'
     'code_manifest_sha256', 'old_package_sha256', 'new_package_sha256', 'current_package_sha256',
     'context_sha256', 'publisher_sha256', 'registry_sha256', 'old_control_sha256',
     'old_plist_sha256', 'new_plist_sha256', 'state_before_sha256', 'state_stopped_sha256'})
+FACTORY_PLAN_FIELDS = PLAN_FIELDS | {'activation_sha256', 'owner_publication_sha256'}
 REQUEST_FIELDS = frozenset({'type', 'attempt_id', 'plan_sha256', 'phase', 'challenge', 'lock_fd'})
 REPLY_FIELDS = frozenset({'type', 'attempt_id', 'plan_sha256', 'phase', 'challenge',
     'new_package_sha256', 'current_package_sha256', 'control_package_sha256', 'plist_sha256',
@@ -129,9 +135,11 @@ def plan_path(attempt_id):
 
 def validate_plan(value, *, now=None):
     """Validate shape; an execution consumer must also supply its current time."""
-    _exact(value, PLAN_FIELDS)
-    require(value['type'] == PLAN and token(value['attempt_id']))
-    require(all(sha(value[key]) for key in PLAN_FIELDS if key.endswith('_sha256')))
+    require(type(value) is dict and value.get('type') in (PLAN, FACTORY_PLAN))
+    fields = FACTORY_PLAN_FIELDS if value['type'] == FACTORY_PLAN else PLAN_FIELDS
+    _exact(value, fields)
+    require(token(value['attempt_id']))
+    require(all(sha(value[key]) for key in fields if key.endswith('_sha256')))
     require(value['old_package_sha256'] != value['new_package_sha256']
             and value['old_plist_sha256'] != value['new_plist_sha256'])
     require(all(type(value[key]) is int and 400 <= value[key] < 500 for key in ('uid', 'gid')))
@@ -141,6 +149,34 @@ def validate_plan(value, *, now=None):
     if now is not None:
         validate_window(value, now)
     return value
+
+
+def activation_binding(activation_raw, publication_raw):
+    """Root-only public binding checks; never a substitute for signed authority.
+
+    The dedicated worker must additionally call mac_factory_runtime.configuration
+    for the complete owner signature, local identity and restoration checks.
+    Keep this root pack stdlib-only and retain both original file byte hashes.
+    """
+    record = decode(activation_raw)
+    _exact(record, {'type', 'request', 'network', 'authorization', 'authorization_sha256',
+        'context_sha256', 'registry_sha256', 'activated_at', 'target_snapshot'})
+    require(record['type'] == 'tianming.factory-owner-current-mac.activation.v1'
+            and sha(record['context_sha256']) and type(record['request']) is dict)
+    gate = decode(publication_raw)
+    _exact(gate, {'type', 'attempt_id', 'plan_sha256', 'activation_sha256', 'request_sha256', 'ready'})
+    require(gate['type'] == 'tianming.factory-owner-current-mac.publication.v1'
+            and gate['ready'] is True and token(gate['attempt_id'])
+            and all(sha(gate[key]) for key in ('plan_sha256', 'activation_sha256', 'request_sha256')))
+    # Owner request canonicalization uses UTF-8, unlike this upgrade plan's
+    # historical ASCII JSON. Never silently re-encode the activation itself.
+    request_raw = json.dumps(record['request'], ensure_ascii=False, sort_keys=True,
+                            separators=(',', ':'), allow_nan=False).encode('utf-8')
+    require(gate['activation_sha256'] == digest(activation_raw)
+            and gate['request_sha256'] == digest(request_raw))
+    return {'activation_sha256': digest(activation_raw),
+            'owner_publication_sha256': digest(publication_raw),
+            'context_sha256': record['context_sha256']}
 
 
 def validate_window(plan, now):

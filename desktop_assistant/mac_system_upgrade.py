@@ -237,7 +237,7 @@ def _publication():
 
 
 @contextmanager
-def _paths():
+def _paths(*, factory=False):
     with ExitStack() as held:
         base = held.enter_context(Pin(BASE, mode=0o755, directory=True, mutable=True))
         root = held.enter_context(Pin(ROOT, uid=499, gid=499, mode=0o700,
@@ -252,13 +252,24 @@ def _paths():
         logs = [held.enter_context(Pin(BASE / name, gid=499, mode=0o660, mutable=True, parent=base))
                 for name in ('system-service.stdout.log', 'system-service.stderr.log')]
         pins = [base, root, control, plists, *locks, *logs]
+        authority = None
+        if factory:
+            active, gate = [held.enter_context(Pin(BASE / name, parent=base)) for name in
+                           (contract.ACTIVATION_NAME, contract.OWNER_PUBLICATION_NAME)]
+            original_active, original_gate = active.read(), gate.read()
+            authority = contract.activation_binding(original_active, original_gate)
+            pins.extend((active, gate))
         def check():
             for item in pins: item.check()
-            require(not os.path.lexists(BASE / 'factory-activation.json'))
+            if factory:
+                require(not os.path.lexists(BASE / contract.OWNER_FAILED_NAME)
+                        and active.read() == original_active and gate.read() == original_gate)
+            else:
+                require(not os.path.lexists(BASE / contract.ACTIVATION_NAME))
             _no_pending(root)
         check()
         yield dict(base=base, root=root, control=control, plists=plists,
-                   operation=locks[0], monitor=locks[1], logs=logs, check=check)
+                   operation=locks[0], monitor=locks[1], logs=logs, check=check, authority=authority)
 
 
 def _metadata(plan):
@@ -281,11 +292,18 @@ def _metadata(plan):
     require(type(caps.get(CAPABILITY)) is int and caps[CAPABILITY] == 1
             and {WORKER, CONTRACT_MODULE, 'desktop_assistant/manager.py',
                  'desktop_assistant/mac_service_manage.py'} <= manifest.get('files', {}).keys())
+    if plan['type'] == contract.FACTORY_PLAN:
+        require(type(caps.get(contract.FACTORY_CAPABILITY)) is int
+                and caps[contract.FACTORY_CAPABILITY] == 1
+                and 'desktop_assistant/mac_factory_runtime.py' in manifest.get('files', {}))
     return old, new
 
 
 def _initial(plan, paths):
     old, new = _metadata(plan); paths['check']()
+    expected = ({key: plan[key] for key in ('activation_sha256', 'owner_publication_sha256', 'context_sha256')}
+                if plan['type'] == contract.FACTORY_PLAN else None)
+    require(paths['authority'] == expected)
     raw, _ = system.checked_control(old)
     require(boot.digest(raw) == plan['old_control_sha256'])
     plist = system._installed_plist(old)
@@ -301,7 +319,7 @@ def make_plan(old_package, new_package):
     """Read installed metadata/state only. This does not publish or stop."""
     _entry(); code = verify_code()
     require(contract.sha(old_package) and contract.sha(new_package) and old_package != new_package)
-    with _publication() as publication_pin, _paths() as paths:
+    with _publication() as publication_pin, _paths(factory=os.path.lexists(BASE / contract.ACTIVATION_NAME)) as paths:
         old = system.metadata(old_package)
         control, _ = system.checked_control(old); plist = system._installed_plist(old)
         raw, state = _state(paths['root'], 499, 499)
@@ -316,6 +334,9 @@ def make_plan(old_package, new_package):
             'old_control_sha256': boot.digest(control), 'old_plist_sha256': boot.digest(plist),
             'new_plist_sha256': boot.digest(system._plist(new_package, old['publisher_sha256'])),
             'state_before_sha256': boot.digest(raw), 'state_stopped_sha256': boot.digest(stopped)}
+        if paths['authority'] is not None:
+            plan.update(type=contract.FACTORY_PLAN, **{key: paths['authority'][key] for key in
+                        ('activation_sha256', 'owner_publication_sha256')})
         contract.validate_plan(plan, now=time.time()); _initial(plan, paths); publication_pin.check()
         return plan
 
@@ -330,7 +351,7 @@ def _header(raw, approved_sha):
 def prepare(raw, approved_sha):
     """Publish only the separately approved fixed public plan, exclusively."""
     _entry(); plan = _header(raw, approved_sha)
-    with _publication() as publication_pin, _paths() as paths:
+    with _publication() as publication_pin, _paths(factory=plan['type'] == contract.FACTORY_PLAN) as paths:
         _initial(plan, paths)
         name = 'system-upgrade-' + plan['attempt_id']
         os.mkdir(name, mode=0o755, dir_fd=paths['base'].fd)
@@ -556,8 +577,9 @@ def _status(paths, identity, started):
                           'system_identity', 'requires_user_login', 'keychain_canary_verified'})
     if value['pid'] != identity['pid'] or value['status'] in {'maintenance-busy', 'starting', 'stopped'}:
         return None
-    require(value['status'] == 'manually-stopped' and value['configured_mode'] == 'home'
-            and value['home_rehearsal'] is True and value['requires_user_login'] is False
+    factory = paths['authority'] is not None
+    require(value['status'] == 'manually-stopped' and value['configured_mode'] == ('factory' if factory else 'home')
+            and value['home_rehearsal'] is (not factory) and value['requires_user_login'] is False
             and value['keychain_canary_verified'] is True)
     actual = value['system_identity']; require(type(actual) is dict and set(actual) == contract.IDENTITY_FIELDS)
     require(all(type(actual[k]) is int and actual[k] == 499 for k in ('uid', 'euid', 'gid', 'egid')))
@@ -611,7 +633,8 @@ def apply(attempt_id, approved_sha):
     """Run a prepared attempt once. No arbitrary plan path or resume branch."""
     _entry(); require(contract.token(attempt_id) and contract.sha(approved_sha)); verify_code()
     require(Path(contract.plan_path(attempt_id)) == BASE / ('system-upgrade-' + attempt_id) / 'plan.json')
-    with _publication() as publication_pin, _paths() as paths, ExitStack() as held:
+    with _publication() as publication_pin, \
+            _paths(factory=os.path.lexists(BASE / contract.ACTIVATION_NAME)) as paths, ExitStack() as held:
         slot = held.enter_context(Pin(BASE / ('system-upgrade-' + attempt_id), mode=0o755,
                                       directory=True, mutable=True, parent=paths['base']))
         plan_file = held.enter_context(Pin(slot.path / 'plan.json', parent=slot))
@@ -695,6 +718,11 @@ def apply(attempt_id, approved_sha):
                     'old_kernel_exit_verified': True, 'system_keychain_canary_verified': True,
                     'manual_stop': True, 'erp_started': False, 'root_gate_enabled': True,
                     'requires_user_login': False, 'logout_reboot_verified': False, 'factory_activated': False}
+                if plan['type'] == contract.FACTORY_PLAN:
+                    result.update(configured_mode='factory', factory_activated=True,
+                        activation_performed=False, activation_preserved=True,
+                        activation_sha256=plan['activation_sha256'],
+                        owner_publication_sha256=plan['owner_publication_sha256'])
                 _new(slot, 'verified.json', contract.canonical(result)); check()
                 require(_monitor(new) == identity)
                 return result

@@ -260,6 +260,7 @@ def main():
                                                     'archive_autofs_v1': 1,
                                                     'service_manage_v1': 1, 'system_nightly_v1': 1,
                                                     'system_upgrade_worker_v1': 1,
+                                                    'system_upgrade_preserve_activation_v1': 1,
                                                     'factory_request_v1': 1, 'factory_audit_v1': 1,
                                                     'factory_activation_v1': 1, 'factory_execution_v1': 1}
         runtime_metadata['runtime_capabilities'].update(current_protocols)

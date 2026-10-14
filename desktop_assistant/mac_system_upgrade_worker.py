@@ -64,7 +64,9 @@ def authenticated(request, plan, *, script, executable):
     from desktop_assistant import mac_published_runtime as published
     from app.core import mac_service_keychain as keychain
     _entry()
-    if os.path.lexists(BASE / 'factory-activation.json'):
+    contract.validate_plan(plan)
+    factory = plan['type'] == contract.FACTORY_PLAN
+    if not factory and os.path.lexists(BASE / contract.ACTIVATION_NAME):
         raise ValueError('本监督升级入口仅接受尚未正式接管的实例')
     if plan['uid'] != 499 or plan['gid'] != 499 or not keychain.selected():
         raise ValueError('监督升级实际服务身份不符')
@@ -91,6 +93,10 @@ def authenticated(request, plan, *, script, executable):
             or Path(executable).resolve() != tree / 'runtime/bin/python3.12'
             or Path(sys.executable).resolve() != tree / 'runtime/bin/python3.12'):
         raise ValueError('监督升级没有执行固定的新签名入口')
+    if factory and (type(caps.get(contract.FACTORY_CAPABILITY)) is not int
+            or caps[contract.FACTORY_CAPABILITY] != 1
+            or 'desktop_assistant/mac_factory_runtime.py' not in manifest.get('files', {})):
+        raise ValueError('监督升级没有保留既有激活的签名能力')
     prefix = 'old' if request['phase'] == 'stop' else 'new'
     expected_plist = system._plist(plan[prefix + '_package_sha256'], plan['publisher_sha256'])
     if contract.digest(expected_plist) != plan[prefix + '_plist_sha256']:
@@ -102,7 +108,33 @@ def authenticated(request, plan, *, script, executable):
         boot.protected(parent, directory=True)
     if system.publication.read_record(system.PLIST) != expected_plist:
         raise ValueError('监督升级阶段的固定plist不符')
+    if factory:
+        _factory_configuration(plan, meta['public'])
     return context, meta['public']
+
+
+def _factory_configuration(plan, public):
+    """Authenticate existing owner authority while its exact files stay held.
+
+    No activation, startup admission, secret, DB or transport operation occurs.
+    Disabled root controls are expected during both upgrade worker phases.
+    """
+    from desktop_assistant import mac_system_upgrade_contract as contract, mac_factory_runtime as runtime
+    from desktop_assistant.mac_service_restore import Lease, _read_complete
+    with ExitStack() as stack:
+        base = stack.enter_context(Lease(BASE, uid=0, gid=None, mode=0o755, directory=True, mutable=True))
+        active, gate = [stack.enter_context(Lease(BASE / name, uid=0, gid=None, mode=0o644, parent=base))
+                       for name in (contract.ACTIVATION_NAME, contract.OWNER_PUBLICATION_NAME)]
+        raw, gate_raw = _read_complete(active, contract.LIMIT), _read_complete(gate, contract.LIMIT)
+        expected = {key: plan[key] for key in ('activation_sha256', 'owner_publication_sha256', 'context_sha256')}
+        contract.require(not os.path.lexists(BASE / contract.OWNER_FAILED_NAME)
+                         and contract.activation_binding(raw, gate_raw) == expected)
+        configured = runtime.configuration(ROOT, plan['current_package_sha256'], public)
+        contract.require(type(configured) is dict and configured.get('activation_sha256') == plan['activation_sha256'])
+        base.check(); active.check(); gate.check()
+        contract.require(_read_complete(active, contract.LIMIT) == raw
+                         and _read_complete(gate, contract.LIMIT) == gate_raw
+                         and not os.path.lexists(BASE / contract.OWNER_FAILED_NAME))
 
 
 def run(request, *, script, executable):

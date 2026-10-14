@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 from typing import ContextManager, Protocol
+import unicodedata
 
 ROLES = frozenset({'current', 'previous', 'schema_authority', 'migration_target',
                    'recovery_sources', 'fixed_backup_contract', 'active_backups',
@@ -52,7 +53,14 @@ def _relative(value: str) -> str:
     return value
 
 
+def _comparison_key(path: str) -> str:
+    # Mac/SMB can alias case and NFC/NFD spellings. Conservatively protect all
+    # aliases, even on case-sensitive stores; never rewrite the execution path.
+    return unicodedata.normalize('NFC', unicodedata.normalize('NFC', path).casefold())
+
+
 def _under(path: str, prefix: str) -> bool:
+    path, prefix = _comparison_key(path), _comparison_key(prefix)
     return path == prefix or path.startswith(prefix + '/')
 
 
@@ -152,9 +160,9 @@ def plan(snapshot: VerifiedSnapshot) -> Plan:
     for record in snapshot.files:
         try: _relative(record.path)
         except ValueError: blockers.append('invalid inventory path'); continue
-        if record.path.casefold() in folded:
+        if _comparison_key(record.path) in folded:
             blockers.append('duplicate inventory path')
-        folded.add(record.path.casefold())
+        folded.add(_comparison_key(record.path))
         indexed[record.path] = record
         info = record.identity
         if (any(type(v) is not int or v < 0 for v in asdict(info).values())

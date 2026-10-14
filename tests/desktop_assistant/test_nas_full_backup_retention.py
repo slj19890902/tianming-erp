@@ -84,6 +84,51 @@ class RetentionTests(unittest.TestCase):
                      'backups/dependencies/credentials.tmencrypted', 'desktop-assistant/releases/current.zip'):
             self.assertIn(path, kept)
 
+    def test_current_reference_case_alias_protects_disposable_package(self):
+        path = 'desktop-assistant/releases/current.zip'
+        files = tuple(replace(row, category='historical_package') if row.path == path else row
+                      for row in self.snapshot.files)
+        references = tuple((role, ('DESKTOP-ASSISTANT/releases/CURRENT.zip',) if role == 'current' else paths)
+                           for role, paths in self.snapshot.references)
+        result = retention.plan(replace(self.snapshot, files=files, references=references))
+        self.assertFalse(result.blockers)
+        self.assertNotIn(path, {row.path for row in result.delete})
+        self.assertEqual(dict(result.retained)[path], 'protected recovery/runtime/business reference')
+
+    def test_previous_reference_case_alias_protects_disposable_package(self):
+        row = self.add_file('desktop-assistant/releases/previous.zip', b'previous-program', 'historical_package')
+        references = tuple((role, ('desktop-assistant/RELEASES/PREVIOUS.zip',) if role == 'previous' else paths)
+                           for role, paths in self.snapshot.references)
+        result = retention.plan(replace(self.snapshot, files=tuple(self.rows), references=references))
+        self.assertFalse(result.blockers)
+        self.assertNotIn(row.path, {entry.path for entry in result.delete})
+        self.assertEqual(dict(result.retained)[row.path], 'protected recovery/runtime/business reference')
+
+    def test_knowledge_directory_case_alias_protects_descendants(self):
+        row = self.add_file('archives/Knowledge/nested/notes.md', b'knowledge', 'historical_rehearsal')
+        references = tuple((role, ('ARCHIVES/knowledge',) if role == 'knowledge' else paths)
+                           for role, paths in self.snapshot.references)
+        result = retention.plan(replace(self.snapshot, files=tuple(self.rows), references=references))
+        self.assertFalse(result.blockers)
+        self.assertNotIn(row.path, {entry.path for entry in result.delete})
+        self.assertEqual(dict(result.retained)[row.path], 'protected recovery/runtime/business reference')
+
+    def test_knowledge_combining_character_alias_protects_original_path(self):
+        row = self.add_file('archives/Caf\u00e9/nested/notes.md', b'knowledge', 'historical_rehearsal')
+        references = tuple((role, ('ARCHIVES/cafe\u0301',) if role == 'knowledge' else paths)
+                           for role, paths in self.snapshot.references)
+        result = retention.plan(replace(self.snapshot, files=tuple(self.rows), references=references))
+        self.assertFalse(result.blockers)
+        self.assertNotIn(row.path, {entry.path for entry in result.delete})
+        self.assertEqual(dict(result.retained)[row.path], 'protected recovery/runtime/business reference')
+
+    def test_inventory_unicode_alias_collision_blocks(self):
+        row = self.add_file('archives/Caf\u00e9.zip', b'archive', 'historical_package')
+        alias = replace(row, path='ARCHIVES/cafe\u0301.zip')
+        result = retention.plan(replace(self.snapshot, files=(*self.rows, alias)))
+        self.assertTrue(any('duplicate inventory path' in blocker for blocker in result.blockers))
+        self.assertFalse(result.delete)
+
     def test_only_one_authenticated_backup_blocks_all(self):
         result = retention.plan(replace(self.snapshot, backups=self.snapshot.backups[-1:]))
         self.assertTrue(result.blockers)
@@ -132,7 +177,7 @@ class RetentionTests(unittest.TestCase):
             self.assertFalse(result.delete)
 
     def test_extra_complete_version_with_active_reference_blocks_rotation(self):
-        references = tuple((role, ('backups/20991231-old.tmbackup',) if role == 'active_backups' else paths)
+        references = tuple((role, ('BACKUPS/20991231-OLD.tmbackup',) if role == 'active_backups' else paths)
                            for role, paths in self.snapshot.references)
         result = retention.plan(replace(self.snapshot, references=references))
         self.assertTrue(any('extra complete' in reason for reason in result.blockers))

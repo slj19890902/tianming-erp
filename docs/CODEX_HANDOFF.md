@@ -6240,3 +6240,5 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 # 2026-10-13 Mac 正式接管完成（最新事实）
 
 MAC-SERVER-HANDOFF-20261010 实际激活回执已发布并 ready=true；当前运行源码 61e5fafb，包 13f44140，v0.22.625/ep1010md 无 DDL，系统 UID 499 在 factory 模式 running、manual_stop=false。LAN http://192.168.3.80:8000/ 健康/完整页面一致，手机 http://172.16.0.87:8000/mobile/ 本轮老板确认“正常”。完整真实挂载 NAS 备份上传确认及本地独立恢复通过，NAS 自动备份按要求暂停。Mac 独立发布已实用，旧 Windows 不再承担服务或 DPAPI 签名；未执行旧机清理和实体重启测试。实际回执见 `/Users/kimiyf/ERP-Migration/evidence/mac-final-activation-20261013/COMPLETED.md` 与 NAS `04_开发记录/任务回执/20261013-Mac正式激活完成与独立发布-61e5fafb.md`；旧临时 .3.102 与历史未激活记录仅作历史。
+
+- 2026-10-14 INVENTORY-CLOSED-LOOP：老板要求立即恢复业务，备份/发布/剩余清理暂停。原v625/13f44140/ep1010md已实际恢复，PID 27155，manual_stop=false，LAN健康/首页200；323表事实和附件未变。v629/eq1013oi未上线：正式DDL前被工厂服务器环境路径门禁拦截，核验原事实后仅清除失败维护标记。一次性延长启动等待，未改签名程序或数据库。见任务卡末节及mac-cleanup-20261014/ERP已恢复-维护暂停回执.txt；不得沿用旧批次自动停服。

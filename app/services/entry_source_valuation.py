@@ -3,10 +3,14 @@ from decimal import Decimal
 
 
 SOURCES = {'direct_external_receipt', 'external_bom_receipt', 'raw_purchase_receipt',
-           'component_processing_actual', 'component_processing_estimate', 'semi_finished_estimate'}
+           'component_processing_actual', 'component_processing_estimate', 'semi_finished_estimate',
+           'physical_kit_correction_20261014'}
 
 
 def source_entry_cost(db, lot, detail, visited):
+    if lot.cost_snapshot_source == 'physical_kit_correction_20261014':
+        from app.services.emergency_kit_correction_20261014 import validate_source_cost
+        return validate_source_cost(db, lot, detail, visited)
     from app.services.inventory_valuation import frozen_cost, positive
     from app.models.warehouse_inventory import InventoryLot, InventoryReservation
     from app.models.purchase_receipt import IncomingReceiptPurposeAllocation, PurchaseReceiptFact

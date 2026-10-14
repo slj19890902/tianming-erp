@@ -3,6 +3,7 @@
 Transfers/returns preserve prior lot facts. This never scans or reprices old lots.
 """
 import json
+import hashlib
 import re
 from decimal import Decimal, InvalidOperation
 from sqlalchemy import event
@@ -63,6 +64,34 @@ def _assembled_specifications(cost, basis):
     return complete(cost, basis['product_id'])
 
 
+def _physical_kit_specifications(cost, basis):
+    """Only the verified Finance/consume source may supply these frozen specs."""
+    parts=cost.get('frozen_assembly_spec')
+    assembly=basis.get('assembly')
+    if not isinstance(parts,list) or len(parts)!=2 or not isinstance(assembly,list) or len(assembly)!=2:
+        return False
+    actual=[]
+    for part in parts:
+        if not isinstance(part,dict) or part.get('quantity_per_set')!=1:
+            return False
+        raw=part.get('basis_json');physical=part.get('physical_basis')
+        if not isinstance(raw,str) or not isinstance(physical,dict):
+            return False
+        try:
+            if json.loads(raw)!=physical:
+                return False
+        except (ValueError,TypeError):
+            return False
+        if (physical.get('product_id')!=part.get('product_id') or physical.get('schema')!=1
+                or not isinstance(physical.get('spec'),str) or not physical['spec'].strip()
+                or physical.get('assembly')!=[] or not physical.get('unit')):
+            return False
+        actual.append(dict(product_id=part['product_id'],quantity=1,
+            basis_hash=hashlib.sha256(raw.encode()).hexdigest()))
+    return (len({p['product_id'] for p in actual})==2 and
+        sorted(actual,key=lambda r:r['product_id'])==sorted(assembly,key=lambda r:r.get('product_id',0)))
+
+
 @event.listens_for(ReceiptPriceGuardSession, 'do_orm_execute')
 def reject_untracked_insert(state):
     table = getattr(state.statement, 'table', None)
@@ -78,7 +107,7 @@ def track_entries(session, _context):
     from app.models.warehouse_inventory import InventoryLot
     ids = session.info.setdefault('new_inventory_entry_ids', set())
     for row in session.new:
-        if isinstance(row, InventoryLot) and (row.source_type not in {'transfer', 'delivery_return'} or row.source_ref_type in {'bom_assembly', 'subkit_conversion', 'stock_preparation_assembly'}):
+        if isinstance(row, InventoryLot) and (row.source_type not in {'transfer', 'delivery_return'} or row.source_ref_type in {'bom_assembly', 'subkit_conversion', 'stock_preparation_assembly', 'physical_kit_correction_20261014'}):
             ids.add(row.id)
 
 
@@ -133,6 +162,8 @@ def validate_entries(session):
                 and cost_detail.get('external_receipt_item_id') == lot.source_ref_id)
             has_external_spec = external_source and isinstance(external_spec, dict) and bool(external_spec)
             has_assembly_spec = _assembled_specifications(cost_detail, basis)
+            if lot.cost_snapshot_source == 'physical_kit_correction_20261014':
+                has_assembly_spec = _physical_kit_specifications(cost_detail, basis)
             if not basis.get('spec') and not (detail.length_mm and detail.width_mm) and not has_sheet and not has_external_spec and not has_assembly_spec:
                 missing.append('实物规格')
         elif lot.semi_finished_detail:

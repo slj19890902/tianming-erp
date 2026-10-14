@@ -47,7 +47,7 @@ def kit(db):
     item=OrderItem(id=10552,order_id=order.id,product_id=3863,quantity=50,unit_price=Decimal('14.58'),subtotal=Decimal('729'),
         snapshot_product_name='组套父件',snapshot_product_code='Z.001.000120',composite_fulfillment_mode_snapshot='parent_delivery')
     db.add(item);db.flush();freeze_master_order_bom(db,order_item_id=item.id,actor=actor)
-    for lid,product,cost in [(666,lower,'11.4627'),(1421,upper,'3.1173')]:
+    for lid,product,cost in [(666,lower,'11.4627'),(1421,upper,'1.3640')]:
         lot=InventoryLot(id=lid,lot_number='TEST-LOT-'+str(lid),inventory_type='finished',warehouse_location_id=1918,
             quantity_available=210,unit='boxes',status='active',source_type='stocktake',stock_date=date.today(),last_movement_at=datetime.now(),
             estimated_unit_cost_snapshot=Decimal(cost),cost_snapshot_source='inventory_confirmed_material',
@@ -57,6 +57,7 @@ def kit(db):
             length_mm=product.length_mm,width_mm=product.width_mm,height_mm=product.height_mm,material_code_snapshot='VSNIV',flute_type_snapshot='AB',
             physical_basis_json=None if lid==666 else product_basis(product))
         db.add(lot)
+    order.status="cancelled"
     db.commit()
     return db,actor
 
@@ -69,21 +70,24 @@ def execute(db,actor,**changes):
 def test_only_child50_confirmed_assembly_and_original160_history_kept(kit):
     db,actor=kit
     before=service.preview(db,actor=actor)
-    assert before['total_reference_cost']=='729.0000'
+    assert before['total_cost']=='641.3350'
     assert db.scalar(select(func.count(InventoryLot.id)))==2
     result=execute(db,actor);assert result['quantity']==50
-    assert result['reference_total_cost']=='729.0000'
-    assert result['reference_unit_cost']=='14.5800'
+    assert result['reference_total_cost']=='641.3350'
+    assert result['reference_unit_cost']=='12.8267'
     lower=db.get(InventoryLot,666);upper=db.get(InventoryLot,1421);child=db.get(InventoryLot,result['split_lot_id'])
     assert lower.quantity_available==upper.quantity_available==160
     assert lower.finished_detail.physical_basis_json is None
     assert child.quantity_available==0 and child.quantity_consumed==50
-    assert child.finished_detail.physical_basis_json==before['expected_bases'][3496]
+    assert child.finished_detail.physical_basis_json==before['bases'][3496]
     assert upper.quantity_consumed==50
     edge=db.scalar(select(InventoryLotTransfer).where(InventoryLotTransfer.target_lot_id==child.id))
     assert edge.source_lot_id==666 and edge.source_location_id==edge.target_location_id==1918
     assert edge.source_version_before==1 and edge.quantity==50
-    assert {(r.lot_id,r.quantity) for r in db.scalars(select(BomAssemblyInput))}=={(child.id,50),(1421,50)}
+    proof=json.loads(db.scalar(select(FinanceIdempotencyRecord).where(FinanceIdempotencyRecord.action==service.ACTION)).response_json)['contract']
+    assert {(r['lot_id'],r['quantity']) for r in proof['inputs']}=={(child.id,50),(1421,50)}
+    assert db.scalar(select(func.count(BomAssembly.id)))==0
+    assert db.get(Order,9782).status=='cancelled'
     assert db.get(InventoryLot,result['output_lot_id']).quantity_available==50
     assert db.scalar(select(func.count(OperationLog.id)).where(OperationLog.action_code==service.ACTION))==1
     db.rollback()
@@ -103,12 +107,12 @@ def test_same_key_replay_and_other_actor_or_payload_rejected(kit):
     log.details=json.dumps({'finance_receipt_id':record.id});db.flush()
     again=service.execute(db,**kwargs);assert again['replayed'] and again['output_lot_id']==first['output_lot_id']
     with pytest.raises(WarehouseInventoryError,match='标识'):service.execute(db,**{**kwargs,'evidence':'其他确认'})
-    assert db.scalar(select(func.count(BomAssembly.id)))==1
+    assert db.scalar(select(func.count(BomAssembly.id)))==0
     other=User(username='other-admin',password_hash='unusable',role='admin',is_active=True,real_name='其他测试管理员');db.add(other);db.flush()
     with pytest.raises(WarehouseInventoryError,match='标识'):service.execute(db,**{**kwargs,'actor':other})
 
 
-@pytest.mark.parametrize('change',[{'quantity':49},{'quantity':51},{'quantity':True},{'order_item_id':10592},{'target_location_id':1}])
+@pytest.mark.parametrize('change',[{'quantity':49},{'quantity':51},{'quantity':True},{'product_id':3496},{'target_location_id':1}])
 def test_fixed_fifty_scope_rejected_without_writes(kit,change):
     db,actor=kit
     with pytest.raises(WarehouseInventoryError):service.preview(db,actor=actor,**change)
@@ -121,7 +125,7 @@ def test_stale_preview_product_or_source_change_rejected(kit,change):
     if change=='version':db.get(InventoryLot,1421).version+=1
     elif change=='master':db.get(Product,3496).production_process='印刷'
     elif change=='cost':db.get(InventoryLot,1421).estimated_unit_cost_snapshot=Decimal('9')
-    elif change=='quantity':db.get(OrderItem,10552).quantity=51
+    elif change=='quantity':db.get(InventoryLot,1421).quantity_available=209
     elif change=='basis':db.get(InventoryLot,666).finished_detail.physical_basis_json=product_basis(db.get(Product,3496))
     db.commit()
     with pytest.raises(WarehouseInventoryError):service.execute(db,actor=actor,preview_hash=p['preview_hash'],operation_key='stale',evidence='确认',physical_match_confirmed=True)
@@ -132,11 +136,10 @@ def test_stale_preview_product_or_source_change_rejected(kit,change):
 def test_unexpected_failure_rolls_back_child_basis_debits_and_output(kit,monkeypatch,stage):
     db,actor=kit
     if stage=='after_assembly':
-        original=service.assemble_order_inventory
+        original=service.inv.manual_finished_in
         def fail(*args,**kw):
-            if kw.get('preview_only'):return original(*args,**kw)
             original(*args,**kw);raise RuntimeError('kit injected')
-        monkeypatch.setattr(service,'assemble_order_inventory',fail)
+        monkeypatch.setattr(service.inv,'manual_finished_in',fail)
     else:
         def fail(*args,**kw):raise RuntimeError('kit injected')
         monkeypatch.setattr(service,'append_audit_event',fail)
@@ -168,11 +171,12 @@ def test_other_live_reservation_and_admin_permissions(kit):
 
 
 @pytest.mark.parametrize('state',['cancelled','closed','dead','completed','archived','delivered'])
-def test_cancelled_or_finished_order_never_reopened(kit,state):
+def test_physical_contract_never_reopens_cancelled_or_finished_reference_order(kit,state):
     db,actor=kit;db.get(Order,9782).status=state;db.commit()
-    with pytest.raises(WarehouseInventoryError):service.preview(db,actor=actor)
+    receipt=execute(db,actor)
+    assert receipt['quantity']==50
     assert db.get(Order,9782).status==state
-    assert db.scalar(select(func.count(InventoryLot.id)))==2
+    assert db.scalar(select(func.count(InventoryLot.id)))==4
 
 
 def test_corrupt_full_receipt_cannot_duplicate_assembly(kit):
@@ -182,7 +186,7 @@ def test_corrupt_full_receipt_cannot_duplicate_assembly(kit):
     row=db.scalar(select(FinanceIdempotencyRecord).where(FinanceIdempotencyRecord.action==service.ACTION))
     row.response_json='{}';db.flush()
     with pytest.raises(WarehouseInventoryError,match='回执损坏'):service.execute(db,**args)
-    assert db.scalar(select(func.count(BomAssembly.id)))==1
+    assert db.scalar(select(func.count(BomAssembly.id)))==0
 
 
 def test_wrong_source_customer_never_confirms_identity(kit):
@@ -190,3 +194,160 @@ def test_wrong_source_customer_never_confirms_identity(kit):
     db.get(InventoryLot,666).finished_detail.owner_customer_id=137;db.commit()
     with pytest.raises(WarehouseInventoryError):service.preview(db,actor=actor)
     assert db.get(InventoryLot,666).finished_detail.physical_basis_json is None
+
+
+
+def _source_output(db, actor):
+    receipt=execute(db,actor)
+    return receipt,db.get(InventoryLot,receipt['output_lot_id'])
+
+
+def test_cost_frozen_across_future_master_and_legal_split_and_move(kit):
+    from app.services.inventory_valuation import frozen_cost
+    db,actor=kit;receipt,output=_source_output(db,actor)
+    assert frozen_cost(output,db)[0]==Decimal('12.8267')
+    parent=db.get(Product,3863);parent.production_process='后来改为印刷';parent.version+=1;db.flush()
+    assert frozen_cost(output,db)[0]==Decimal('12.8267')
+    child=service.split_for_correction(db,output,20,actor,'physical-output-split-20')
+    assert frozen_cost(child,db)[0]==Decimal('12.8267')
+    assert frozen_cost(output,db)[0]==Decimal('12.8267')
+    target=WarehouseLocation(id=1919,location_code='TEST-KIT-MOVE',location_name='派生移库',warehouse_type='finished',
+        warehouse_floor=1,placement_status='placed',is_active=True,source_version='P1-25C',storage_type='temporary_aisle',area_code='DISPATCH')
+    db.add(target);db.flush()
+    moved=service.inv.transfer_finished_lot_between_locations(db,lot_id=child.id,expected_version=child.version,
+        quantity=10,location_id=target.id,operator_id=actor.id,idempotency_key='physical-output-move-10')
+    lot=db.get(InventoryLot,moved.target_lot.id)
+    assert frozen_cost(lot,db)[0]==Decimal('12.8267')
+    assert frozen_cost(child,db)[0]==Decimal('12.8267')
+    assert lot.warehouse_location_id==1919
+
+
+@pytest.mark.parametrize('fault',['consume','hash','fake_source','cycle','missing_edge','child_basis','excess_quantity'])
+def test_cost_rejects_corrupt_finance_or_typed_lineage(kit,fault):
+    from app.services.inventory_valuation import frozen_cost
+    from app.models.warehouse_inventory import InventoryMovement
+    db,actor=kit;receipt,output=_source_output(db,actor)
+    record=db.scalar(select(FinanceIdempotencyRecord).where(FinanceIdempotencyRecord.action==service.SOURCE))
+    proof=json.loads(record.response_json)
+    if fault=='consume':db.get(InventoryMovement,proof['contract']['inputs'][0]['movement_id']).quantity=49
+    elif fault=='hash':record.request_hash='0'*64
+    elif fault=='child_basis':db.get(InventoryLot,receipt['split_lot_id']).finished_detail.physical_basis_json='{}'
+    else:
+        child=service.split_for_correction(db,output,20,actor,'physical-output-corruption-child')
+        edge=db.scalar(select(InventoryLotTransfer).where(InventoryLotTransfer.target_lot_id==child.id))
+        if fault=='fake_source':edge.source_lot_id=666
+        elif fault=='cycle':edge.target_lot_id=output.id;edge.source_lot_id=child.id
+        elif fault=='missing_edge':db.delete(edge)
+        elif fault=='excess_quantity':child.quantity_available+=1
+        output=child
+    db.flush();cost,basis=frozen_cost(output,db)
+    assert cost is None and basis.get('validation_issue')
+
+
+def _unordered_test_delivery(db,actor,output):
+    from app.models.delivery import Delivery,DeliveryItem
+    from app.models.warehouse_inventory import UnorderedFinishedDeliveryAllocation
+    from app.services.delivery_snapshots import sales_contract
+    from app.services.delivery_quantities import product_basis as quantity_basis,encode
+    delivery=Delivery(delivery_number='ISOLATED-PHYSICAL-KIT-DISPATCH',customer_id=136,
+        delivery_date=date.today(),source_mode='unordered_finished',status='pending',total_quantity=50,created_by=actor.id)
+    db.add(delivery);db.flush()
+    line=DeliveryItem(delivery_id=delivery.id,product_id=3863,order_item_id=None,source_type='unordered_finished',
+        delivered_quantity=50,product_code_snapshot='Z.001.000120',product_name_snapshot='组套父件',unit_snapshot='套',
+        unit_price_snapshot=Decimal('14.58'),price_source='manual',
+        quantity_contract_json=encode(quantity_basis(db.get(Product,3863)),50),
+        sales_contract_json=sales_contract(unit='套',price='14.58',tax_mode='tax_inclusive',tax_rate='0.13',source={'kind':'isolated_test'}))
+    db.add(line);db.flush()
+    allocation=UnorderedFinishedDeliveryAllocation(delivery_item_id=line.id,inventory_lot_id=output.id,
+        planned_quantity=50,status='planned',lot_number_snapshot=output.lot_number,warehouse_location_id_snapshot=1918,created_by=actor.id)
+    db.add(allocation);db.flush()
+    return delivery,line,allocation
+
+
+def test_normal_unordered_dispatch_cancel_restores_parent_only_and_repeats_safely(kit):
+    from app.services.unordered_finished_delivery import dispatch_unordered_finished_inventory,cancel_unordered_finished_dispatch
+    from app.services.inventory_valuation import frozen_cost
+    db,actor=kit;receipt,output=_source_output(db,actor)
+    delivery,line,allocation=_unordered_test_delivery(db,actor,output)
+    dispatch_unordered_finished_inventory(db,delivery=delivery,delivery_items=[line],operator_id=actor.id,dispatched_at=datetime.now())
+    assert output.quantity_available==0 and output.quantity_consumed==50
+    assert allocation.consumed_quantity==50
+    assert frozen_cost(output,db)[0]==Decimal('12.8267')
+    cancel_unordered_finished_dispatch(db,delivery=delivery,delivery_items=[line],operator_id=actor.id)
+    db.flush();db.expire_all();output=db.get(InventoryLot,output.id)
+    assert output.quantity_available==50 and output.quantity_consumed==0
+    assert allocation.restored_quantity==50
+    cancel_unordered_finished_dispatch(db,delivery=delivery,delivery_items=[line],operator_id=actor.id)
+    assert output.quantity_available==50
+    assert frozen_cost(output,db)[0]==Decimal('12.8267')
+    assert db.get(InventoryLot,666).quantity_available==160 and db.get(InventoryLot,666).finished_detail.physical_basis_json is None
+    assert db.get(InventoryLot,1421).quantity_available==160 and db.get(InventoryLot,1421).quantity_consumed==50
+    assert db.get(InventoryLot,receipt['split_lot_id']).quantity_consumed==50
+    assert db.get(Order,9782).status=='cancelled'
+
+
+
+def test_corrupt_contract_replay_fails_without_duplicate_consumption(kit):
+    db,actor=kit;proposal=service.preview(db,actor=actor)
+    args=dict(actor=actor,preview_hash=proposal['preview_hash'],operation_key='full-contract-replay',evidence='确认50套',physical_match_confirmed=True)
+    receipt=service.execute(db,**args)
+    record=db.get(FinanceIdempotencyRecord,receipt['source_record_id'])
+    value=json.loads(record.response_json);value['contract']['total_cost']='1.00'
+    record.response_json=json.dumps(value);db.flush()
+    with pytest.raises(WarehouseInventoryError,match='回执损坏'):service.execute(db,**args)
+    assert db.get(InventoryLot,1421).quantity_available==160
+    assert db.get(InventoryLot,receipt['split_lot_id']).quantity_consumed==50
+    assert db.scalar(select(func.count(InventoryLot.id)))==4
+
+
+
+def test_real_entry_guard_session_commit_validates_and_posts_source(kit):
+    from app.core.receipt_price_guard import ReceiptPriceGuardSession
+    from app.services.inventory_valuation import frozen_cost
+    db,actor=kit;actor_id=actor.id
+    with ReceiptPriceGuardSession(bind=db.get_bind(),expire_on_commit=False) as guarded:
+        receipt=execute(guarded,guarded.get(User,actor_id))
+        assert receipt['output_lot_id'] in guarded.info['new_inventory_entry_ids']
+        guarded.commit()
+        assert frozen_cost(guarded.get(InventoryLot,receipt['output_lot_id']),guarded)[0]==Decimal('12.8267')
+        assert guarded.get(Order,9782).status=='cancelled'
+    db.expire_all()
+    assert db.get(InventoryLot,receipt['output_lot_id']).quantity_available==50
+
+
+@pytest.mark.parametrize('fault',['forged_receipt','missing_child_spec'])
+def test_guard_commit_rejects_forged_or_incomplete_source_and_rolls_back(kit,fault):
+    from app.core.receipt_price_guard import ReceiptPriceGuardSession
+    from fastapi import HTTPException
+    db,actor=kit;actor_id=actor.id
+    with ReceiptPriceGuardSession(bind=db.get_bind(),expire_on_commit=False) as guarded:
+        receipt=execute(guarded,guarded.get(User,actor_id))
+        record=guarded.get(FinanceIdempotencyRecord,receipt['source_record_id'])
+        proof=json.loads(record.response_json)
+        if fault=='forged_receipt':record.request_hash='f'*64
+        else:
+            part=proof['contract']['inputs'][0]
+            child=json.loads(part['basis']);child['spec']=None;part['basis']=json.dumps(child)
+            record.response_json=json.dumps(proof)
+        with pytest.raises(HTTPException) as error:guarded.commit()
+        assert error.value.status_code==422
+        guarded.rollback()
+    db.expire_all()
+    assert db.get(InventoryLot,666).quantity_available==db.get(InventoryLot,1421).quantity_available==210
+    assert db.get(InventoryLot,666).finished_detail.physical_basis_json is None
+    assert db.scalar(select(func.count(InventoryLot.id)))==2
+    assert db.scalar(select(func.count(FinanceIdempotencyRecord.id)))==0
+
+
+def test_frozen_finished_specs_guard_is_exact_and_cannot_accept_missing_children(kit):
+    from app.core.inventory_entry_guard import _physical_kit_specifications
+    from app.services.inventory_valuation import frozen_cost
+    db,actor=kit;receipt,lot=_source_output(db,actor)
+    _,detail=frozen_cost(lot,db);basis=json.loads(lot.finished_detail.physical_basis_json)
+    assert _physical_kit_specifications(detail,basis)
+    copied=json.loads(json.dumps(detail));copied['frozen_assembly_spec'].pop()
+    assert not _physical_kit_specifications(copied,basis)
+    copied=json.loads(json.dumps(detail));copied['frozen_assembly_spec'][0]['physical_basis']['spec']=''
+    assert not _physical_kit_specifications(copied,basis)
+    copied=json.loads(json.dumps(detail));copied['frozen_assembly_spec'][0]['quantity_per_set']=2
+    assert not _physical_kit_specifications(copied,basis)

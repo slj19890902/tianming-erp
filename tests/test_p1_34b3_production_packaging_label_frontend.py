@@ -116,7 +116,9 @@ def test_packaging_label_page_uses_current_size_and_audited_print_jobs() -> None
         assert marker in LABEL_PRINT
 
     assert "@page{size:40mm30mm;margin:0" in compact
-    assert "@page{size:65mm45mm;margin:0" in compact
+    assert 'legacyPageSize.textContent=`@page{size:${widthMm}mm${heightMm}mm;margin:0;}`' in compact
+    for paper in ("40x30", "40x80", "80x40"):
+        assert f'<optionvalue="{paper}">' in compact
     assert LABEL_PRINT.count("window.print()") == 1
     assert 'label.customer_code || label.customer_name' not in LABEL_PRINT
     assert "text-overflow:ellipsis" not in LABEL_PRINT

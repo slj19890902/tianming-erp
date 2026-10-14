@@ -150,6 +150,13 @@
   <nav class="toolbar">
     <button id="retryButton" type="button">重新加载</button>
     <button id="printButton" class="primary" type="button" disabled>打印包装标签</button>
+    <label id="paperSizeLabel">标签纸型（宽×高）
+      <select id="paperSizeSelect" aria-label="标签纸型，宽乘高，毫米">
+        <option value="40x30">40 × 30 mm</option>
+        <option value="40x80">40 × 80 mm</option>
+        <option value="80x40">80 × 40 mm</option>
+      </select>
+    </label>
     <button id="layoutButton" type="button" hidden>编辑标签布局</button>
     <button id="confirmPrintedButton" class="confirm" type="button" hidden>确认已实际打印</button>
     <a id="latestJobLink" class="button-link" href="#" hidden>补打最近已登记作业</a>
@@ -238,6 +245,8 @@
       const labelList = document.getElementById("labelList");
       const retryButton = document.getElementById("retryButton");
       const printButton = document.getElementById("printButton");
+      const paperSizeLabel = document.getElementById("paperSizeLabel");
+      const paperSizeSelect = document.getElementById("paperSizeSelect");
       const layoutButton = document.getElementById("layoutButton");
       const confirmPrintedButton = document.getElementById("confirmPrintedButton");
       const latestJobLink = document.getElementById("latestJobLink");
@@ -285,6 +294,8 @@
           .filter((value) => Number.isInteger(value) && value > 0)
       )].sort((a, b) => a - b);
       const requestedJobId = Number(params.get("job_id"));
+      const supplierSource = (Number.isInteger(supplierOrderId) && supplierOrderId > 0) || supplierOrderIds.length > 0;
+      paperSizeLabel.hidden = Number.isInteger(requestedJobId) && requestedJobId > 0;
       const deliverySource = Number.isInteger(deliveryId) && deliveryId > 0;
       if (deliverySource) {
         totalQuantityHeading.textContent = "送货总数量";
@@ -376,8 +387,10 @@
         if (!layout || layout.catalog_version !== LAYOUT_CATALOG_VERSION) {
           throw new Error("标签布局目录版本不受支持，已停止打印");
         }
-        if (Number(layout.paper?.width_mm) !== 40 || Number(layout.paper?.height_mm) !== 30) {
-          throw new Error("标签布局纸张不是40×30毫米，已停止打印");
+        const paperWidth = Number(layout.paper?.width_mm);
+        const paperHeight = Number(layout.paper?.height_mm);
+        if (!["40x30", "40x80", "80x40"].includes(`${paperWidth}x${paperHeight}`)) {
+          throw new Error("标签布局纸张不在允许范围内，已停止打印");
         }
         if (!Array.isArray(layout.elements) || layout.elements.length !== REQUIRED_LAYOUT_IDS.length) {
           throw new Error("标签布局元素不完整，已停止打印");
@@ -392,8 +405,8 @@
           const y = finiteNumber(element.y_mm);
           const width = finiteNumber(element.width_mm);
           const height = finiteNumber(element.height_mm);
-          if ([x, y, width, height].includes(null) || x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 40.001 || y + height > 30.001) {
-            throw new Error(`${LAYOUT_ELEMENT_LABELS[element.id]}超出40×30毫米纸张，已停止打印`);
+          if ([x, y, width, height].includes(null) || x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > paperWidth + .001 || y + height > paperHeight + .001) {
+            throw new Error(`${LAYOUT_ELEMENT_LABELS[element.id]}超出${paperWidth}×${paperHeight}毫米纸张，已停止打印`);
           }
           if (typeof element.visible !== "boolean") {
             throw new Error(`${LAYOUT_ELEMENT_LABELS[element.id]}的显示状态无效，已停止打印`);
@@ -624,16 +637,19 @@
         });
       }
 
-      function applyTemplate(templateVersion) {
+      function applyTemplate(templateVersion, dimensions = null) {
         const template = TEMPLATE_DEFINITIONS[templateVersion];
         if (!template) throw new Error("标签模板版本不受支持，已停止打印");
+        const widthMm = Number(dimensions?.width_mm ?? template.widthMm);
+        const heightMm = Number(dimensions?.height_mm ?? template.heightMm);
+        if (templateVersion !== LEGACY_TEMPLATE_VERSION && !["40x30", "40x80", "80x40"].includes(`${widthMm}x${heightMm}`)) {
+          throw new Error("标签纸型不受支持，已停止打印");
+        }
         document.documentElement.dataset.template = templateVersion;
-        document.documentElement.style.setProperty("--label-width", `${template.widthMm}mm`);
-        document.documentElement.style.setProperty("--label-height", `${template.heightMm}mm`);
-        legacyPageSize.textContent = templateVersion === LEGACY_TEMPLATE_VERSION
-          ? "@page { size: 65mm 45mm; margin: 0; }"
-          : "@page { size: 40mm 30mm; margin: 0; }";
-        toolbarNote.textContent = `${template.label}｜打印机纸张也须选 ${template.widthMm}×${template.heightMm}mm｜100%实际大小、无边距；关闭适合页面、自动旋转及页眉页脚`;
+        document.documentElement.style.setProperty("--label-width", `${widthMm}mm`);
+        document.documentElement.style.setProperty("--label-height", `${heightMm}mm`);
+        legacyPageSize.textContent = `@page { size: ${widthMm}mm ${heightMm}mm; margin: 0; }`;
+        toolbarNote.textContent = `${widthMm} × ${heightMm} mm｜打印机纸张须选同一宽×高｜100%实际大小、无边距；关闭适合页面、自动旋转及页眉页脚`;
       }
 
       function compactLabelHtml(label) {
@@ -910,7 +926,9 @@
       async function refreshLayoutAdminState() {
         layoutButton.hidden = true;
         layoutAdminState = null;
-        if (!loadedPackage || loadedPackage.template_version !== CURRENT_TEMPLATE_VERSION || positiveInteger(loadedJob?.id)) return false;
+        if (!loadedPackage || loadedPackage.template_version !== CURRENT_TEMPLATE_VERSION || positiveInteger(loadedJob?.id)
+            || loadedPackage.label_layout?.layout?.customer_profile
+            || `${loadedPackage.template_dimensions?.width_mm}x${loadedPackage.template_dimensions?.height_mm}` !== "40x30") return false;
         try {
           const state = await requestJson("/api/requisition/production-packaging-label-layout/admin", {method:"GET"});
           if (!loadedPackage || loadedPackage.template_version !== CURRENT_TEMPLATE_VERSION || positiveInteger(loadedJob?.id)) return false;
@@ -1070,7 +1088,9 @@
       async function render(normalized, {isPrepared=false, showPrintConfirmation=false} = {}) {
         const packageData = normalized.packageData;
         validatePackage(packageData);
-        applyTemplate(packageData.template_version);
+        applyTemplate(packageData.template_version, packageData.template_dimensions);
+        paperSizeSelect.value = `${packageData.template_dimensions?.width_mm || 40}x${packageData.template_dimensions?.height_mm || 30}`;
+        paperSizeSelect.disabled = isPrepared;
         if (isPrepared) {
           printPlanPanel.hidden = true;
           plannedPackage = null;
@@ -1141,12 +1161,12 @@
           const url = loadingJob
             ? `/api/requisition/production-packaging-label-jobs/${requestedJobId}`
             : loadingDelivery
-              ? `/api/deliveries/${deliveryId}/production-packaging-label-package`
+              ? `/api/deliveries/${deliveryId}/production-packaging-label-package?paper_size=${paperSizeSelect.value}`
               : loadingSupplierBatch
-                ? `/api/requisition/supplier-order-label-batches/package?order_ids=${encodeURIComponent(supplierOrderIds.join(","))}${compositeItemIds.length ? `&item_ids=${encodeURIComponent(compositeItemIds.join(","))}` : ""}`
+                ? `/api/requisition/supplier-order-label-batches/package?order_ids=${encodeURIComponent(supplierOrderIds.join(","))}${compositeItemIds.length ? `&item_ids=${encodeURIComponent(compositeItemIds.join(","))}` : ""}&paper_size=${paperSizeSelect.value}`
               : loadingComposite
-              ? `/api/requisition/batches/${compositeBatchId}/production-packaging-label-package?item_ids=${encodeURIComponent(compositeItemIds.join(","))}`
-              : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-package${compositeItemIds.length ? `?item_ids=${encodeURIComponent(compositeItemIds.join(","))}` : ""}`;
+              ? `/api/requisition/batches/${compositeBatchId}/production-packaging-label-package?item_ids=${encodeURIComponent(compositeItemIds.join(","))}&paper_size=${paperSizeSelect.value}`
+              : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-package?paper_size=${paperSizeSelect.value}${compositeItemIds.length ? `&item_ids=${encodeURIComponent(compositeItemIds.join(","))}` : ""}`;
           const payload = await requestJson(url, {method:"GET", signal:activeController.signal});
           if (generation !== loadGeneration) return;
           const normalized = normalizeResponse(payload);
@@ -1192,6 +1212,9 @@
         const items = (plannedPackage?.plans || []).map((plan) => isDelivery ? ({
           selection_key:planSelectionKey(plan),
           print_label_count:parsePrintCount(printCounts.get(planSelectionKey(plan)), Number(plan.label_count)),
+        }) : plan.source_type === "stock_replenishment" ? ({
+          selection_key:planSelectionKey(plan),
+          print_label_count:parsePrintCount(printCounts.get(planSelectionKey(plan)), Number(plan.label_count)),
         }) : ({
           production_task_id:Number(plan.production_task_id),
           print_label_count:parsePrintCount(printCounts.get(planSelectionKey(plan)), Number(plan.label_count)),
@@ -1221,6 +1244,8 @@
           confirmed:true,
           plan_fingerprint:fingerprint,
           items,
+          paper_size:paperSizeSelect.value,
+          ...(supplierSource && compositeItemIds.length ? {selected_item_ids:compositeItemIds} : {}),
           ...(isSupplierBatch ? {order_ids:supplierOrderIds} : {}),
           ...(isComposite ? {selected_item_ids:compositeItemIds} : {}),
         };
@@ -1380,6 +1405,7 @@
       layoutStage.addEventListener("pointercancel", endLayoutDrag);
 
       retryButton.addEventListener("click", loadPackage);
+      paperSizeSelect.addEventListener("change", loadPackage);
       printButton.addEventListener("click", startPrint);
       layoutButton.addEventListener("click", openLayoutEditor);
       layoutCloseButton.addEventListener("click", () => closeLayoutEditor());

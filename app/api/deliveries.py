@@ -937,6 +937,7 @@ class DeliveryPackagingLabelJobRequest(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=120)
     plan_fingerprint: str = Field(min_length=64, max_length=64)
     confirmed: Literal[True]
+    paper_size: Literal["40x30", "40x80", "80x40"] = "40x30"
     items: list[DeliveryPackagingLabelJobItemRequest] = Field(
         min_length=1,
         max_length=500,
@@ -10478,12 +10479,15 @@ def correct_delivery_actual_date(
 @router.get("/{delivery_id}/production-packaging-label-package")
 def get_delivery_production_packaging_label_package(
     delivery_id: int,
+    paper_size: Literal["40x30", "40x80", "80x40"] = Query(default="40x30"),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
     delivery = _delivery_for_label_user(db, delivery_id, user)
     try:
-        package = build_delivery_packaging_label_package(db, delivery)
+        package = build_delivery_packaging_label_package(
+            db, delivery, paper_size=tuple(int(part) for part in paper_size.split("x"))
+        )
     except (
         ProductionPackagingLabelError,
         ProductionPackagingLabelLayoutError,
@@ -10546,6 +10550,7 @@ def post_delivery_production_packaging_label_job(
         result = prepare_delivery_packaging_label_job(
             db,
             delivery=delivery,
+            paper_size=tuple(int(part) for part in payload.paper_size.split("x")),
             idempotency_key=payload.idempotency_key,
             expected_plan_fingerprint=payload.plan_fingerprint,
             requested_print_counts={

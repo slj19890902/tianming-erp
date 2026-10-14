@@ -16,7 +16,9 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_bom import RequisitionItemBomSource, SalesOrderItemBomComponent
 from app.models.production import ProductionTask
+from app.models.procurement_source import ProcurementSourceLink
 from app.models.requisition import Requisition
+from app.models.stock_replenishment import StockReplenishmentOrderItem
 from app.models.supplier_requisition_order import SupplierRequisitionOrder
 from app.services.requisition_production_print import (
     build_supplier_requisition_production_package,
@@ -91,38 +93,47 @@ def _positive_int(value: object) -> int:
 
 def apply_packaging_label_print_counts(
     package: dict,
-    requested_counts: Mapping[int, int],
+    requested_counts: Mapping[int | str, int],
 ) -> dict:
     """Freeze per-task print counts without changing the production plan."""
 
     plans = list(package.get("plans") or [])
-    expected_task_ids = {int(plan["production_task_id"]) for plan in plans}
-    actual_task_ids = {int(task_id) for task_id in requested_counts}
-    if actual_task_ids != expected_task_ids:
+    expected_keys = {str(plan.get("selection_key") or f"task:{plan['production_task_id']}") for plan in plans}
+    actual_keys = {
+        str(key) if str(key).startswith(("task:", "supplier_stock:")) else f"task:{int(key)}"
+        for key in requested_counts
+    }
+    if actual_keys != expected_keys or len(actual_keys) != len(requested_counts):
         raise ProductionPackagingLabelError(
             "本次打印任务清单与当前标签计划不一致，请刷新后重试"
         )
 
     frozen = json.loads(json.dumps(package, ensure_ascii=False, default=str))
+    count_by_key = {
+        str(key) if str(key).startswith(("task:", "supplier_stock:")) else f"task:{int(key)}": count
+        for key, count in requested_counts.items()
+    }
     selected_plans: list[dict] = []
     selection: list[dict] = []
     for plan in frozen.get("plans") or []:
-        task_id = int(plan["production_task_id"])
+        task_id = plan.get("production_task_id")
+        selection_key = str(plan.get("selection_key") or f"task:{task_id}")
         system_count = int(plan.get("label_count") or 0)
-        requested = requested_counts[task_id]
+        requested = count_by_key[selection_key]
         if isinstance(requested, bool) or not isinstance(requested, int):
             raise ProductionPackagingLabelError("本次打印标签张数必须为整数")
         if requested < 0 or requested > system_count:
             raise ProductionPackagingLabelError(
-                f"生产任务 #{task_id} 本次打印张数必须在 0～{system_count} 之间"
+                f"标签 {selection_key} 本次打印张数必须在 0～{system_count} 之间"
             )
-        selection.append(
-            {
-                "production_task_id": task_id,
-                "print_label_count": requested,
-                "system_label_count": system_count,
-            }
-        )
+        selection_row = {
+            "production_task_id": task_id,
+            "print_label_count": requested,
+            "system_label_count": system_count,
+        }
+        if selection_key.startswith("supplier_stock:"):
+            selection_row["selection_key"] = selection_key
+        selection.append(selection_row)
         if requested == 0:
             continue
         plan["system_label_count"] = system_count
@@ -132,23 +143,23 @@ def apply_packaging_label_print_counts(
     if not selected_plans:
         raise ProductionPackagingLabelError("本次未选择需要打印的标签")
 
-    selected_by_task = {
-        int(plan["production_task_id"]): int(plan["print_label_count"])
+    selected_by_key = {
+        str(plan.get("selection_key") or f"task:{plan['production_task_id']}"): int(plan["print_label_count"])
         for plan in selected_plans
     }
     selected_job_task_ids = {
         int(task_id)
         for plan in selected_plans
         for task_id in (
-            plan.get("job_task_ids") or [plan["production_task_id"]]
+            plan.get("job_task_ids") or ([plan["production_task_id"]] if plan.get("production_task_id") is not None else [])
         )
     }
     labels = [
         label
         for label in (frozen.get("labels") or [])
-        if int(label["production_task_id"]) in selected_by_task
+        if str(label.get("selection_key") or f"task:{label.get('production_task_id')}") in selected_by_key
         and int(label["label_number"])
-        <= selected_by_task[int(label["production_task_id"])]
+        <= selected_by_key[str(label.get("selection_key") or f"task:{label.get('production_task_id')}")]
     ]
     frozen["system_production_task_count"] = int(
         package.get("production_task_count") or len(plans)
@@ -255,6 +266,8 @@ def apply_delivery_packaging_label_print_counts(
 def build_delivery_packaging_label_package(
     db: Session,
     delivery: Delivery,
+    *,
+    paper_size: tuple[int, int] = (40, 30),
 ) -> dict:
     """Build physical goods labels independently from customer PDF visibility.
 
@@ -555,7 +568,9 @@ def build_delivery_packaging_label_package(
                 }
             )
 
-    label_layout = effective_layout(db)
+    label_layout = effective_layout(
+        db, customer_code=customer.customer_code, paper_size=paper_size
+    )
     fingerprint_payload = {
         "delivery_id": int(delivery.id),
         "delivery_number": delivery.delivery_number,
@@ -595,7 +610,7 @@ def build_delivery_packaging_label_package(
             "source_product_versions"
         ],
         "template_version": template_version,
-        "template_dimensions": template_dimensions(template_version),
+        "template_dimensions": {"width_mm": paper_size[0], "height_mm": paper_size[1]},
         "plan_fingerprint": fingerprint,
         "print_plan_count": len(plans),
         "label_count": len(labels),
@@ -615,6 +630,7 @@ def build_supplier_requisition_packaging_label_package(
     *,
     selected_supplier_item_ids: set[int] | None = None,
     selected_task_ids: set[int] | None = None,
+    paper_size: tuple[int, int] = (40, 30),
 ) -> dict:
     """Project a read-only package using the current common-box label policy.
 
@@ -668,6 +684,7 @@ def build_supplier_requisition_packaging_label_package(
     item_filtered_task_sources: dict[int, tuple[dict, dict]] = {}
     available_item_ids: set[int] = set()
     item_ids_with_tasks: set[int] = set()
+    stock_sources: dict[int, tuple[dict, dict]] = {}
     for card in production_package["cards"]:
         for component in card.get("components", []):
             supplier_item_id = component.get("supplier_order_item_id")
@@ -675,6 +692,13 @@ def build_supplier_requisition_packaging_label_package(
                 available_item_ids.add(int(supplier_item_id))
             task_id = component.get("production_task_id")
             if task_id is None:
+                if (
+                    supplier_item_id is not None
+                    and str(component.get("source_identity") or "").startswith("supplier_stock:")
+                    and normalized_task_ids is None
+                    and (normalized_item_ids is None or int(supplier_item_id) in normalized_item_ids)
+                ):
+                    stock_sources[int(supplier_item_id)] = (card, component)
                 continue
             if supplier_item_id is not None:
                 item_ids_with_tasks.add(int(supplier_item_id))
@@ -693,11 +717,27 @@ def build_supplier_requisition_packaging_label_package(
             raise ProductionPackagingLabelError(
                 "所选报料明细不存在、已作废或已变化，请刷新后重试"
             )
-        missing_task_item_ids = sorted(normalized_item_ids - item_ids_with_tasks)
+        missing_task_item_ids = sorted(
+            normalized_item_ids - item_ids_with_tasks - set(stock_sources)
+        )
         if missing_task_item_ids:
+            missing_items = {
+                int(item.id): item for item in order.items
+                if int(item.id) in missing_task_item_ids
+            }
+            details = []
+            for item_id in missing_task_item_ids:
+                item = missing_items.get(item_id)
+                code = getattr(item, "product_code", None) or "存货编码待核"
+                source_key = str(getattr(item, "source_key", None) or "")
+                reason = (
+                    "补库来源关联无效，请核对补库单、来源状态及产品身份"
+                    if source_key.startswith("stock_replenishment:") else
+                    "缺少有效生产任务，请核对销售订单与生产任务链"
+                )
+                details.append(f"{order.order_number}｜{code}：{reason}")
             raise ProductionPackagingLabelError(
-                "所选报料明细缺少有效生产任务，整批已停止；"
-                f"请核对生产任务链后刷新重试：{missing_task_item_ids}"
+                "所选报料明细来源核验失败，整批已停止；" + "；".join(details)
             )
     if normalized_task_ids is not None:
         missing_task_ids = sorted(normalized_task_ids - set(all_task_sources))
@@ -741,6 +781,107 @@ def build_supplier_requisition_packaging_label_package(
         if normalized_item_ids is None and normalized_task_ids is None
         else []
     )
+    for supplier_item_id, (card, component) in sorted(stock_sources.items()):
+        identity = str(component.get("source_identity") or "")
+        source_id = int(card.get("stock_replenishment_item_id") or 0)
+        link = db.scalar(select(ProcurementSourceLink).where(
+            ProcurementSourceLink.supplier_item_id == supplier_item_id,
+            ProcurementSourceLink.stock_replenishment_item_id == source_id,
+            ProcurementSourceLink.status == "active",
+        ))
+        source = db.get(StockReplenishmentOrderItem, source_id) if source_id else None
+        supplier_item = next((row for row in order.items if int(row.id) == supplier_item_id), None)
+        product_id = int(card.get("product_id") or 0)
+        product = db.get(Product, product_id) if product_id else None
+        customer_id = int(card.get("customer_id") or 0)
+        customer = db.get(Customer, customer_id) if customer_id else None
+        prefix = f"{order.order_number}｜{component.get('product_code') or '-'}"
+        issues = list(card.get("selection_block_reasons") or [])
+        if (
+            source is None or link is None or supplier_item is None
+            or source.order.status not in {"confirmed", "partially_stocked", "stocked"}
+            or supplier_item.status != "active"
+            or identity != f"supplier_stock:{supplier_item_id}:{source_id}"
+        ):
+            issues.append("有效补库来源已变化，请核对报料与补库关联")
+        if product is None or customer is None or int(product.customer_id) != customer_id:
+            issues.append("补库产品或客户身份不一致，请核对来源")
+        if issues:
+            package_review_messages.append(f"{prefix}：{'；'.join(issues)}")
+            continue
+        if not product.production_label_enabled:
+            excluded_items.append({
+                "supplier_order_item_id": supplier_item_id,
+                "product_id": product_id,
+                "product_code": component.get("product_code"),
+                "product_name": component.get("product_name"),
+                "reason": "常用箱未启用打印标签，请保存后刷新",
+            })
+            continue
+        cutting = source.sheet_cutting_snapshot or {}
+        yield_per_sheet = _positive_int(cutting.get("yield_per_supplier_sheet"))
+        source_yield = _positive_int(source.stock_yield_per_sheet)
+        if (
+            not yield_per_sheet or not source_yield
+            or yield_per_sheet != source_yield
+            or _positive_int(link.source_quantity) != _positive_int(source.quantity)
+            or _positive_int(supplier_item.requisition_qty) != _positive_int(source.quantity)
+        ):
+            package_review_messages.append(
+                f"{prefix}：补库冻结出数或数量合同不一致，请核对后打印"
+            )
+            continue
+        # The source quantity is in its frozen target unit. A finished-stock
+        # line already represents finished pieces; a sheet-stock line needs its
+        # verified frozen cutting yield to project planned product output.
+        total_quantity = _positive_int(source.quantity) * (
+            yield_per_sheet if source.target_inventory_type == "semi_finished" else 1
+        )
+        units_per_label = _positive_int(product.production_label_units_per_label)
+        if not total_quantity or not units_per_label:
+            package_review_messages.append(f"{prefix}：补库产品产出数量或每张数量缺失")
+            continue
+        label_count = ceil(total_quantity / units_per_label)
+        try:
+            customer_fields = _customer_label_fields(
+                CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION,
+                customer.chinese_short_name,
+            )
+        except ProductionPackagingLabelError as error:
+            package_review_messages.append(f"{prefix}：{error}")
+            continue
+        plans.append({
+            "selection_key": identity,
+            "source_type": "stock_replenishment",
+            "supplier_order_item_id": supplier_item_id,
+            "stock_replenishment_item_id": source_id,
+            "source_version": card.get("source_version"),
+            "production_task_id": None,
+            "production_task_version": None,
+            "product_id": product_id,
+            "product_version": int(product.version),
+            "label_policy_source": "product_master_current",
+            "template_version": CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION,
+            "customer_id": customer_id,
+            "customer_name": card.get("customer_name"),
+            "customer_code": customer.customer_code,
+            "product_code": component.get("product_code"),
+            "product_name": component.get("product_name"),
+            "specification": component.get("specification"),
+            "order_numbers": list(card.get("order_numbers") or []),
+            "customer_pos": [],
+            "total_quantity": total_quantity,
+            "quantity_basis": "frozen_replenishment_plan_not_completion",
+            "unit_label": product_unit_label(product),
+            "units_per_label": units_per_label,
+            "label_count": label_count,
+            "label_quantities": [
+                min(units_per_label, total_quantity - index * units_per_label)
+                for index in range(label_count)
+            ],
+            **customer_fields,
+        })
+        template_versions.add(CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION)
     for task_id in sorted(task_sources):
         card, component = task_sources[task_id]
         product_code = str(
@@ -871,6 +1012,8 @@ def build_supplier_requisition_packaging_label_package(
             continue
         plans.append(
             {
+                "selection_key": f"task:{task_id}",
+                "supplier_order_item_id": component.get("supplier_order_item_id"),
                 "production_task_id": task_id,
                 "production_task_version": int(task.version or 1),
                 "product_id": product_id,
@@ -910,6 +1053,8 @@ def build_supplier_requisition_packaging_label_package(
     for plan in plans:
         for index, quantity in enumerate(plan["label_quantities"], start=1):
             label = {
+                "selection_key": plan["selection_key"],
+                "source_type": plan.get("source_type"),
                 "production_task_id": plan["production_task_id"],
                 "production_task_version": plan["production_task_version"],
                 "template_version": plan["template_version"],
@@ -932,8 +1077,15 @@ def build_supplier_requisition_packaging_label_package(
                 label["customer_short_name"] = plan["customer_short_name"]
             labels.append(label)
 
+    layout_customers = {str(plan.get("customer_code") or "") for plan in plans}
+    if len(layout_customers) > 1 and "JSD" in layout_customers:
+        package_review_messages.append("JSD与其他客户的产品标签布局不同，请按客户分批打印")
     label_layout = (
-        effective_layout(db)
+        effective_layout(
+            db,
+            customer_code=next(iter(layout_customers), None),
+            paper_size=paper_size,
+        )
         if template_version == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
         else None
     )
@@ -974,8 +1126,13 @@ def build_supplier_requisition_packaging_label_package(
         "labels": labels,
         "excluded_items": excluded_items,
     }
+    if normalized_item_ids is not None:
+        result["selected_supplier_item_ids"] = sorted(normalized_item_ids)
     if label_layout is not None:
         result["label_layout"] = label_layout
+        result["template_dimensions"] = {
+            "width_mm": paper_size[0], "height_mm": paper_size[1]
+        }
     return result
 
 
@@ -1012,6 +1169,7 @@ def combine_supplier_requisition_packaging_label_packages(
     print_selection: list[dict] = []
     source_fingerprints: list[dict] = []
     layout_payloads: list[dict] = []
+    paper_dimensions: list[dict] = []
     for package in ordered:
         order_id = int(package["supplier_order_id"])
         order_number = package.get("supplier_order_number")
@@ -1040,6 +1198,8 @@ def combine_supplier_requisition_packaging_label_packages(
                 )
         if package.get("label_layout") is not None:
             layout_payloads.append(package["label_layout"])
+        if package.get("template_dimensions") is not None:
+            paper_dimensions.append(package["template_dimensions"])
 
     if layout_payloads and any(
         json.dumps(layout, ensure_ascii=False, sort_keys=True, default=str)
@@ -1047,6 +1207,8 @@ def combine_supplier_requisition_packaging_label_packages(
         for layout in layout_payloads[1:]
     ):
         review_messages.append("所选报料单读取到不同版本的标签布局，请刷新后重试")
+    if paper_dimensions and any(dimensions != paper_dimensions[0] for dimensions in paper_dimensions[1:]):
+        review_messages.append("所选报料单包含不同纸型，请按纸型分批打印")
 
     fingerprint = hashlib.sha256(
         json.dumps(
@@ -1098,6 +1260,8 @@ def combine_supplier_requisition_packaging_label_packages(
         }
     if layout_payloads:
         result["label_layout"] = layout_payloads[0]
+    if paper_dimensions:
+        result["template_dimensions"] = paper_dimensions[0]
     return result
 
 
@@ -1106,6 +1270,7 @@ def build_composite_requisition_packaging_label_package(
     requisition: Requisition,
     *,
     selected_item_ids: set[int] | None = None,
+    paper_size: tuple[int, int] = (40, 30),
 ) -> dict:
     """Build labels for a legacy composite requisition using frozen order/task facts.
 
@@ -1430,6 +1595,8 @@ def build_composite_requisition_packaging_label_package(
     if len(template_versions) > 1:
         review_messages.append("所选产品包含不同标签模板，请分开打印")
     template_version = next(iter(template_versions)) if len(template_versions) == 1 else None
+    if paper_size != (40, 30) and template_version != CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION:
+        review_messages.append("历史标签模板只能使用原冻结纸型，请分开打印")
     labels: list[dict] = []
     for plan in plans:
         for index, quantity in enumerate(plan["label_quantities"], start=1):
@@ -1453,7 +1620,15 @@ def build_composite_requisition_packaging_label_package(
                 label["customer_short_name"] = plan["customer_short_name"]
             labels.append(label)
 
-    label_layout = effective_layout(db) if template_version == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION else None
+    layout_customers = {str(plan.get("customer_code") or "") for plan in plans}
+    if len(layout_customers) > 1 and "JSD" in layout_customers:
+        review_messages.append("JSD与其他客户的产品标签布局不同，请按客户分批打印")
+    label_layout = (
+        effective_layout(
+            db, customer_code=next(iter(layout_customers), None), paper_size=paper_size
+        )
+        if template_version == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION else None
+    )
     fingerprint_payload = {
         "material_requisition_id": int(requisition.id),
         "selected_item_ids": sorted(selected_ids),
@@ -1480,7 +1655,11 @@ def build_composite_requisition_packaging_label_package(
         "status_label": "生产包装标签｜非库存标签",
         "label_policy_source": "product_master_current",
         "template_version": template_version,
-        "template_dimensions": template_dimensions(template_version) if template_version else None,
+        "template_dimensions": (
+            {"width_mm": paper_size[0], "height_mm": paper_size[1]}
+            if template_version == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
+            else template_dimensions(template_version) if template_version else None
+        ),
         "plan_fingerprint": fingerprint,
         "production_task_count": len(job_tasks),
         "label_count": len(labels),

@@ -635,9 +635,22 @@ def _validate_job_task_links(
         if isinstance(plan, dict) and plan.get("production_task_id") is not None
     }
     link_ids = [int(link.production_task_id) for link in links]
-    if not frozen_plans or set(frozen_plans) != set(link_ids) or len(links) != len(
-        frozen_plans
+    stock_plans = [plan for plan in package.get("plans") or []
+                   if isinstance(plan, dict) and plan.get("source_type") == "stock_replenishment"]
+    stock_keys = [str(plan.get("selection_key") or "") for plan in stock_plans]
+    if stock_plans and (
+        job.supplier_order_id is None
+        or any(not key.startswith("supplier_stock:") for key in stock_keys)
+        or len(stock_keys) != len(set(stock_keys))
+        or any(int(plan.get("supplier_order_item_id") or 0) <= 0
+               or int(plan.get("stock_replenishment_item_id") or 0) <= 0
+               or int(plan.get("product_version") or 0) <= 0
+               or not plan.get("source_version") for plan in stock_plans)
     ):
+        raise ProductionLabelOperationError("补库标签冻结来源校验失败，已停止读取或补打")
+    if (not frozen_plans and not stock_plans
+            or set(frozen_plans) != set(link_ids)
+            or len(links) != len(frozen_plans)):
         raise ProductionLabelOperationError(
             "打印作业任务关联校验失败，已停止读取或补打"
         )
@@ -733,7 +746,13 @@ def _assert_prepared_job_is_current(
                 "未实际打印的送货标签草稿来源已不存在，请重新打开送货单"
             )
         try:
-            current_package = build_delivery_packaging_label_package(db, delivery)
+            dimensions = package.get("template_dimensions") or {}
+            current_package = build_delivery_packaging_label_package(
+                db, delivery, paper_size=(
+                    int(dimensions.get("width_mm") or 40),
+                    int(dimensions.get("height_mm") or 30),
+                ),
+            )
         except ProductionPackagingLabelError as error:
             raise ProductionLabelOperationError(
                 f"未实际打印的送货标签草稿已过期：{error}"
@@ -745,6 +764,25 @@ def _assert_prepared_job_is_current(
             )
         return
     links = _validate_job_task_links(db, job, package)
+    if any(plan.get("source_type") == "stock_replenishment"
+           for plan in package.get("plans") or []):
+        order = db.get(SupplierRequisitionOrder, job.supplier_order_id)
+        if order is None or order.status != "confirmed":
+            raise ProductionLabelOperationError("补库标签草稿来源已失效，请重新打开报料单")
+        selected_items = {
+            int(value) for value in (
+                package.get("selected_supplier_item_ids")
+                or [plan["supplier_order_item_id"] for plan in package["plans"]]
+            )
+        }
+        dimensions = package.get("template_dimensions") or {}
+        current = build_supplier_requisition_packaging_label_package(
+            db, order, selected_supplier_item_ids=selected_items,
+            paper_size=(int(dimensions.get("width_mm") or 40),
+                        int(dimensions.get("height_mm") or 30)),
+        )
+        if current.get("plan_fingerprint") != job.plan_fingerprint:
+            raise ProductionLabelOperationError("补库标签草稿来源或布局已变化，请重新打开报料单")
     current_task_versions = {
         int(task.id): int(task.version or 0)
         for task in db.scalars(
@@ -812,25 +850,33 @@ def prepare_packaging_label_job(
     order: SupplierRequisitionOrder,
     idempotency_key: str,
     expected_plan_fingerprint: str,
-    requested_print_counts: dict[int, int] | None = None,
+    requested_print_counts: dict[int | str, int] | None = None,
+    selected_supplier_item_ids: set[int] | None = None,
+    paper_size: tuple[int, int] = (40, 30),
     operator_id: int,
 ) -> PackagingLabelJobResult:
     key = idempotency_key.strip()
-    request_hash = _canonical_hash(
-        {
-            "supplier_order_id": int(order.id),
-            "idempotency_key": key,
-            "plan_fingerprint": expected_plan_fingerprint,
-            "print_counts": (
-                [
-                    [int(task_id), requested_print_counts[task_id]]
-                    for task_id in sorted(requested_print_counts)
-                ]
-                if requested_print_counts is not None
-                else "legacy_all_planned"
-            ),
-        }
+    legacy_request = (
+        paper_size == (40, 30) and selected_supplier_item_ids is None
+        and (requested_print_counts is None or all(isinstance(task_id, int)
+             for task_id in requested_print_counts))
     )
+    request_body = {
+        "supplier_order_id": int(order.id),
+        "idempotency_key": key,
+        "plan_fingerprint": expected_plan_fingerprint,
+        "print_counts": (
+            [[int(task_id) if legacy_request else str(task_id), requested_print_counts[task_id]]
+             for task_id in sorted(requested_print_counts, key=None if legacy_request else str)]
+            if requested_print_counts is not None else "legacy_all_planned"
+        ),
+    }
+    if not legacy_request:
+        request_body["paper_size"] = list(paper_size)
+        request_body["selected_supplier_item_ids"] = (
+            sorted(selected_supplier_item_ids) if selected_supplier_item_ids is not None else None
+        )
+    request_hash = _canonical_hash(request_body)
     repeated = db.scalar(
         select(ProductionPackagingLabelPrintJob).where(
             ProductionPackagingLabelPrintJob.idempotency_key == key
@@ -844,14 +890,17 @@ def prepare_packaging_label_job(
         return PackagingLabelJobResult(repeated, repeated_package, True)
 
     selected_task_ids = (
-        {int(task_id) for task_id in requested_print_counts}
-        if requested_print_counts is not None
+        {int(key.split(":", 1)[1]) if isinstance(key, str) else int(key)
+         for key in requested_print_counts if not str(key).startswith("supplier_stock:")}
+        if requested_print_counts is not None and selected_supplier_item_ids is None
         else None
     )
     package = build_supplier_requisition_packaging_label_package(
         db,
         order,
         selected_task_ids=selected_task_ids,
+        selected_supplier_item_ids=selected_supplier_item_ids,
+        paper_size=paper_size,
     )
     if package.get("review_required"):
         raise ProductionLabelOperationError("标签计划需要人工核对，不能创建打印作业")
@@ -861,12 +910,13 @@ def prepare_packaging_label_job(
         raise ProductionLabelOperationError("标签计划已变化，请刷新预览后重试")
     if requested_print_counts is None:
         requested_print_counts = {
-            int(plan["production_task_id"]): int(plan["label_count"])
+            str(plan["selection_key"]): int(plan["label_count"])
             for plan in package.get("plans") or []
         }
     plan_versions = {
         int(plan["production_task_id"]): int(plan["production_task_version"])
         for plan in package.get("plans") or []
+        if plan.get("production_task_id") is not None
     }
     _claim_task_versions(
         db,
@@ -880,6 +930,8 @@ def prepare_packaging_label_job(
         db,
         order,
         selected_task_ids=selected_task_ids,
+        selected_supplier_item_ids=selected_supplier_item_ids,
+        paper_size=paper_size,
     )
     if package.get("plan_fingerprint") != expected_plan_fingerprint:
         raise ProductionLabelOperationError("标签计划已变化，请刷新预览后重试")
@@ -911,6 +963,8 @@ def prepare_packaging_label_job(
     db.add(job)
     db.flush()
     for plan in package.get("plans") or []:
+        if plan.get("production_task_id") is None:
+            continue
         db.add(
             ProductionPackagingLabelPrintJobTask(
                 print_job_id=job.id,
@@ -934,12 +988,12 @@ def prepare_composite_packaging_label_job(
     idempotency_key: str,
     expected_plan_fingerprint: str,
     requested_print_counts: dict[int, int] | None = None,
+    paper_size: tuple[int, int] = (40, 30),
     operator_id: int,
 ) -> PackagingLabelJobResult:
     key = idempotency_key.strip()
     normalized_item_ids = sorted({int(value) for value in selected_item_ids})
-    request_hash = _canonical_hash(
-        {
+    request_body = {
             "material_requisition_id": int(requisition.id),
             "selected_item_ids": normalized_item_ids,
             "idempotency_key": key,
@@ -953,7 +1007,9 @@ def prepare_composite_packaging_label_job(
                 else "legacy_all_planned"
             ),
         }
-    )
+    if paper_size != (40, 30):
+        request_body["paper_size"] = list(paper_size)
+    request_hash = _canonical_hash(request_body)
     repeated = db.scalar(
         select(ProductionPackagingLabelPrintJob).where(
             ProductionPackagingLabelPrintJob.idempotency_key == key
@@ -970,6 +1026,7 @@ def prepare_composite_packaging_label_job(
         db,
         requisition,
         selected_item_ids=set(normalized_item_ids),
+        paper_size=paper_size,
     )
     if package.get("review_required"):
         raise ProductionLabelOperationError(
@@ -1000,6 +1057,7 @@ def prepare_composite_packaging_label_job(
         db,
         requisition,
         selected_item_ids=set(normalized_item_ids),
+        paper_size=paper_size,
     )
     if package.get("plan_fingerprint") != expected_plan_fingerprint:
         raise ProductionLabelOperationError("标签计划已变化，请刷新预览后重试")
@@ -1107,6 +1165,7 @@ def prepare_delivery_packaging_label_job(
     idempotency_key: str,
     expected_plan_fingerprint: str,
     requested_print_counts: dict[str, int] | None = None,
+    paper_size: tuple[int, int] = (40, 30),
     operator_id: int,
 ) -> PackagingLabelJobResult:
     key = idempotency_key.strip()
@@ -1115,8 +1174,7 @@ def prepare_delivery_packaging_label_job(
         if requested_print_counts is not None
         else None
     )
-    request_hash = _canonical_hash(
-        {
+    request_body = {
             "delivery_id": int(delivery.id),
             "idempotency_key": key,
             "plan_fingerprint": expected_plan_fingerprint,
@@ -1126,7 +1184,9 @@ def prepare_delivery_packaging_label_job(
                 else "all_planned"
             ),
         }
-    )
+    if paper_size != (40, 30):
+        request_body["paper_size"] = list(paper_size)
+    request_hash = _canonical_hash(request_body)
     repeated = db.scalar(
         select(ProductionPackagingLabelPrintJob).where(
             ProductionPackagingLabelPrintJob.idempotency_key == key
@@ -1139,7 +1199,7 @@ def prepare_delivery_packaging_label_job(
         _assert_prepared_job_is_current(db, repeated, repeated_package)
         return PackagingLabelJobResult(repeated, repeated_package, True)
 
-    package = build_delivery_packaging_label_package(db, delivery)
+    package = build_delivery_packaging_label_package(db, delivery, paper_size=paper_size)
     if package.get("review_required"):
         raise ProductionLabelOperationError(
             "送货标签计划需要核对："
@@ -1164,7 +1224,7 @@ def prepare_delivery_packaging_label_job(
     )
     _claim_delivery_package_customer(db, package)
     _claim_package_product_versions(db, package)
-    package = build_delivery_packaging_label_package(db, delivery)
+    package = build_delivery_packaging_label_package(db, delivery, paper_size=paper_size)
     if package.get("plan_fingerprint") != expected_plan_fingerprint:
         raise ProductionLabelOperationError("送货标签计划已变化，请刷新预览后重试")
     try:
@@ -1238,7 +1298,13 @@ def confirm_packaging_label_job_printed(
         )
         _claim_delivery_package_customer(db, package)
         _claim_package_product_versions(db, package)
-        current_package = build_delivery_packaging_label_package(db, delivery)
+        dimensions = package.get("template_dimensions") or {}
+        current_package = build_delivery_packaging_label_package(
+            db, delivery, paper_size=(
+                int(dimensions.get("width_mm") or 40),
+                int(dimensions.get("height_mm") or 30),
+            ),
+        )
         if current_package.get("plan_fingerprint") != job.plan_fingerprint:
             raise ProductionLabelOperationError(
                 "送货标签作业准备后，送货明细、交付模式、常用箱标签策略"
@@ -1246,7 +1312,8 @@ def confirm_packaging_label_job_printed(
             )
     else:
         task_ids = [int(link.production_task_id) for link in links]
-        if not task_ids:
+        if not task_ids and not any(plan.get("source_type") == "stock_replenishment"
+                                    for plan in package.get("plans") or []):
             raise ProductionLabelOperationError(
                 "打印作业没有关联生产任务，不能登记实际打印"
             )
@@ -1254,6 +1321,7 @@ def confirm_packaging_label_job_printed(
         frozen_plans = {
             int(plan["production_task_id"]): plan
             for plan in frozen_task_rows
+            if plan.get("production_task_id") is not None
         }
         _claim_task_versions(
             db,
@@ -1267,6 +1335,23 @@ def confirm_packaging_label_job_printed(
             ),
         )
         _claim_package_product_versions(db, package)
+        if any(plan.get("source_type") == "stock_replenishment"
+               for plan in package.get("plans") or []):
+            order = db.get(SupplierRequisitionOrder, job.supplier_order_id)
+            if order is None or order.status != "confirmed":
+                raise ProductionLabelOperationError("补库标签来源已失效，不能确认实际打印")
+            dimensions = package.get("template_dimensions") or {}
+            current = build_supplier_requisition_packaging_label_package(
+                db, order,
+                selected_supplier_item_ids={int(value) for value in (
+                    package.get("selected_supplier_item_ids")
+                    or [plan["supplier_order_item_id"] for plan in package["plans"]]
+                )},
+                paper_size=(int(dimensions.get("width_mm") or 40),
+                            int(dimensions.get("height_mm") or 30)),
+            )
+            if current.get("plan_fingerprint") != job.plan_fingerprint:
+                raise ProductionLabelOperationError("补库标签来源或布局已变化，不能确认旧预览")
 
     printed_at = utc_now_naive()
     try:

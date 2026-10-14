@@ -290,7 +290,8 @@ _MERGE_GROUP_WRITE_LOCK = Lock()
 
 
 class ProductionPackagingLabelJobItemRequest(BaseModel):
-    production_task_id: int = Field(gt=0)
+    production_task_id: int | None = Field(default=None, gt=0)
+    selection_key: str | None = Field(default=None, min_length=1, max_length=160)
     print_label_count: int = Field(ge=0)
 
     @field_validator("production_task_id", "print_label_count", mode="before")
@@ -299,6 +300,14 @@ class ProductionPackagingLabelJobItemRequest(BaseModel):
         if isinstance(value, bool):
             raise ValueError("生产任务编号和本次打印张数必须为整数")
         return value
+
+    @model_validator(mode="after")
+    def require_one_source(self):
+        if (self.production_task_id is None) == (self.selection_key is None):
+            raise ValueError("标签必须恰好选择一个生产任务或补库来源")
+        if self.selection_key is not None and not self.selection_key.startswith(("task:", "supplier_stock:")):
+            raise ValueError("产品标签来源身份无效")
+        return self
 
 
 class PurchaseReceiptFactRequest(BaseModel):
@@ -832,6 +841,8 @@ class ProductionPackagingLabelJobRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=120)
     plan_fingerprint: str = Field(min_length=64, max_length=64)
     confirmed: Literal[True]
+    paper_size: Literal["40x30", "40x80", "80x40"] = "40x30"
+    selected_item_ids: list[int] | None = Field(default=None, min_length=1, max_length=200)
     items: list[ProductionPackagingLabelJobItemRequest] | None = Field(
         default=None,
         min_length=1,
@@ -845,9 +856,11 @@ class ProductionPackagingLabelJobRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_unique_label_tasks(self):
-        task_ids = [item.production_task_id for item in (self.items or [])]
-        if len(task_ids) != len(set(task_ids)):
+        keys = [item.selection_key or f"task:{item.production_task_id}" for item in (self.items or [])]
+        if len(keys) != len(set(keys)):
             raise ValueError("本次打印任务不能重复")
+        if self.selected_item_ids is not None and len(set(self.selected_item_ids)) != len(self.selected_item_ids):
+            raise ValueError("所选报料明细不能重复")
         return self
 
 
@@ -22975,6 +22988,7 @@ def _supplier_label_batch_package(
     orders: list[SupplierRequisitionOrder],
     selected_supplier_item_ids: set[int] | None = None,
     selected_task_ids: set[int] | None = None,
+    paper_size: tuple[int, int] = (40, 30),
 ) -> dict:
     if selected_supplier_item_ids is not None and selected_task_ids is not None:
         raise HTTPException(status_code=422, detail="标签明细与任务不能同时筛选")
@@ -22993,13 +23007,14 @@ def _supplier_label_batch_package(
                         db,
                         order,
                         selected_supplier_item_ids=order_selection,
+                        paper_size=paper_size,
                     )
                 )
                 matched_item_ids.update(order_selection)
                 continue
             if selected_task_ids is not None:
                 full_package = build_supplier_requisition_packaging_label_package(
-                    db, order
+                    db, order, paper_size=paper_size
                 )
                 order_task_ids = {
                     int(row["production_task_id"])
@@ -23015,12 +23030,13 @@ def _supplier_label_batch_package(
                         db,
                         order,
                         selected_task_ids=order_selection,
+                        paper_size=paper_size,
                     )
                 )
                 matched_task_ids.update(order_selection)
                 continue
             packages.append(
-                build_supplier_requisition_packaging_label_package(db, order)
+                build_supplier_requisition_packaging_label_package(db, order, paper_size=paper_size)
             )
 
         if (
@@ -23124,10 +23140,28 @@ def _supplier_label_batch_audit_key(
     return audit_key
 
 
+def _label_paper_size(value: str) -> tuple[int, int]:
+    sizes = {"40x30": (40, 30), "40x80": (40, 80), "80x40": (80, 40)}
+    try:
+        return sizes[value if isinstance(value, str) else "40x30"]
+    except KeyError as error:
+        raise HTTPException(status_code=422, detail="产品标签纸型不受支持") from error
+
+
+def _supplier_label_request_counts(items: list[ProductionPackagingLabelJobItemRequest] | None):
+    if items is None:
+        return None
+    return {
+        item.selection_key or int(item.production_task_id): item.print_label_count
+        for item in items
+    }
+
+
 @router.get("/supplier-order-label-batches/package")
 def get_supplier_order_packaging_label_batch(
     order_ids: str = Query(min_length=1, max_length=600),
     item_ids: str | None = Query(default=None, max_length=1200),
+    paper_size: str = Query(default="40x30"),
     db: Session = Depends(get_db),
     user: User = Depends(can_read_production_labels),
 ) -> dict:
@@ -23143,6 +23177,7 @@ def get_supplier_order_packaging_label_batch(
         selected_supplier_item_ids=(
             _supplier_label_item_ids(item_ids) if item_ids is not None else None
         ),
+        paper_size=_label_paper_size(paper_size),
     )
 
 
@@ -23150,6 +23185,7 @@ def get_supplier_order_packaging_label_batch(
 def get_supplier_order_production_packaging_label_package(
     order_id: int,
     item_ids: str | None = Query(default=None, max_length=1200),
+    paper_size: str = Query(default="40x30"),
     db: Session = Depends(get_db),
     _user: User = Depends(can_read_production_labels),
 ) -> dict:
@@ -23174,6 +23210,7 @@ def get_supplier_order_production_packaging_label_package(
                 if item_ids is not None
                 else None
             ),
+            paper_size=_label_paper_size(paper_size),
         )
     except ProductionPackagingLabelLayoutError as error:
         raise HTTPException(
@@ -23272,6 +23309,7 @@ def get_composite_requisition_production_print_package(
 def get_composite_requisition_packaging_label_package(
     batch_id: int,
     item_ids: str = Query(min_length=1, max_length=1200),
+    paper_size: str = Query(default="40x30"),
     db: Session = Depends(get_db),
     user: User = Depends(can_read_production_labels),
 ) -> dict:
@@ -23285,6 +23323,7 @@ def get_composite_requisition_packaging_label_package(
             db,
             requisition,
             selected_item_ids=_composite_label_item_ids(item_ids),
+            paper_size=_label_paper_size(paper_size),
         )
     except (ProductionPackagingLabelError, ProductionPackagingLabelLayoutError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
@@ -23327,6 +23366,7 @@ def post_composite_requisition_packaging_label_job(
             db,
             requisition=requisition,
             selected_item_ids=set(payload.selected_item_ids),
+            paper_size=_label_paper_size(payload.paper_size),
             idempotency_key=payload.idempotency_key,
             expected_plan_fingerprint=payload.plan_fingerprint,
             requested_print_counts=(
@@ -23406,32 +23446,36 @@ def post_supplier_order_packaging_label_batch_job(
     )
     selected_task_ids = (
         {int(item.production_task_id) for item in payload.items}
-        if payload.items is not None
+        if payload.items is not None and payload.selected_item_ids is None
+        and all(item.production_task_id is not None for item in payload.items)
         else None
     )
     current_package = _supplier_label_batch_package(
         db,
         orders=orders,
         selected_task_ids=selected_task_ids,
+        selected_supplier_item_ids=set(payload.selected_item_ids) if payload.selected_item_ids else None,
+        paper_size=_label_paper_size(payload.paper_size),
     )
     if current_package.get("plan_fingerprint") != payload.plan_fingerprint:
         raise HTTPException(status_code=409, detail="跨报料单标签计划已变化，请刷新预览后重试")
     requested_counts = (
-        {
-            item.production_task_id: item.print_label_count
-            for item in payload.items
-        }
+        _supplier_label_request_counts(payload.items)
         if payload.items is not None
         else {
-            int(plan["production_task_id"]): int(plan["label_count"])
+            str(plan["selection_key"]): int(plan["label_count"])
             for plan in current_package.get("plans") or []
         }
     )
     expected_task_ids = {
-        int(plan["production_task_id"])
+        str(plan["selection_key"])
         for plan in current_package.get("plans") or []
     }
-    if set(requested_counts) != expected_task_ids:
+    normalized_counts = {
+        key if isinstance(key, str) else f"task:{key}": value
+        for key, value in requested_counts.items()
+    }
+    if set(normalized_counts) != expected_task_ids:
         raise HTTPException(
             status_code=409,
             detail="本次跨报料单打印任务清单与当前标签计划不一致，请刷新后重试",
@@ -23444,8 +23488,8 @@ def post_supplier_order_packaging_label_batch_job(
                 "order_ids": payload.order_ids,
                 "plan_fingerprint": payload.plan_fingerprint,
                 "items": [
-                    [task_id, requested_counts[task_id]]
-                    for task_id in sorted(requested_counts)
+                    [key, normalized_counts[key]]
+                    for key in sorted(normalized_counts)
                 ],
             },
             ensure_ascii=False,
@@ -23469,9 +23513,7 @@ def post_supplier_order_packaging_label_batch_job(
         for order in orders:
             order_plans = plans_by_order.get(int(order.id), [])
             order_counts = {
-                int(plan["production_task_id"]): requested_counts[
-                    int(plan["production_task_id"])
-                ]
+                str(plan["selection_key"]): normalized_counts[str(plan["selection_key"])]
                 for plan in order_plans
             }
             if not any(count > 0 for count in order_counts.values()):
@@ -23490,6 +23532,10 @@ def post_supplier_order_packaging_label_batch_job(
                 idempotency_key=child_key,
                 expected_plan_fingerprint=source_fingerprint,
                 requested_print_counts=order_counts,
+                selected_supplier_item_ids=(set(payload.selected_item_ids) &
+                                            {int(item.id) for item in order.items})
+                if payload.selected_item_ids else None,
+                paper_size=_label_paper_size(payload.paper_size),
                 operator_id=user.id,
             )
             results.append(result)
@@ -23575,14 +23621,9 @@ def post_supplier_order_production_packaging_label_job(
             order=order,
             idempotency_key=payload.idempotency_key,
             expected_plan_fingerprint=payload.plan_fingerprint,
-            requested_print_counts=(
-                {
-                    item.production_task_id: item.print_label_count
-                    for item in payload.items
-                }
-                if payload.items is not None
-                else None
-            ),
+            requested_print_counts=_supplier_label_request_counts(payload.items),
+            selected_supplier_item_ids=set(payload.selected_item_ids) if payload.selected_item_ids else None,
+            paper_size=_label_paper_size(payload.paper_size),
             operator_id=user.id,
         )
         # Persist the job and its exact task links atomically.  A prepared job

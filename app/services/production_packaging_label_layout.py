@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import re
+from copy import deepcopy
 from typing import Any
 
 from sqlalchemy import desc, select
@@ -15,6 +16,8 @@ from app.models.production_label_print import ProductionPackagingLabelLayoutRevi
 CATALOG_VERSION = "p1-66b-v1"
 PAPER_WIDTH_MM = 40.0
 PAPER_HEIGHT_MM = 30.0
+SUPPORTED_PAPER_SIZES = ((40, 30), (40, 80), (80, 40))
+JSD_CUSTOMER_CODE = "JSD"
 DEFAULT_QUANTITY_FIXED_SUFFIX = "只/捆"
 MAX_FIXED_SUFFIX_LENGTH = 8
 OVERLAP_EPSILON_MM = 0.001
@@ -424,8 +427,48 @@ def _envelope(
     }
 
 
-def effective_layout(db: Session) -> dict[str, Any]:
-    return _envelope(_latest(db, "release"))
+def effective_layout(
+    db: Session,
+    *,
+    customer_code: str | None = None,
+    paper_size: tuple[int, int] = (40, 30),
+) -> dict[str, Any]:
+    """Project a released layout without changing the release or old jobs.
+
+    The customer and paper projection is included in the returned hash and is
+    frozen with every new print job. Existing jobs keep their stored envelope.
+    """
+    if paper_size not in SUPPORTED_PAPER_SIZES:
+        raise ProductionPackagingLabelLayoutError("标签纸型只支持40×30、40×80或80×40毫米")
+    base = _envelope(_latest(db, "release"))
+    if customer_code != JSD_CUSTOMER_CODE and paper_size == (40, 30):
+        return base
+    layout = deepcopy(base["layout"])
+    if customer_code == JSD_CUSTOMER_CODE:
+        elements = {element["id"]: element for element in layout["elements"]}
+        code = elements["product_code"]
+        name = elements["product_name"]
+        code["x_mm"] = 0.5
+        code["width_mm"] = 39.0
+        code["height_mm"] = round(name["y_mm"] + name["height_mm"] - code["y_mm"], 3)
+        name["visible"] = False
+        elements["quantity"]["visible"] = True
+        elements["quantity"]["fixed_suffix"] = DEFAULT_QUANTITY_FIXED_SUFFIX
+        layout["customer_profile"] = "jsd-code-quantity-v1"
+    width, height = paper_size
+    if paper_size != (40, 30):
+        for element in layout["elements"]:
+            element["x_mm"] = round(element["x_mm"] * width / 40, 3)
+            element["width_mm"] = round(element["width_mm"] * width / 40, 3)
+            element["y_mm"] = round(element["y_mm"] * height / 30, 3)
+            element["height_mm"] = round(element["height_mm"] * height / 30, 3)
+        layout["paper"] = {"width_mm": width, "height_mm": height}
+    return {
+        "version": base["version"],
+        "layout": layout,
+        "layout_hash": layout_hash(layout),
+        "source_layout_hash": base["layout_hash"],
+    }
 
 
 def _history(

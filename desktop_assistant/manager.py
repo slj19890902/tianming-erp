@@ -1001,17 +1001,31 @@ class Manager:
                                      else self._environment(migration_release))
             prepare_migration(migration_release, self.root / 'shared', candidate['revision'],
                 environment=migration_environment, release_manifest=migration_manifest)
-        self._backup_preflight(nas)
-        self.stop()
-        try:
-            backup = self._backup_stopped(password, nas)
-        except Exception:
-            self.start()
-            raise
+        from desktop_assistant import local_backup_only as local_only
+        if local_only.enabled(self):
+            # Reuse the authenticated local-only backup transaction, but keep
+            # the service stopped after a successful capture so migration can
+            # rehearse and run against the same frozen source point.
+            try:
+                backup = local_only.backup_locked(
+                    self, password, restart_allowed=lambda: False
+                )
+            except Exception:
+                if self._process() is None:
+                    self.start()
+                raise
+        else:
+            self._backup_preflight(nas)
+            self.stop()
+            try:
+                backup = self._backup_stopped(password, nas)
+            except Exception:
+                self.start()
+                raise
         new = self.state
         if migrate:
             from desktop_assistant.migration import rehearse, run_migration, facts, files, schema
-            # The checked NAS backup exists before both rehearsal and real migration.
+            # The checked complete backup exists before both rehearsal and real migration.
             try:
                 report = rehearse(self, package)
             except Exception:

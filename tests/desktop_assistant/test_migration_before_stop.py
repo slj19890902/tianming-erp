@@ -50,3 +50,47 @@ def test_run_migration_revalidates_at_spawn_boundary(tmp_path, monkeypatch):
             release_manifest={'revision': 'next'})
     process.assert_not_called()
     assert not (tmp_path / 'log').exists()
+
+
+def test_migration_uses_existing_local_backup_policy_without_nas(tmp_path, monkeypatch):
+    from desktop_assistant import local_backup_only, migration
+
+    manager = module.Manager(tmp_path / 'instance', b'synthetic-unused')
+    old = {'current': 'a' * 64}
+    module.write_json(manager.root / 'state.json', old)
+    candidate = {'id': 'b' * 64, 'revision': 'next', 'version': 'candidate',
+        'migration': {'policy': 'preserve_existing_facts_v1', 'from_revision': 'before',
+                      'rollback_package_sha256': old['current']}}
+    manifest = dict(candidate, runtime_platform='macos-arm64')
+    monkeypatch.setattr(manager, 'stage_release', lambda _: candidate)
+    monkeypatch.setattr(manager, '_approve_execution', Mock())
+    monkeypatch.setattr(manager, '_check_dispatch_reader', Mock())
+    monkeypatch.setattr(manager, '_check_provenance_reader', Mock())
+    monkeypatch.setattr(manager, 'compatible', lambda *a: False)
+    monkeypatch.setattr(module, 'database_info', lambda _: {'revision': 'before'})
+    release = tmp_path / 'approved-migration-tree'
+    monkeypatch.setattr(manager, '_execution_release', lambda identity, kind: release)
+    monkeypatch.setattr(module, 'signed_release_manifest', lambda *a: manifest)
+    monkeypatch.setattr(migration, 'prepare_migration', Mock())
+    monkeypatch.setattr(local_backup_only, 'enabled', lambda value: value is manager)
+    backup = tmp_path / 'local-only.tmbackup'
+    def capture(value, password, restart_allowed):
+        assert value is manager and password == 'synthetic'
+        assert restart_allowed() is False
+        return backup
+    local_capture = Mock(side_effect=capture)
+    monkeypatch.setattr(local_backup_only, 'backup_locked', local_capture)
+    monkeypatch.setattr(manager, '_backup_preflight', Mock(
+        side_effect=AssertionError('NAS preflight must not run')))
+    monkeypatch.setattr(manager, '_backup_stopped', Mock(
+        side_effect=AssertionError('NAS backup must not run')))
+    start = Mock()
+    monkeypatch.setattr(manager, 'start', start)
+    monkeypatch.setattr(migration, 'rehearse', Mock(
+        side_effect=ValueError('synthetic rehearsal stop')))
+
+    with pytest.raises(ValueError, match='synthetic rehearsal stop'):
+        manager._update_locked(tmp_path / 'candidate.zip', 'synthetic', tmp_path / 'nas')
+
+    local_capture.assert_called_once()
+    start.assert_called_once()

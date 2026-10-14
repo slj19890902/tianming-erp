@@ -17,6 +17,8 @@ from app.models.warehouse_inventory import InventoryLot, InventoryReservation
 from app.models.audit import OperationLog
 from app.services.bom_transactions import atomic_bom
 from app.services.admin_order_reversal_scope import current_location_reversal
+from app.services.procurement_sources import (order_purchase_lines, line_source_links,
+    order_receipts, line_receipt_clause)
 
 LABELS = {'withdraw': '撤回', 'keep_stock': '作废留库', 'delete_trial': '删除试验单',
           'cancel_stock': '作废并撤库存', 'delete_order': '删除订单并留痕'}
@@ -58,7 +60,7 @@ def preview(db, *, user, order_ids, mode):
     ids = [r.id for r in items]
     def own(model):
         return list(db.scalars(select(model).where(model.order_item_id.in_(ids)).order_by(model.id)))
-    receipts, completions, assemblies = own(IncomingReceiptItem), own(ProductionCompletion), own(BomAssembly)
+    receipts, completions, assemblies = order_receipts(db, ids), own(ProductionCompletion), own(BomAssembly)
     reservations = own(InventoryReservation)
     inputs = list(db.scalars(select(BomAssemblyInput).where(BomAssemblyInput.conversion_id.in_([a.id for a in assemblies])).order_by(BomAssemblyInput.id)))
     lot_ids = {r.inventory_lot_id for r in completions + reservations}
@@ -66,9 +68,8 @@ def preview(db, *, user, order_ids, mode):
     lot_ids.update(r.lot_id for r in inputs)
     lot_ids.update(r.surplus_inventory_lot_id for r in receipts)
     lots = list(db.scalars(select(InventoryLot).where(InventoryLot.id.in_([i for i in lot_ids if i])).order_by(InventoryLot.id)))
-    suppliers = own(SupplierRequisitionOrderItem)
-    source_links = list(db.scalars(select(ProcurementSourceLink).where(
-        ProcurementSourceLink.supplier_item_id.in_([r.id for r in suppliers])).order_by(ProcurementSourceLink.id)))
+    suppliers = order_purchase_lines(db, ids)
+    source_links = line_source_links(db, [r.id for r in suppliers])
     supplier_headers = list(db.scalars(select(SupplierRequisitionOrder).where(SupplierRequisitionOrder.id.in_({r.supplier_order_id for r in suppliers})).order_by(SupplierRequisitionOrder.id)))
     req_items = own(RequisitionItem)
     reqs = list(db.scalars(select(Requisition).where(Requisition.id.in_({r.requisition_id for r in req_items})).order_by(Requisition.id)))
@@ -88,6 +89,19 @@ def preview(db, *, user, order_ids, mode):
     blockers = []
     if any(o.status == 'cancelled' for o in orders) and mode != 'delete_order':
         blockers.append('订单已经作废；可查看历史，或使用「删除订单并留痕」继续处理。')
+    cancelled_ids = {i.id for o in orders if o.status == 'cancelled' for i in o.items}
+    corrections = [dict(supplier_item_id=r.id, supplier_order_id=r.supplier_order_id,
+        version=r.version, requisition_qty=r.requisition_qty,
+        source_link_ids=[l.id for l in source_links if l.supplier_item_id == r.id],
+        material_requisition_item_ids=[l.material_requisition_item_id for l in source_links
+            if l.supplier_item_id == r.id and l.material_requisition_item_id],
+        posted_receipt_ids=[f.id for f in receipts if f.status == 'posted' and (
+            f.supplier_order_item_id == r.id or any(f.requisition_item_id == l.material_requisition_item_id
+                for l in source_links if l.supplier_item_id == r.id and l.material_requisition_item_id))],
+        executable=False, requires_supplier_commitment_review=True)
+        for r in order_purchase_lines(db, cancelled_ids, active_only=True)]
+    if corrections:
+        blockers.append('已作废订单仍有有效采购来源：须先核实供应商下单承诺及实际到货，专项更正预览不可直接执行。')
     if any(r.is_current and r.delivery_id in active_delivery_ids for r in deliveries) or any(int(i.delivered_quantity or 0) for i in items):
         blockers.append('已有送货记录：请到「送货」撤销发货并删除对应送货草稿后，再预览；已开票或收款须先冲销。')
     if mode != 'keep_stock':
@@ -123,6 +137,7 @@ def preview(db, *, user, order_ids, mode):
             completions=sum(r.status=='posted' for r in completions),
             assemblies=sum(r.status=='posted' for r in assemblies), purchases=len(supplier_headers)+len(external_headers)),
         inventory=inventory, blockers=list(dict.fromkeys(blockers)),
+        procurement_corrections=corrections,
         result='订单作废，实物库存及收料成本保留，释放预占。' if mode=='keep_stock' else
             ('撤销关联组套、完工、收料及报料，订单保留并回到未报料。' if mode=='withdraw' else
              '撤销本订单采购形成的库存及关联单据，原有库存只解除绑定；订单从有效列表移除，历史与审计保留。'))
@@ -193,8 +208,7 @@ def execute(db, *, user, order_ids, mode, reviewed_hash, operation_key, trial_co
                 for rid in dict.fromkeys(ext_ids):
                     reverse_graph_external_receipt(db, receipt_id=rid, idempotency_key=f'{operation_key}:ext:{rid}',
                         reason=reason, user=user, visible_customer_ids={o.customer_id for o in orders})
-                receipts = list(db.scalars(select(IncomingReceiptItem).where(IncomingReceiptItem.order_item_id.in_(ids),
-                    IncomingReceiptItem.status=='posted').order_by(IncomingReceiptItem.id.desc())))
+                receipts = list(reversed(order_receipts(db, ids, posted_only=True)))
                 for row in receipts:
                     revert_receipt_item(db, user=user, receipt_item_id=row.id, reason=reason,
                         idempotency_key=f'{operation_key}:receipt:{row.id}', audit_context=None)
@@ -249,24 +263,25 @@ def execute(db, *, user, order_ids, mode, reviewed_hash, operation_key, trial_co
             return response
 
 
-def _void_order_purchase_lines(db, *, user, item_ids, operation_key, reason):
+def _void_order_purchase_lines(db, *, user, item_ids, operation_key, reason, supplier_item_ids=None):
     """Retain line/source history and leave shared purchases' other lines active."""
     from app.models.supplier_requisition_order import SupplierRequisitionOrder, SupplierRequisitionOrderItem
     from app.models.procurement_source import ProcurementSourceLink
     from app.models.requisition import RequisitionItem
     from app.api.requisition import _recompute_supplier_order_after_item_void
     from app.core.time_contract import beijing_now_naive
-    rows = list(db.scalars(select(SupplierRequisitionOrderItem).where(
-        SupplierRequisitionOrderItem.order_item_id.in_(item_ids),
-        SupplierRequisitionOrderItem.status == 'active').order_by(SupplierRequisitionOrderItem.id)))
+    rows = order_purchase_lines(db, item_ids, active_only=True)
+    if supplier_item_ids is not None:
+        rows = [row for row in rows if row.id in supplier_item_ids]
+    links = {r.supplier_item_id:r for r in line_source_links(db, [r.id for r in rows])}
     for row in rows:
+        link = links.get(row.id)
+        if row.order_item_id is not None and row.order_item_id not in item_ids:
+            raise HTTPException(409, f'采购明细 {row.id} 直接及关联来源冲突，请先核对来源')
         if db.scalar(select(IncomingReceiptItem.id).where(
-            IncomingReceiptItem.supplier_order_item_id == row.id,
+            line_receipt_clause(row, link),
             IncomingReceiptItem.status == 'posted').limit(1)):
             raise HTTPException(409, f'采购明细 {row.id} 尚有有效收料，请先撤销收料')
-        link = db.scalar(select(ProcurementSourceLink).where(
-            ProcurementSourceLink.supplier_item_id == row.id,
-            ProcurementSourceLink.status == 'active'))
         if link:
             source = db.get(RequisitionItem, link.material_requisition_item_id) if link.material_requisition_item_id else None
             if source is None or source.order_item_id not in item_ids:

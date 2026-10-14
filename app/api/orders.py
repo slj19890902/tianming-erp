@@ -31,7 +31,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, load_only, selectinload
 
@@ -5744,7 +5744,8 @@ def _ensure_no_active_incoming_receipts(
         )
         .limit(1)
     )
-    if active_receipt_item_id is not None:
+    from app.services.procurement_sources import order_receipts
+    if active_receipt_item_id is not None or order_receipts(db, order_item_ids, posted_only=True):
         raise HTTPException(
             status_code=409,
             detail="订单或明细已有有效来料实收记录，请先撤销来料后再撤回订单流程。",
@@ -5759,113 +5760,29 @@ def _rollback_supplier_requisition_items(
     db: Session,
     *,
     order_item_ids: list[int],
+    user: User,
 ) -> list[dict]:
-    """撤回订单自己的供应商报料来源，不破坏共享报料单中的其他订单。"""
-    if not order_item_ids:
-        return []
-    rows = db.execute(
-        select(SupplierRequisitionOrderItem, SupplierRequisitionOrder)
-        .join(
-            SupplierRequisitionOrder,
-            SupplierRequisitionOrder.id
-            == SupplierRequisitionOrderItem.supplier_order_id,
-        )
-        .where(SupplierRequisitionOrderItem.order_item_id.in_(order_item_ids))
-        .order_by(
-            SupplierRequisitionOrderItem.supplier_order_id,
-            SupplierRequisitionOrderItem.id,
-        )
-    ).all()
-    grouped: dict[int, tuple[SupplierRequisitionOrder, list[SupplierRequisitionOrderItem]]] = {}
-    for source_item, supplier_order in rows:
-        grouped.setdefault(supplier_order.id, (supplier_order, []))[1].append(source_item)
-
-    inactive_statuses = {
-        _normalized_supplier_requisition_status(status)
-        for status in _INACTIVE_SUPPLIER_REQUISITION_ORDER_STATUSES
-    }
-    changes: list[dict] = []
-    for supplier_order, source_items in grouped.values():
-        normalized_status = _normalized_supplier_requisition_status(
-            supplier_order.status
-        )
-        if normalized_status in inactive_statuses:
-            changes.append(
-                {
-                    "supplier_order_id": supplier_order.id,
-                    "supplier_order_number": supplier_order.order_number,
-                    "action": "already_inactive",
-                    "status": supplier_order.status,
-                    "source_item_ids": [item.id for item in source_items],
-                }
-            )
-            continue
-        if normalized_status not in _ROLLBACK_EDITABLE_SUPPLIER_REQUISITION_ORDER_STATUSES:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"供应商报料单 {supplier_order.order_number} 当前状态为"
-                    f"{supplier_order.status or '未知'}，不能自动撤回订单来源。"
-                ),
-            )
-
-        all_items = db.scalars(
-            select(SupplierRequisitionOrderItem)
-            .where(
-                SupplierRequisitionOrderItem.supplier_order_id
-                == supplier_order.id
-            )
-            .order_by(SupplierRequisitionOrderItem.id)
-        ).all()
-        source_ids = {item.id for item in source_items}
-        remaining_items = [item for item in all_items if item.id not in source_ids]
-        snapshot = [
-            {
-                "supplier_order_item_id": item.id,
-                "order_item_id": item.order_item_id,
-                "order_number": item.order_number,
-                "product_code": item.product_code,
-                "quantity": item.quantity,
-                "stock_deduction_qty": item.stock_deduction_qty,
-                "requisition_qty": item.requisition_qty,
-                "required_piece_qty": item.required_piece_qty,
-            }
-            for item in source_items
-        ]
-        if not remaining_items:
-            supplier_order.status = "voided"
-            supplier_order.voided_at = supplier_order.voided_at or beijing_now_naive()
-            action = "void_supplier_order"
-        else:
-            for source_item in source_items:
-                db.delete(source_item)
-            supplier_order.total_quantity = sum(
-                int(item.quantity or 0) for item in remaining_items
-            )
-            supplier_order.stock_deduction_qty = sum(
-                int(item.stock_deduction_qty or 0) for item in remaining_items
-            )
-            supplier_order.requisition_qty = sum(
-                int(item.requisition_qty or 0) for item in remaining_items
-            )
-            required_values = [
-                int(item.required_piece_qty)
-                for item in remaining_items
-                if item.required_piece_qty is not None
-            ]
-            supplier_order.required_piece_qty = (
-                sum(required_values) if required_values else None
-            )
-            action = "remove_order_lines"
-        changes.append(
-            {
-                "supplier_order_id": supplier_order.id,
-                "supplier_order_number": supplier_order.order_number,
-                "action": action,
-                "source_items": snapshot,
-                "remaining_item_count": len(remaining_items),
-            }
-        )
+    """Retain own direct/typed sources; never delete shared purchase history."""
+    from app.services.procurement_sources import order_purchase_lines
+    from app.services.admin_order_reversal import _void_order_purchase_lines
+    rows = order_purchase_lines(db, order_item_ids, active_only=True)
+    grouped = {}
+    for row in rows:
+        header = db.get(SupplierRequisitionOrder, row.supplier_order_id)
+        grouped.setdefault(header.id, (header, []))[1].append(row)
+    changes = []
+    for header, source_items in grouped.values():
+        status = _normalized_supplier_requisition_status(header.status)
+        if status not in _ROLLBACK_EDITABLE_SUPPLIER_REQUISITION_ORDER_STATUSES:
+            raise HTTPException(409, f"供应商报料单 {header.order_number} 当前状态为{header.status or '未知'}，不能自动撤回订单来源。")
+        changes.append(dict(supplier_order_id=header.id,
+            supplier_order_number=header.order_number, action='void_order_lines',
+            source_items=[dict(supplier_order_item_id=row.id, order_item_id=row.order_item_id,
+                quantity=row.quantity, requisition_qty=row.requisition_qty,
+                required_piece_qty=row.required_piece_qty) for row in source_items]))
+    if rows:
+        _void_order_purchase_lines(db, user=user, item_ids=order_item_ids,
+            operation_key=f'workflow-{uuid4().hex}', reason='订单流程撤回（系统记录）')
     return changes
 
 
@@ -5957,28 +5874,12 @@ def _already_at_workflow_rollback_baseline(
         return False
     if active_external_purchase_orders_for_order_ids(db, {order.id}):
         return False
-    supplier_statuses = db.scalars(
-        select(SupplierRequisitionOrder.status)
-        .join(
-            SupplierRequisitionOrderItem,
-            SupplierRequisitionOrderItem.supplier_order_id
-            == SupplierRequisitionOrder.id,
-        )
-        .where(SupplierRequisitionOrderItem.order_item_id.in_(item_ids))
-    ).all()
-    inactive_supplier_statuses = {
-        _normalized_supplier_requisition_status(value)
-        for value in _INACTIVE_SUPPLIER_REQUISITION_ORDER_STATUSES
-    }
-    if any(
-        _normalized_supplier_requisition_status(value)
-        not in inactive_supplier_statuses
-        for value in supplier_statuses
-    ):
+    from app.services.procurement_sources import order_purchase_lines
+    if order_purchase_lines(db, item_ids, active_only=True):
         return False
     if db.scalar(
         select(RequisitionItem.id)
-        .where(RequisitionItem.order_item_id.in_(item_ids))
+        .where(RequisitionItem.order_item_id.in_(item_ids), RequisitionItem.status.notin_(["已取消", "已作废"]))
         .limit(1)
     ) is not None:
         return False
@@ -6709,6 +6610,7 @@ def rollback_order_workflow(
         supplier_requisition_changes = _rollback_supplier_requisition_items(
             db,
             order_item_ids=item_ids,
+            user=user,
         )
         try:
             external_purchase_changes = cancel_unreceived_external_purchases(
@@ -6727,14 +6629,17 @@ def rollback_order_workflow(
                 )
             ).all()
         )
-        db.execute(delete(RequisitionItem).where(RequisitionItem.order_item_id.in_(item_ids)))
+        target_req_ids = list(db.scalars(select(RequisitionItem.id).where(
+            RequisitionItem.order_item_id.in_(item_ids))))
+        from app.models.product_bom import RequisitionItemBomSource
+        db.execute(update(RequisitionItem).where(RequisitionItem.id.in_(target_req_ids)).values(status="已取消"))
+        db.execute(update(RequisitionItemBomSource).where(
+            RequisitionItemBomSource.requisition_item_id.in_(target_req_ids)).values(active_guard=None))
         for requisition_id in requisition_ids:
-            if db.scalar(
-                select(RequisitionItem.id)
-                .where(RequisitionItem.requisition_id == requisition_id)
-                .limit(1)
-            ) is None:
-                db.execute(delete(Requisition).where(Requisition.id == requisition_id))
+            if db.scalar(select(RequisitionItem.id).where(
+                RequisitionItem.requisition_id == requisition_id,
+                RequisitionItem.status.notin_(["已取消", "已作废"])).limit(1)) is None:
+                db.get(Requisition, requisition_id).status = "已作废"
         for item in order.items:
             item.delivered_quantity = 0
             item.is_force_closed = False

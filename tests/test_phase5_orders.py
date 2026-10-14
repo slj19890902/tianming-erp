@@ -2298,11 +2298,18 @@ def test_workflow_rollback_removes_only_current_order_from_shared_supplier_order
                 SupplierRequisitionOrderItem,
                 other_source_id,
             )
-            assert session.get(
+            retained_source = session.get(
                 SupplierRequisitionOrderItem,
                 current_source_id,
-            ) is None
+            )
+            assert retained_source is not None
+            assert retained_source.status == "voided"
+            assert retained_source.version == 2
+            assert retained_source.order_item_id == current_item["id"]
+            assert retained_source.requisition_qty == 180
+            assert retained_source.void_idempotency_key
             assert remaining_source is not None
+            assert remaining_source.status == "active"
             assert remaining_source.order_item_id == other_item["id"]
             assert remaining_source.order_number == other_order["order_number"]
             assert supplier_order is not None
@@ -2322,12 +2329,16 @@ def test_workflow_rollback_removes_only_current_order_from_shared_supplier_order
         )
 
     assert rolled_back.status_code == 200, rolled_back.text
-    assert current_deleted.status_code == 200, current_deleted.text
-    assert current_deleted.json()["deleted_count"] == 1
+    assert current_deleted.status_code == 409, current_deleted.text
+    assert "供应商报料单" in current_deleted.text
     assert other_protected.status_code == 409, other_protected.text
     with session_factory() as session:
-        assert session.get(Order, current_order["id"]) is None
+        assert session.get(Order, current_order["id"]) is not None
         assert session.get(Order, other_order["id"]) is not None
+        retained_source = session.get(SupplierRequisitionOrderItem, current_source_id)
+        assert retained_source is not None and retained_source.status == "voided"
+        assert retained_source.order_item_id == current_item["id"]
+        assert retained_source.order_number == current_order["order_number"]
         remaining_source = session.get(
             SupplierRequisitionOrderItem,
             other_source_id,

@@ -74,12 +74,16 @@ def test_migration_uses_existing_local_backup_policy_without_nas(tmp_path, monke
     monkeypatch.setattr(migration, 'prepare_migration', Mock())
     monkeypatch.setattr(local_backup_only, 'enabled', lambda value: value is manager)
     backup = tmp_path / 'local-only.tmbackup'
-    def capture(value, password, restart_allowed):
+    proof = {'restored_verified': True}
+    def capture(value, password, restart_allowed, publish):
         assert value is manager and password == 'synthetic'
         assert restart_allowed() is False
-        return backup
+        assert publish is False
+        return backup, proof
     local_capture = Mock(side_effect=capture)
     monkeypatch.setattr(local_backup_only, 'backup_locked', local_capture)
+    finalize = Mock()
+    monkeypatch.setattr(local_backup_only, 'finalize_captured_locked', finalize)
     monkeypatch.setattr(manager, '_backup_preflight', Mock(
         side_effect=AssertionError('NAS preflight must not run')))
     monkeypatch.setattr(manager, '_backup_stopped', Mock(
@@ -94,3 +98,6 @@ def test_migration_uses_existing_local_backup_policy_without_nas(tmp_path, monke
 
     local_capture.assert_called_once()
     start.assert_called_once()
+    finalize.assert_called_once_with(
+        manager, proof, sourcepoint='before-schema-update'
+    )

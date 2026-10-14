@@ -705,6 +705,7 @@ class Manager:
     def _backup_locked(self, password: str, nas: Path, *, restart_allowed=None):
         """Caller holds the existing maintenance lock for the whole operation."""
         from desktop_assistant import local_backup_only as local_only
+        local_backup_proof = None
         if local_only.enabled(self):
             return local_only.backup_locked(self,password,restart_allowed=restart_allowed)
         self._backup_preflight(nas)
@@ -1007,8 +1008,8 @@ class Manager:
             # the service stopped after a successful capture so migration can
             # rehearse and run against the same frozen source point.
             try:
-                backup = local_only.backup_locked(
-                    self, password, restart_allowed=lambda: False
+                backup, local_backup_proof = local_only.backup_locked(
+                    self, password, restart_allowed=lambda: False, publish=False
                 )
             except Exception:
                 if self._process() is None:
@@ -1030,6 +1031,10 @@ class Manager:
                 report = rehearse(self, package)
             except Exception:
                 self.start()
+                if local_backup_proof is not None:
+                    local_only.finalize_captured_locked(
+                        self, local_backup_proof, sourcepoint='before-schema-update'
+                    )
                 raise
             shared = self.root / 'shared'
             dbpath = shared / 'data/carton_erp.sqlite3'
@@ -1058,7 +1063,7 @@ class Manager:
                 new.update(operation='migration_failed', update_backup=str(backup),
                            migration_report=report['report_path'])
                 write_json(self.root / 'state.json', new)
-                raise ValueError('数据库升级未完整通过，服务保持停止；已保留现场及NAS备份，请专项恢复，未回写旧数据') from None
+                raise ValueError('数据库升级未完整通过，服务保持停止；已保留现场及完整备份，请专项恢复，未回写旧数据') from None
         new.update(current=candidate['id'], previous=old['current'], update_backup=str(backup),
                    operation='rollback' if rollback else 'update', manual_stop=False, updated_at=datetime.now(CN).isoformat())
         if self._order_inventory_reader(candidate['id']):
@@ -1085,7 +1090,15 @@ class Manager:
             new.update(current=old['current'], previous=old.get('previous'), operation='update_failed')
             write_json(self.root / 'state.json', new)
             self.start()
+            if local_backup_proof is not None:
+                local_only.finalize_captured_locked(
+                    self, local_backup_proof, sourcepoint='before-schema-update'
+                )
             raise ValueError('新版本启动失败，已切回原程序，业务数据库未回退') from None
+        if local_backup_proof is not None:
+            local_only.finalize_captured_locked(
+                self, local_backup_proof, sourcepoint='before-schema-update'
+            )
         return candidate['version']
 
     def rollback(self, password: str, nas: Path):

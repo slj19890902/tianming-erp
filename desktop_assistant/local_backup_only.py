@@ -221,7 +221,7 @@ def verified_at(root,state,*,now=None):
     except (OSError,ValueError,KeyError,TypeError):return None
 
 
-def backup_locked(manager,password,*,restart_allowed=None):
+def backup_locked(manager,password,*,restart_allowed=None,publish=True):
     """Original maintenance caller owns lock; one capture, resume then verify."""
     enabled(manager);_,context,_=_authority()
     old_index=manager.state.get('last_backup_local')
@@ -266,9 +266,16 @@ def backup_locked(manager,password,*,restart_allowed=None):
         for name in ('recovery.zip','check.zip','independent-readback.zip','credentials.tmencrypted',payload['encrypted'].name):
             try:(job/name).unlink()
             except FileNotFoundError:pass
-        return Path(_finalize_locked(manager,proof,'before-local-backup')['backup'])
+        if publish:
+            return Path(_finalize_locked(manager,proof,'before-local-backup')['backup'])
+        return final,proof
     finally:
         if running and not attempted and (restart_allowed is None or restart_allowed()):manager.start()
         elif (resumed_process is not None and restart_allowed is not None and not restart_allowed()
                 and manager._process()==resumed_process):
             manager.stop()
+
+
+def finalize_captured_locked(manager,proof,*,sourcepoint):
+    """Publish one already authenticated capture after the service is ready."""
+    return _finalize_locked(manager,proof,sourcepoint)

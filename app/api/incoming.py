@@ -1587,6 +1587,7 @@ def _stock_replenishment_pending_rows(
         )
     query = _stock_replenishment_pending_query(query, db=db, user=user)
     rows: list[dict] = []
+    semi_finished_destination: dict | None = None
     for item, order in db.execute(query):
         customer_name = item.customer.name if item.customer else ""
         rows.append(
@@ -1661,6 +1662,26 @@ def _stock_replenishment_pending_rows(
                 "can_revert_receipt": False,
             }
         )
+        if item.target_inventory_type == "semi_finished":
+            if semi_finished_destination is None:
+                # Use the receipt resolver without a repair operator: listing
+                # must neither claim a pallet nor repair a map. Submission
+                # resolves again under its existing transaction and guards.
+                try:
+                    automatic_raw_material_staging_location(
+                        db, require_floor3_left=True
+                    )
+                    semi_finished_destination = {
+                        "receipt_execution_ready": True,
+                        "receipt_location_ready": True,
+                    }
+                except WarehouseInventoryError as error:
+                    semi_finished_destination = {
+                        "receipt_execution_ready": False,
+                        "receipt_location_ready": False,
+                        "purpose_issue": str(error),
+                    }
+            rows[-1].update(semi_finished_destination)
     return rows
 
 

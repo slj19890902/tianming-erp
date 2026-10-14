@@ -395,8 +395,11 @@ def validate_source_cost(db,lot,detail,visited):
         if (not edge or edge.source_lot_id!=LOWER_LOT or edge.target_lot_id!=bottom['lot_id']
                 or split['target_lot_id']!=bottom['lot_id'] or edge.quantity!=QUANTITY or edge.available_quantity!=QUANTITY
                 or edge.reserved_quantity or edge.source_location_id!=LOCATION_ID or edge.target_location_id!=LOCATION_ID
-                or edge.source_version_before!=1 or edge.source_version_after!=2 or top['lot_id']!=UPPER_LOT):
+                or edge.source_version_before!=1 or edge.source_version_after!=2 or top['lot_id']!=UPPER_LOT
+                or edge.transferred_by!=record.actor_user_id
+                or edge.idempotency_key!='correction:'+_digest(request['operation_key']+':split')):
             raise ValueError('下盖原位拆50的typed来源不一致')
+        _validate_transfer_movements(db,edge)
         entry=db.get(InventoryMovement,output['entry_movement_id'])
         if (not entry or entry.inventory_lot_id!=origin.id or entry.movement_type!='manual_in'
                 or entry.quantity!=QUANTITY or entry.unit!='boxes' or entry.operator_id!=record.actor_user_id

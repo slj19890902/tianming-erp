@@ -81,3 +81,28 @@ def test_unreadable_facts_fail_closed(tmp_path, kind):
             db.execute('CREATE TABLE inventory_lots(id INTEGER PRIMARY KEY)')
     with pytest.raises(ValueError):
         contract.require_reader(path, {'reader_capabilities': {contract.CAPABILITY: 1}})
+
+
+@pytest.mark.parametrize('revision', sorted(contract.PRE_COST_REVISIONS))
+def test_known_pre_cost_schema_still_checks_source_markers(tmp_path, revision):
+    path = tmp_path/'old.sqlite3'
+    with closing(sqlite3.connect(path)) as db:
+        db.execute('CREATE TABLE alembic_version(version_num TEXT)')
+        db.execute('INSERT INTO alembic_version VALUES (?)', (revision,))
+        db.execute('CREATE TABLE inventory_lots(id INTEGER PRIMARY KEY, source_ref_type TEXT)')
+        db.commit()
+    assert contract.require_reader(path, {}) is False
+    add_fact(path, 'inventory_lots', 'source_ref_type')
+    with pytest.raises(ValueError):
+        contract.require_reader(path, {})
+
+
+def test_current_revision_cannot_hide_missing_cost_column(tmp_path):
+    path = tmp_path/'damaged.sqlite3'
+    with closing(sqlite3.connect(path)) as db:
+        db.execute('CREATE TABLE alembic_version(version_num TEXT)')
+        db.execute("INSERT INTO alembic_version VALUES ('ep1010md')")
+        db.execute('CREATE TABLE inventory_lots(id INTEGER PRIMARY KEY, source_ref_type TEXT)')
+        db.commit()
+    with pytest.raises(ValueError):
+        contract.require_reader(path, {'reader_capabilities': {contract.CAPABILITY: 1}})

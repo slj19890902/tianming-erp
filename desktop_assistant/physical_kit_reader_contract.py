@@ -12,6 +12,10 @@ import sqlite3
 CAPABILITY = 'physical_kit_correction_20261014_v1'
 SOURCE = 'physical_kit_correction_20261014'
 ERROR = '实物组套库存已保存新成本来源，目标程序缺少对应读取能力；请保留现有数据并使用兼容版本'
+# Exact mainline revisions from the inventory foundation through the parent of
+# ai36v7w8x9e26, which first added cost_snapshot_source. Not a version ordering.
+PRE_COST_REVISIONS = frozenset({'af33v7w8x9b23', 'ae32v7w8x9a22', 'ad31v7w8x9z21',
+    'ac30v7w8x9y20', 'ab29u7v8w9x18', 'aa18t6u7v8w17', '4ef11be39ad3', 'c20u7v8w9x19'})
 
 
 def has_facts(db):
@@ -27,7 +31,13 @@ def has_facts(db):
                 continue
             present = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")')}
             if not set(columns) <= present:
-                raise ValueError(ERROR)
+                revisions = db.execute('SELECT version_num FROM alembic_version').fetchall() if 'alembic_version' in tables else []
+                legacy = (table == 'inventory_lots' and 'source_ref_type' in present
+                          and 'cost_snapshot_source' not in present and len(revisions) == 1
+                          and revisions[0][0] in PRE_COST_REVISIONS)
+                if not legacy:
+                    raise ValueError(ERROR)
+                columns = ('source_ref_type',)
             predicate = ' OR '.join(f'"{column}"=?' for column in columns)
             if db.execute(f'SELECT 1 FROM "{table}" WHERE {predicate} LIMIT 1',
                           (SOURCE,) * len(columns)).fetchone():

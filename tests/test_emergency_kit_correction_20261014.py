@@ -67,6 +67,25 @@ def execute(db,actor,**changes):
         operation_key='reviewed-50-sets',evidence='用户明确从原上下盖各取50组成50套',physical_match_confirmed=True,**changes)
 
 
+@pytest.mark.parametrize('side,damage', [('source','missing'),('target','missing'),
+    ('source','quantity'),('target','quantity'),('source','balance'),('target','balance')])
+def test_original_lower_split_requires_real_paired_movements(kit,side,damage):
+    from app.services.inventory_valuation import frozen_cost
+    from app.models.warehouse_inventory import InventoryMovement
+    db,actor=kit
+    result=execute(db,actor)
+    output=db.get(InventoryLot,result['output_lot_id'])
+    assert frozen_cost(output,db)[0]==Decimal('12.8267')
+    edge=db.scalar(select(InventoryLotTransfer).where(InventoryLotTransfer.target_lot_id==result['split_lot_id']))
+    movement=db.scalar(select(InventoryMovement).where(InventoryMovement.idempotency_key==
+        service.inv._transfer_key('goods-correction',edge.idempotency_key[len('correction:'):],side)))
+    if damage=='missing':db.delete(movement)
+    elif damage=='quantity':movement.quantity-=1
+    else:movement.after_available+=1
+    db.flush()
+    assert frozen_cost(output,db)[0] is None
+
+
 def test_only_child50_confirmed_assembly_and_original160_history_kept(kit):
     db,actor=kit
     before=service.preview(db,actor=actor)

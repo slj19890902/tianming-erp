@@ -216,8 +216,14 @@ def _rotation_rehearsal_owner(manager,job):
     """Caller already owns manager.lock; optional fixed signed Mac rotation only."""
     from desktop_assistant import mac_smb_stream_target as stream
     if manager.root!=stream.cfg.BASE/'instance' or not stream.metadata_present():return None
-    from desktop_assistant import mac_smb_stream_receipt as receipt
-    if not stream.rotation_enabled(stream.destination(receipt.approval()['control'])):return None
+    from desktop_assistant import mac_smb_stream_runtime as runtime
+    binding=runtime.load_binding()  # Actual UID, signed legacy manifest and bound records.
+    if stream.cfg.ROTATION_CAPABILITY not in binding.manifest.get('runtime_capabilities',{}):
+        binding.check();return None
+    stream.cfg.rotation_capability(binding.manifest)
+    if not stream.rotation_enabled(stream.destination(binding.control)):
+        raise ValueError('enabled rotation binding changed during rehearsal admission')
+    binding.check()
     from desktop_assistant import nas_backup_rotation_worker as worker
     worker._binding(manager);adapter=worker._adapter(manager)
     if job.exists() or job.is_symlink():raise ValueError('migration rehearsal owner already exists')

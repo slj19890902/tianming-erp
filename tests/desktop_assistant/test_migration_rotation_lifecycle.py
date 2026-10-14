@@ -104,3 +104,21 @@ def test_family_root_never_reads_mac_rotation_metadata(tmp_path,monkeypatch):
     from desktop_assistant import mac_smb_stream_target as target
     monkeypatch.setattr(target,'metadata_present',lambda:(_ for _ in ()).throw(AssertionError('family must not read Mac metadata')))
     assert migration._rotation_rehearsal_owner(SimpleNamespace(root=tmp_path/'family'),tmp_path/'job') is None
+
+
+@pytest.mark.parametrize('rotation_enabled',[False,True])
+def test_distinct_binding_tree_legacy_noop_but_enabled_rotation_rejects(integrated,tmp_path,rotation_enabled):
+    scene=integrated;before=worker._read(scene.adapter,'retention-jobs.json')[0]
+    if not rotation_enabled:
+        scene.binding.manifest=dict(scene.binding.manifest,runtime_capabilities={
+            key:value for key,value in scene.binding.manifest['runtime_capabilities'].items()
+            if key!=worker.cfg.ROTATION_CAPABILITY})
+    old_tree=tmp_path/'old-published'/('e'*64)/'migration';old_tree.mkdir(parents=True)
+    scene.binding.tree=old_tree
+    with scene.manager.lock():
+        job=scene.manager.root/'staging'/('migration-'+'d'*32)
+        if rotation_enabled:
+            with pytest.raises(ValueError):migration._rotation_rehearsal_owner(scene.manager,job)
+        else:assert migration._rotation_rehearsal_owner(scene.manager,job) is None
+    assert worker._read(scene.adapter,'retention-jobs.json')[0]==before
+    assert scene.live['running'] and scene.actions==[]

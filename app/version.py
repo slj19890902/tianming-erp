@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.634"
-APP_VERSION_NAME = "转成品移货与一楼地图绑定恢复"
+APP_VERSION = "v0.22.635"
+APP_VERSION_NAME = "加工地图区域名称统一"
 APP_BUILD_DATE = "2026-10-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6163,3 +6163,13 @@ APP_VERIFICATION_STEPS = [
     "若本次同时完成地图区域绑定恢复，刷新待入库与加工记录，核对可选位置来自同一正式地图；仍不允许选未发布货位。",
 ]
 APP_CHANGELOG = [*(f"v0.22.634：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "加工记录和仓库地图中的三楼已发布区域统一显示正式员工名称，不再泄露创建时的‘新区域（待设置）’占位名称。",
+    "历史地图、正式区域、货位编号、库存数量和归档状态保持不变；未绑定草稿仍只在地图编辑中处理。本版无数据库结构迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新加工记录并打开三楼地图，核对区域显示北I1、北J1、北J2等正式名称，没有‘新区域（待设置）’；点击对应真实货位可定位。",
+    "在仓库地图查看相同位置，确认区域和货位名称一致；已归档区域不可作为新入库或移货目标。",
+]
+APP_CHANGELOG = [*(f"v0.22.635：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

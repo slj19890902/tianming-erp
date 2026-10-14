@@ -1777,5 +1777,17 @@ def overlay_formal_area_bindings(
                     feature["capacity_review_status"] = draft_area.capacity_review_status
                     feature["capacity_eligible"] = draft_area.capacity_eligible
                     feature["confirmed_pallet_capacity"] = draft_area.confirmed_pallet_capacity
+        # Older measured maps kept the editor's creation label after the zone
+        # acquired a published formal identity.  Return the formal employee
+        # name to every map consumer without changing the saved map revision.
+        if (
+            feature.get("feature_kind") == "zone"
+            and str(feature.get("name") or "").strip() == "新区域（待设置）"
+            and feature.get("formal_binding_status") == "published"
+            and feature.get("formal_construction_status") == "enabled"
+        ):
+            formal_name = str(feature.get("employee_area_name") or "").strip()
+            if formal_name and formal_name != "新区域（待设置）":
+                feature["name"] = formal_name
         features.append(feature)
     return {**floor_layout, "features": features}

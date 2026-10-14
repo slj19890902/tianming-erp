@@ -223,6 +223,32 @@ def _database(tmp_path: Path, *, revision: str):
     return engine, factory
 
 
+def test_published_zone_projects_formal_name_over_old_creation_placeholder(tmp_path: Path) -> None:
+    source = _layout(tmp_path / "map.json")
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    floor_layout = payload["floors"]["3F"]
+    floor_layout["features"][0]["name"] = "新区域（待设置）"
+    floor_layout["features"].append({
+        "id": "unbound-draft-zone", "feature_code": "ZONE-3F-EDIT-999",
+        "name": "新区域（待设置）", "feature_kind": "zone",
+        "erp_area_code": "EDIT-999", "status": "candidate",
+        "points": [[0, 0], [1, 0], [1, 1]],
+    })
+    engine, factory = _database(tmp_path, revision=floor_layout["revision"])
+    try:
+        with factory() as db:
+            projected = overlay_formal_area_bindings(
+                db, floor_code="3F", floor_layout=floor_layout,
+            )
+        by_id = {feature["id"]: feature for feature in projected["features"]}
+        assert by_id["zone-f1"]["name"] == "三楼待归档区"
+        assert by_id["zone-f1"]["employee_area_name"] == "三楼待归档区"
+        assert by_id["unbound-draft-zone"]["name"] == "新区域（待设置）"
+        assert floor_layout["features"][0]["name"] == "新区域（待设置）"
+    finally:
+        engine.dispose()
+
+
 def _archive(
     db,
     admin: User,

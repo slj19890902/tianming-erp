@@ -79,18 +79,20 @@ def test_shared_bom_row_revises_only_selected_source(composite_requisition_app, 
         assert sources[selected-1].active_guard == (None if remaining == 0 else 1)
 
 
-@pytest.mark.parametrize("extra_component,supplier_quantity,expected", [("whole",32,25), ("cover",32,20), ("cover",31,None)])
-def test_supplier_own_and_linked_purposes_both_count_without_losing_material_demand(composite_requisition_app, extra_component, supplier_quantity, expected):
+@pytest.mark.parametrize("material_component,extra_component,supplier_quantity,expected", [("whole","whole",32,25), ("whole","cover",32,20), ("whole","cover",31,None), ("cover","whole",32,5), ("cover","whole",31,None)])
+def test_supplier_own_and_linked_purposes_both_count_without_losing_material_demand(composite_requisition_app, material_component, extra_component, supplier_quantity, expected):
     app, sessions = composite_requisition_app
     _, rid = internal_seed(sessions, qty=27)
     sid = supplier_seed(sessions, qty=supplier_quantity)
     with sessions() as db:
         db.get(RequisitionItem, rid).purpose_contract_status = 'frozen'
+        if material_component == 'cover':
+            db.get(RequisitionItem, rid).product_name_snapshot = '内部报料-盖'
         for label, formal, amount, extra in [('material', {'material_requisition_item_id':rid}, 20, 7),
                                             ('supplier', {'supplier_requisition_order_item_id':sid}, 5, 0)]:
             db.add(PurchasePurposeSourceSnapshot(snapshot_key=label, allocation_group_key=label+'-group',
                 **formal, source_kind='order_item', source_key='order_item:1:whole', source_order_item_id=1,
-                customer_id=1, customer_name_snapshot='test', component_type=extra_component if label == 'supplier' else 'whole',
+                customer_id=1, customer_name_snapshot='test', component_type=extra_component if label == 'supplier' else material_component,
                 source_finished_qty_snapshot=50, pieces_per_finished_snapshot=2, source_required_piece_qty_snapshot=100,
                 source_semi_reserved_piece_qty_snapshot=0, source_effective_piece_qty_snapshot=amount,
                 yield_per_sheet_snapshot=1, group_effective_piece_qty_snapshot=amount,

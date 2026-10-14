@@ -37,3 +37,13 @@
 二次复审补齐同一供应商行同时有自有用途和关联内部用途的合法形态：按purpose.id保留两笔分配，不以相同source_key合并；所有用途先核对总张数，再按当前组件累计订单用途。新增单独红例5≠25后修正，含异组件排除和用途超过供应商总数拒绝；与内部报料及实际UI→API链路23项通过。
 
 统一前端 tsc + vite build 通过，构建 C 架资源 warehouseTwin-QWqUqd0q.js。模具JS测试22通过、1个旧打印fixture失败；该测试及其MoldRackElevation.tsx/moldRackPrint.mjs与正式61e5逐字相同，失败为fixture缺少打印版本资料，不以它宣称全绿。C实际HTTP打印登记由专用后端测试覆盖。
+
+## 10:49 最新正式核账与纠正
+
+同一批管理员认证完成有限只读SQL与现有run_task隔离副本：1430历史批、691现存，正式v625/ep1010md、manual_stop=false；未控制服务或写正式业务。原始隔离副本 task-2a4eba8403ba40fba6eff95f2961e553 仅作来源，后续写验证另建owned子副本。地图历史导出80MB上限，仅88份文档，明确标记截断；不得宣称所有源图已取全。
+
+旧方案将206认作未合并有遗漏：其source21→BOM快照46、material purpose247、link31→supplier623/order209(SRO-20261014-0001欢达100张)均在09:01已存在。旧probe只沿order direct关联漏查。已向用户明确更正；用户确认「未发给供应商，撤销误生成的这100张」。更正计划据此增加采购撤销，保留冻结用途历史；不将今日正式形态作内部未合并的测试事实。
+
+片料680=204可用、v3；下盖666=210/v1、上盖1421=210/v3；应急成品1430=50/v1；送货154仍pending/v4。数据库有两条其他单的completed dispatch原回执，没有154成功回执；浏览器现场原请求仍须对应，不由无回执推定所有未知请求可重发。
+
+反向跨组件关联用途补齐：选supplier后展开其所有active typed links及material purpose，确保另一组件的用途亦参与整行总量校验和预览版本，但只当前scope计承诺。41项shared/internal/preview/UI→API回归通过。

@@ -3864,12 +3864,19 @@ def _manual_sheet_procurement_state(db, item, component, *, snapshot=None):
     supplier_rows = list(db.scalars(select(SupplierRequisitionOrderItem).where(or_(
         SupplierRequisitionOrderItem.id.in_(supplier_ids),
         SupplierRequisitionOrderItem.order_item_id == item.id if not snapshot else False)).order_by(SupplierRequisitionOrderItem.id)))
-    # Include every formal purpose of selected supplier lines before checking
-    # the total, even when a sibling purpose belongs to another component.
-    supplier_purposes = list(db.scalars(select(PurchasePurposeSourceSnapshot).where(
-        PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.in_([r.id for r in supplier_rows]))))
+    # Expand both directions for selected supplier lines: a sibling material
+    # purpose can live outside this component's internal rows. It still belongs
+    # in the physical total and revision, but not in this component's demand.
+    supplier_links = list(db.scalars(select(ProcurementSourceLink).where(
+        ProcurementSourceLink.supplier_item_id.in_([r.id for r in supplier_rows]))))
+    links = sorted({l.id: l for l in [*links, *supplier_links]}.values(), key=lambda l: l.id)
+    linked = {l.supplier_item_id: l.material_requisition_item_id for l in links if l.status == 'active'}
+    supplier_purposes = list(db.scalars(select(PurchasePurposeSourceSnapshot).where(or_(
+        PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.in_([r.id for r in supplier_rows]),
+        PurchasePurposeSourceSnapshot.material_requisition_item_id.in_(linked.values())))))
     purpose_rows = sorted({p.id: p for p in [*purpose_rows, *supplier_purposes]}.values(), key=lambda p: p.id)
     purposes = {p.supplier_requisition_order_item_id: p for p in purpose_rows if p.supplier_requisition_order_item_id}
+    material_purposes = {p.material_requisition_item_id: p for p in purpose_rows if p.material_requisition_item_id}
     receipts = list(db.scalars(select(IncomingReceiptItem).where(IncomingReceiptItem.requisition_item_id.in_(row_ids),
         IncomingReceiptItem.status == 'posted').order_by(IncomingReceiptItem.id)))
     facts = list(db.scalars(select(PurchaseReceiptFact).where(

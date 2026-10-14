@@ -130,6 +130,25 @@ def test_success_preserves_every_other_table_files_and_replays_without_increment
         assert all_facts(db)==after
 
 
+def test_reviewed_later_c_rack_draft_is_preserved_byte_for_byte(scene,monkeypatch):
+    document=json.loads(scene['draft'].read_text())
+    document['draft_meta']['status']='draft'
+    document['draft_meta']['base_published_sha256']=recovery.CURRENT_SHA
+    document['draft_meta']['base_floor_revisions']={'1F':recovery.CURRENT_REVISION}
+    document['floors']['1F'].setdefault('layout_edit_receipts',[]).append(
+        {'action':'rack.save','operation_key':'c-alias'})
+    scene['draft'].write_text(json.dumps(document,ensure_ascii=False))
+    edited=scene['draft'].read_bytes()
+    monkeypatch.setattr(recovery,'EDITED_DRAFT_SHA',sha256(edited).hexdigest())
+    with scene['factory']() as db:
+        actor=db.scalar(select(User))
+        plan=recovery.preview(db,actor=actor,source_bytes=scene['source'])
+        assert plan['draft_sha256']==recovery.EDITED_DRAFT_SHA
+        result=invoke(db,scene,plan)
+        assert result['map_files_changed'] is False
+        assert scene['draft'].read_bytes()==edited
+
+
 @pytest.mark.parametrize('change',['policy_version','policy_scope','location','stock','staging','audit','runtime','draft','actor'])
 def test_stale_preview_is_rejected_without_repair_writes(scene,change):
     with scene['factory']() as db:

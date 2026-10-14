@@ -49,6 +49,10 @@ BINDING_REVISION = '12069ae4137257d6'
 CURRENT_SHA = 'cef9dfd43e8ef2b4d94abdd43c50e631d548e5f02a447041c996709832e1ab1b'
 CURRENT_REVISION = 'e919e36e2f3ec786'
 DRAFT_SHA = '08c87da8d4a6797c48e4874f9248416f59b930df906a9f3a9510729a23ece38f'
+# Same draft after the administrator saved five C-rack edits. The reviewed
+# byte-level diff is limited to three cell aliases, rack/floor versions,
+# timestamps and their five edit receipts; the published base did not change.
+EDITED_DRAFT_SHA = 'ec7e2cacf1959398898d98a979d9a14278b7da6af739b51ec5a49342353b6356'
 HISTORICAL_AUDIT_SHA = 'b6e753909d0af4cdee1c64fa518415124c0d8449e1f267329cd648df1db59243'
 # (policy ID, area ID, original version). No caller-controlled trust pins.
 POLICY_PINS = ((4,29,45),(5,30,47),(6,31,34),(7,32,32),(8,33,30),
@@ -164,7 +168,17 @@ def _documents(source_bytes):
     # Runtime is mandatory: no fallback to a bundled baseline, and no file write.
     source = _read(source_bytes, SOURCE_SHA)
     current = _read(editor.TWIN_LAYOUT_PATH.read_bytes(), CURRENT_SHA)
-    _read(editor.TWIN_LAYOUT_DRAFT_PATH.read_bytes(), DRAFT_SHA)
+    draft_raw = editor.TWIN_LAYOUT_DRAFT_PATH.read_bytes()
+    draft_sha = sha256(draft_raw).hexdigest()
+    if draft_sha not in (DRAFT_SHA, EDITED_DRAFT_SHA):
+        _reject('布局草稿已变化，请重新核对')
+    draft = _read(draft_raw, draft_sha)
+    draft_meta = draft.get('draft_meta') or {}
+    if (draft_sha == EDITED_DRAFT_SHA and
+            (draft_meta.get('status') != 'draft'
+             or draft_meta.get('base_published_sha256') != CURRENT_SHA
+             or (draft_meta.get('base_floor_revisions') or {}).get('1F') != CURRENT_REVISION)):
+        _reject('布局草稿不再基于当前正式地图')
     if source.get('schema_version') != 1 or current.get('schema_version') != 1 or set(source) != set(current):
         _reject('地图文档结构不一致')
     if set(source['floors']) != set(current['floors']):
@@ -185,7 +199,7 @@ def _documents(source_bytes):
         _reject('区域、边界或其他受保护几何变化')
     _index(old.get('features', [])); _index(new.get('features', []))
     _index(old.get('pallets', [])); _index(new.get('pallets', []))
-    return old, new
+    return old, new, draft_sha
 
 
 def _audits(db):
@@ -390,7 +404,7 @@ def _ground(db, audits, current_floor):
 
 
 def _preview(db, actor, source_bytes):
-    old,new=_documents(source_bytes); audits=_audits(db)
+    old,new,draft_sha=_documents(source_bytes); audits=_audits(db)
     table_by_name={t.name:t for t in _protected_tables(db)}
     locations=_rows(db,WarehouseLocation.__table__)
     molds=_rows(db,table_by_name['mold_tools'])
@@ -400,7 +414,7 @@ def _preview(db, actor, source_bytes):
     result=dict(schema_version=1,action=ACTION,actor_id=actor.id,actor_auth_version=actor.auth_version,
         geometry_source_sha256=SOURCE_SHA,geometry_source_revision=SOURCE_REVISION,
         audited_binding_sha256=BINDING_SHA,audited_binding_revision=BINDING_REVISION,
-        exact_binding_source_available=False,runtime_sha256=CURRENT_SHA,draft_sha256=DRAFT_SHA,
+        exact_binding_source_available=False,runtime_sha256=CURRENT_SHA,draft_sha256=draft_sha,
         historical_audit_sha256=HISTORICAL_AUDIT_SHA,changes=changes,staging=staging,ground=ground,
         protected_snapshot=_snapshot(db),policy_rows=json.loads(_canonical(_policy_rows(db))))
     # Bound file bytes at both sides of the DB read, including preview-only calls.
@@ -453,7 +467,7 @@ def apply(db, *, actor, source_bytes, expected_preview, operation_key, commit=Tr
                     fresh=_preview(db,actor,source_bytes)
                     if fresh!=expected_preview:
                         _reject('预览已过期，请重新核对')
-                    old,new=_documents(source_bytes)
+                    old,new,_=_documents(source_bytes)
                     for change in fresh['changes']:
                         policy=db.get(WarehouseAreaStoragePolicy,change['policy_id'])
                         _advance_policy_version(db,policy=policy,operator_id=actor.id,published_map_revision=CURRENT_REVISION)

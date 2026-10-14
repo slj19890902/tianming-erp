@@ -12,7 +12,7 @@ from typing import Any
 
 
 APP_VERSION = "v0.22.634"
-APP_VERSION_NAME = "转成品批次移货来源修复"
+APP_VERSION_NAME = "转成品移货与一楼地图绑定恢复"
 APP_BUILD_DATE = "2026-10-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6154,6 +6154,7 @@ APP_CHANGELOG = [*(f"v0.22.633：本次更新｜{item}" for item in APP_CHANGES)
 
 APP_CHANGES = [
     "修复已加工半成品转成品后，部分移货生成新批次时成本校验误认来源不唯一、整批提交失败的问题；沿正式移货流水核对唯一原转换批次。",
+    "一楼区域发布绑定可按已核对的正式地图和历史审计一次性恢复，保留 C 模具架草稿；恢复后待入库和加工货位均按同一正式地图判断。",
     "移货仍保持原有库存数量、位置流水、成本快照和幂等规则；缺失或损坏的移货来源继续拒绝入账。本版无数据库结构迁移。",
 ]
 APP_VERIFICATION_STEPS = [

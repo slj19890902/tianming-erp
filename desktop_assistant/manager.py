@@ -704,6 +704,9 @@ class Manager:
 
     def _backup_locked(self, password: str, nas: Path, *, restart_allowed=None):
         """Caller holds the existing maintenance lock for the whole operation."""
+        from desktop_assistant import local_backup_only as local_only
+        if local_only.enabled(self):
+            return local_only.backup_locked(self,password,restart_allowed=restart_allowed)
         self._backup_preflight(nas)
         running = bool(self._process())
         self.stop()
@@ -765,6 +768,9 @@ class Manager:
             raise
 
     def backup(self, password: str, nas: Path):
+        from desktop_assistant import local_backup_only as local_only
+        if local_only.enabled(self):
+            with self.lock():return local_only.backup_locked(self,password)
         from desktop_assistant import mac_smb_stream_target as stream
         if stream.selected(nas) and stream.rotation_enabled(nas):
             with self.lock():plan=self._capture_stream_locked(password,nas)

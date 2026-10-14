@@ -36,11 +36,13 @@ def run_once(manager, *, now=None, resume_when_stopped=False, admission=None, re
                         manager.start()
                     return {'status':'up-to-date'}
                 settings = read_json(manager.root/'preferences.json')
-                destination = Path(settings['nas'])
-                mac_backup_storage.prepare_destination(destination)
+                from desktop_assistant import local_backup_only as local_only
+                local_policy=local_only.enabled(manager)
+                destination = manager.root/'backups' if local_policy else Path(settings['nas'])
+                if not local_policy:mac_backup_storage.prepare_destination(destination)
                 password = unprotect_backup(settings['protected_password'])
                 from desktop_assistant import mac_smb_stream_target as stream
-                if stream.selected(destination) and stream.rotation_enabled(destination):
+                if not local_policy and stream.selected(destination) and stream.rotation_enabled(destination):
                     stream_destination=destination
                     stream_plan=manager._capture_stream_locked(password,destination,restart_allowed=restart_allowed)
                 else:

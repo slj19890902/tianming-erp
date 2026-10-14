@@ -131,6 +131,8 @@ def settings(root, context):
 
 
 def approved_destination(context):
+    from desktop_assistant import local_backup_only as local_only
+    if local_only.selected(ROOT):return ROOT/'backups'
     from desktop_assistant import mac_smb_stream_target as stream
     if stream.metadata_present():
         return stream.approved_destination(context)
@@ -144,6 +146,8 @@ def approved_destination(context):
 def configured(root, context):
     try:
         _, value = settings(root, context)
+        from desktop_assistant import local_backup_only as local_only
+        if local_only.selected(ROOT):return True
         from desktop_assistant import mac_smb_stream_target as stream
         if stream.selected(value.get('nas')):
             return stream.configured(value['nas'], context)
@@ -261,7 +265,9 @@ def run(request, *, script, executable):
         elif action == 'backup':
             _, saved = settings(root, context)
             destination = approved_destination(context)
-            if saved.get('nas') != str(destination): raise ValueError('先配置已批准的系统备份位置')
+            from desktop_assistant import local_backup_only as local_only
+            if not local_only.selected(ROOT) and saved.get('nas') != str(destination):
+                raise ValueError('先配置已批准的系统备份位置')
             system.verify_keychain(context)
             from desktop_assistant.credential_store import unprotect_backup
             password = unprotect_backup(saved['protected_password'])

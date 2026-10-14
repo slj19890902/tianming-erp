@@ -590,3 +590,20 @@ def test_launchctl_metadata_parser_rejects_ambiguous_status(monkeypatch, fault):
     if fault:
         with pytest.raises((ValueError, UnicodeError)): upgrade._job()
     else: assert upgrade._job() is None
+
+
+@pytest.mark.parametrize('extra', ['', '\tstate = waiting\n', '\tpid = 17000\n'])
+def test_launchd_nested_coalitions_do_not_override_job(monkeypatch, extra):
+    output=('system/cn.tianming.erp = {\n\tstate = running\n\tpid = 15750\n'
+            '\tresource coalition = {\n\t\tstate = active\n\t}\n'
+            '\tjetsam coalition = {\n\t\tstate = active\n\t}\n'+extra+'}\n').encode()
+    monkeypatch.setattr(upgrade.system, 'launch', lambda arguments: (0, output, b''))
+    if extra:
+        with pytest.raises(ValueError):upgrade._job()
+    else:assert upgrade._job()=={'state':'running','pid':15750}
+
+
+def test_launchd_requires_top_level_state(monkeypatch):
+    output=b'system/cn.tianming.erp = {\n\tresource coalition = {\n\t\tstate = active\n\t}\n}\n'
+    monkeypatch.setattr(upgrade.system,'launch',lambda arguments:(0,output,b''))
+    with pytest.raises(ValueError):upgrade._job()

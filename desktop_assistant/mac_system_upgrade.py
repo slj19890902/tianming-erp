@@ -481,8 +481,12 @@ def _job():
         require(code == 113 and b'Could not find service "cn.tianming.erp" in domain for system' in error)
         return None
     text = output.decode('utf-8', 'strict')
-    states = re.findall(r'^\s*state = (\S+)[ \t]*$', text, re.M)
-    pids = re.findall(r'^\s*pid = ([0-9]+)[ \t]*$', text, re.M)
+    # launchctl uses one tab for this job; coalitions have two tabs.
+    # Nested resource states are not the service state. Unknown formats reject.
+    require(bool(text.splitlines()) and text.splitlines()[0] == 'system/' + system.LABEL + ' = {'
+            and text.splitlines()[-1] == '}')
+    states = re.findall(r'^\tstate = (\S+)[ \t]*$', text, re.M)
+    pids = re.findall(r'^\tpid = ([0-9]+)[ \t]*$', text, re.M)
     require(len(states) == 1 and len(pids) <= 1)
     return {'state': states[0], 'pid': int(pids[0]) if pids else None}
 

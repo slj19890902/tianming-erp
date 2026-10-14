@@ -197,52 +197,55 @@ def apply(recovery_id, approved_sha):
         prepared = held.enter_context(upgrade.Pin(slot.path / 'prepared.json', mode=0o600, parent=slot))
         recovery.require(contract.decode(prepared.read()) == {
             'type': 'tianming.system-upgrade-split-recovery-prepared.v1', 'plan_sha256': approved_sha})
-        original, evidence_check = held.enter_context(_evidence(value['attempt_id'], paths))
-        plan, old, new, old_identity = _facts(original, paths); _bound(value, original, plan)
-        current_control = contract.disabled_control_bytes(plan, 'stop')
-        def check():
-            publication.check(); plan_file.check(); prepared.check(); evidence_check()
-            recovery.require(plan_file.read() == raw)
-            _header(raw, approved_sha); _bound(value, original, plan); _facts(original, paths)
-            _state_and_tuple(plan, paths, current_control)
-        check(); started_attempt = False
+        started_attempt = False
         try:
-            with upgrade._locked(paths['operation']) as fd:
-                with upgrade._locked(paths['monitor']):
+            # Evidence teardown validates its still-pinned original bytes. It
+            # must finish inside this catch while slot/paths FDs remain alive.
+            with _evidence(value['attempt_id'], paths) as (original, evidence_check):
+                plan, old, new, old_identity = _facts(original, paths); _bound(value, original, plan)
+                current_control = contract.disabled_control_bytes(plan, 'stop')
+                def check():
+                    publication.check(); plan_file.check(); prepared.check(); evidence_check()
+                    recovery.require(plan_file.read() == raw)
+                    _header(raw, approved_sha); _bound(value, original, plan); _facts(original, paths)
+                    _state_and_tuple(plan, paths, current_control)
+                check()
+                with upgrade._locked(paths['operation']) as fd:
+                    with upgrade._locked(paths['monitor']):
+                        check(); _absent(old, new)
+                        # Include lock exit, receipt and every post-rename failure
+                        # in the same fail-closed boundary as the original upgrade.
+                        started_attempt = True
+                        upgrade._new(slot, 'pending.json', contract.canonical({'type': 'tianming.system-upgrade-split-recovery-attempt.v1',
+                            'plan_sha256': approved_sha, 'upgrade_plan_sha256': value['upgrade_plan_sha256']}))
+                        check(); _absent(old, new)
+                        disabled = contract.disabled_control_bytes(plan, 'verify')
+                        upgrade._cas(paths['base'], upgrade.system.CONTROL.name, current_control, disabled,
+                                     'system-upgrade-recovery-' + recovery_id + '-select-new.json')
+                        current_control = disabled; check(); _absent(old, new)
+                        reply = upgrade._worker(plan, value['upgrade_plan_sha256'], new, 'verify', fd)
+                        check(); _absent(old, new)
+                        upgrade._new(slot, 'verify.json', contract.canonical(reply))
                     check(); _absent(old, new)
-                    # Include lock exit, receipt and every post-rename failure
-                    # in the same fail-closed boundary as the original upgrade.
-                    started_attempt = True
-                    upgrade._new(slot, 'pending.json', contract.canonical({'type': 'tianming.system-upgrade-split-recovery-attempt.v1',
-                        'plan_sha256': approved_sha, 'upgrade_plan_sha256': value['upgrade_plan_sha256']}))
-                    check(); _absent(old, new)
-                    disabled = contract.disabled_control_bytes(plan, 'verify')
-                    upgrade._cas(paths['base'], upgrade.system.CONTROL.name, current_control, disabled,
-                                 'system-upgrade-recovery-' + recovery_id + '-select-new.json')
-                    current_control = disabled; check(); _absent(old, new)
-                    reply = upgrade._worker(plan, value['upgrade_plan_sha256'], new, 'verify', fd)
-                    check(); _absent(old, new)
-                    upgrade._new(slot, 'verify.json', contract.canonical(reply))
-                check(); _absent(old, new)
-                enabled = contract.disabled_control(plan, 'verify'); enabled['enabled'] = True
-                enabled = contract.canonical(enabled)
-                upgrade._cas(paths['base'], upgrade.system.CONTROL.name, current_control, enabled,
-                             'system-upgrade-recovery-' + recovery_id + '-enable-new.json')
-                current_control = enabled; check(); _absent(old, new)
-                upgrade._launch('enable'); started = time.time(); upgrade._launch('bootstrap')
-            identity, status = upgrade._wait_new(new, old_identity, started, paths, check)
-            check(); recovery.require(upgrade._monitor(new) == identity)
-            result = dict(type='tianming.system-upgrade-split-recovery-result.v1',
-                recovery_id=recovery_id, attempt_id=value['attempt_id'], plan_sha256=approved_sha,
-                upgrade_plan_sha256=value['upgrade_plan_sha256'], current_package_sha256=plan['current_package_sha256'],
-                old_package_sha256=old['package'], new_package_sha256=new['package'], new_monitor=identity,
-                system_identity=status['system_identity'], state_sha256=plan['state_stopped_sha256'],
-                manual_stop=True, erp_started=False, root_gate_enabled=True, configured_mode='factory',
-                activation_preserved=True, activation_performed=False, activation_sha256=plan['activation_sha256'],
-                owner_publication_sha256=plan['owner_publication_sha256'], system_keychain_canary_verified=True)
-            upgrade._new(slot, 'verified.json', contract.canonical(result))
-            check(); recovery.require(upgrade._monitor(new) == identity)
-            return result
+                    enabled = contract.disabled_control(plan, 'verify'); enabled['enabled'] = True
+                    enabled = contract.canonical(enabled)
+                    upgrade._cas(paths['base'], upgrade.system.CONTROL.name, current_control, enabled,
+                                 'system-upgrade-recovery-' + recovery_id + '-enable-new.json')
+                    current_control = enabled; check(); _absent(old, new)
+                    upgrade._launch('enable'); started = time.time(); upgrade._launch('bootstrap')
+                identity, status = upgrade._wait_new(new, old_identity, started, paths, check)
+                check(); recovery.require(upgrade._monitor(new) == identity)
+                result = dict(type='tianming.system-upgrade-split-recovery-result.v1',
+                    recovery_id=recovery_id, attempt_id=value['attempt_id'], plan_sha256=approved_sha,
+                    upgrade_plan_sha256=value['upgrade_plan_sha256'], current_package_sha256=plan['current_package_sha256'],
+                    old_package_sha256=old['package'], new_package_sha256=new['package'], new_monitor=identity,
+                    system_identity=status['system_identity'], state_sha256=plan['state_stopped_sha256'],
+                    manual_stop=True, erp_started=False, root_gate_enabled=True, configured_mode='factory',
+                    activation_preserved=True, activation_performed=False, activation_sha256=plan['activation_sha256'],
+                    owner_publication_sha256=plan['owner_publication_sha256'], system_keychain_canary_verified=True)
+                upgrade._new(slot, 'verified.json', contract.canonical(result))
+                check(); recovery.require(upgrade._monitor(new) == identity)
+                return result
         except (Exception, KeyboardInterrupt) as exc:
             if not started_attempt: raise
             _failed(slot, value, approved_sha, plan, paths, original, exc)

@@ -59,3 +59,11 @@
 basetemp 分别为 evidence 下 `monitor-recovery-v3-pytest`、`monitor-recovery-v3-original-pytest`、`monitor-recovery-v3-signed-pytest`、`monitor-recovery-v3-final-pytest` 和 `monitor-recovery-v3-integrated-pytest`，未使用默认共享目录。提交前 `git diff --check` 通过。
 
 签名组合使用真实 Ed25519 owner 签名、新旧包与完整 published.resolve、runtime.configuration、原 stop/verify worker；OS UID/launchd/进程观察、canary 实机接口和既有 mounted proof 是明确适配器，并禁止 start、backup、restore、业务 SQLite、NAS、运营凭据和真实 launchctl 路径。没有正式操作或新增服务。
+
+## 独立复审后的退出边界修正
+
+独立 recovery_v3_review 在 verified 落盘后的最后一次 `_monitor` 返回时修改原 failed bytes，复现 `_evidence` 尾部检查由外层 ExitStack 执行，异常落在原 try/except 之外，导致 gate 仍 enabled 且缺少新 failed。前述初版测试通过不能证明此退出边界安全，这是发布前阻断。
+
+根重新授予有限修复范围后，将具有验证行为的 `_evidence` 整个作用域放进失败闭门 try，保留 paths、slot 和计划 FD 在外层存活；作用域退出及验证本身的异常会执行 `_failed`。没有用补一次显式 check 替代退出验证，也没有去掉原尾部检查。原红例以及原作用域完全退出后再抛 OSError、KeyboardInterrupt 的三项，修复前为两项失败加中断，修复后三项通过；gate/label 关闭得到确认，原被改字节保留，verified 与新 failed 同时保留，不把 verified 文件当成功。
+
+修正后恢复事务82项＋真实签名恢复6项共 **88通过，10.49秒**；证据 `/Users/kimiyf/ERP-Migration/evidence/monitor-recovery-v3-exit-regression.xml`。独立复审未修改原外部红例，复跑 **1通过**；另恢复事务、签名、build三模块 **96通过，10.76秒**，未报告新的监护阻断。本修正不改变API、源文件闭合集合或能力字段，但新源码/包/pack须取整合后的最终commit。

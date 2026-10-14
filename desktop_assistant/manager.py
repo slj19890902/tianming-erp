@@ -32,6 +32,7 @@ from desktop_assistant.schema_contract import (
 
 CN = timezone(timedelta(hours=8))
 ORDER_INVENTORY_READER = 'order_inventory_v1'
+START_READY_TIMEOUT_SECONDS = 300
 
 
 
@@ -519,7 +520,11 @@ class Manager:
         owner = psutil.Process(proc.pid)
         write_json(self.root / 'control/process.json', {'pid': proc.pid, 'created': owner.create_time(),
                    'exe': str(python), 'nonce': nonce})
-        for _ in range(120):
+        # Signature validation and initialization on the factory Mac can exceed
+        # a minute. Keep a finite monotonic deadline, and accept only this
+        # process's nonce proof; a live PID alone is not successful startup.
+        deadline = time.monotonic() + START_READY_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
             if proc.poll() is not None:
                 raise ValueError('ERP启动失败，请查看control/server.log')
             if (self.root / 'control' / (nonce + '.ready')).exists():

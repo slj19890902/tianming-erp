@@ -60,3 +60,14 @@ def test_component_contract_conflict_identifies_product_for_entry(db):
     result = resolve_product_cost(db, product, for_entry=True)
     assert result.estimate is None
     assert any('BAD-COMPONENT' in message and '常用箱' in message for message in result.missing)
+
+
+@pytest.mark.parametrize('style', ['TDGD 天地盖底', 'TDGG 天地盖盖', '独立底', '独立天盖'])
+def test_save_readiness_and_requisition_use_same_standalone_box_type(style):
+    from app.services.product_readiness import is_telescoping_lid_box
+    from app.api.requisition import _is_telescoping_lid_box
+    from app.api.warehouse import _is_a3_bom_snapshot
+    from types import SimpleNamespace
+    assert not is_telescoping_lid_box(style)
+    assert not _is_telescoping_lid_box(style)
+    assert not _is_a3_bom_snapshot(SimpleNamespace(snapshot_component_box_style=style))

@@ -1919,8 +1919,8 @@ def _pieces_per_box(item: OrderItem) -> int:
 
 
 def _is_telescoping_lid_box(box_style: str | None) -> bool:
-    value = (box_style or "").strip().upper()
-    return bool(value) and ("天地盖" in value or "A3" in value)
+    from app.services.product_readiness import is_telescoping_lid_box
+    return is_telescoping_lid_box(box_style)
 
 
 def _bom_snapshot_component_types(
@@ -4064,6 +4064,7 @@ def _late_semi_inventory_options(
         requirement = db.scalar(
             select(OrderItemSemiRequirement).where(
                 OrderItemSemiRequirement.order_item_id == item.id,
+                OrderItemSemiRequirement.sales_order_item_bom_component_id.is_(None),
                 OrderItemSemiRequirement.component_type == component,
             )
         )
@@ -18654,6 +18655,7 @@ def _reserve_semi_inventory_from_pending(
         existing = db.scalar(
             select(OrderItemSemiRequirement).where(
                 OrderItemSemiRequirement.order_item_id == item.id,
+                OrderItemSemiRequirement.sales_order_item_bom_component_id.is_(None),
                 OrderItemSemiRequirement.component_type == payload.component_type,
             )
         )

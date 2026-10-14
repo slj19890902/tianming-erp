@@ -13,6 +13,10 @@ def _value(source: object, name: str) -> Any:
 
 
 def is_telescoping_lid_box(box_style: str | None) -> bool:
+    from app.services.box_type_rules import get_box_type_rule
+    rule = get_box_type_rule(box_style)
+    if rule is not None:
+        return rule.code == "a3_set"
     value = str(box_style or "").strip().upper()
     return "A3" in value or "天地盖" in str(box_style or "")
 

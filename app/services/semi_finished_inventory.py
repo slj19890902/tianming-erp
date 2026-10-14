@@ -769,15 +769,25 @@ def ensure_semi_finished_lot_eligibility(
         raise WarehouseInventoryError("加工片料用途或模具版本不符，请先核对原加工记录", 409)
     if rectangular_cut_plan(db, lot, product, expected):
         return "customer_generic"
+    if reviewed and rectangular_cut_plan(db, lot, product, expected, reviewed=True):
+        return "customer_generic"
     issues = qualification_issues(db, lot, product, expected_material_code=expected.normalized_material_code)
     if issues:
         raise WarehouseInventoryError("所选库存不能抵扣：" + "、".join(issues), 409)
     if goods_profile(db, lot):
-        if _customer_generic_blocking_differences(expected, detail):
+        blocking = _customer_generic_blocking_differences(expected, detail)
+        if reviewed and detail.sheet_type == "raw_board":
+            blocking = tuple(name for name in blocking if name != "pieces_per_box")
+        if blocking:
             raise WarehouseInventoryError("片料尺寸、楞型或换算与订单需求不一致", 409)
         return "customer_generic"
     if detail.owner_customer_id is None:
         differences = _physical_signature_differences(expected, detail)
+        # For an intact raw sheet, pieces_per_box describes downstream joining,
+        # not sheet geometry or output. A reviewed double-splice allocation
+        # still credits physical pieces and therefore needs two per box.
+        if reviewed and detail.sheet_type == "raw_board":
+            differences = tuple(name for name in differences if name != "pieces_per_box")
         if differences:
             raise WarehouseInventoryError(
                 "通用半成品库存物理规格与订单需求不一致："
@@ -1333,6 +1343,14 @@ def browse_semi_finished_inventory(
     requirement = db.get(OrderItemSemiRequirement, requirement_id)
     if requirement is None:
         raise WarehouseInventoryError("半成品需求不存在", 404)
+    return browse_semi_finished_inventory_for_requirement(db, requirement)
+
+
+def browse_semi_finished_inventory_for_requirement(
+    db: Session, requirement: OrderItemSemiRequirement, *, reviewed_raw: bool = False,
+    include_ineligible: bool = False,
+) -> list[SemiFinishedCandidate]:
+    """Read candidates for a frozen, optionally unsaved component demand."""
     rows = db.scalars(
         select(InventoryLot)
         .join(
@@ -1368,6 +1386,24 @@ def browse_semi_finished_inventory(
             allowed_lot_ids=allowed_lot_ids,
             product_id=product_id,
         )
+        raw_review = False
+        if scope is None and reviewed_raw and detail.sheet_type == "raw_board":
+            try:
+                scope = ensure_semi_finished_lot_eligibility(
+                    db, lot=lot, product_id=product_id,
+                    customer_id=requirement.customer_id, expected=expected, reviewed=True,
+                )
+                raw_review = True
+            except WarehouseInventoryError as error:
+                if include_ineligible:
+                    candidates.append(SemiFinishedCandidate(
+                        lot=lot, source="manual", match_rule_id=None,
+                        available_stock_quantity=lot.quantity_available,
+                        deductible_requirement_quantity=0,
+                        signature_differences=_signature_differences(requirement, detail),
+                        warning_codes=(), warning_messages=(str(error),), selectable=False,
+                    ))
+                continue
         if scope is None:
             continue
         if scope == "customer_generic":
@@ -1381,6 +1417,10 @@ def browse_semi_finished_inventory(
             if "material_code" in differences:
                 codes.append(MATERIAL_VARIANCE_PRESERVED)
                 messages.append("实际材质不同，但会保留原材质、成本、来源和批次事实。")
+            if raw_review:
+                codes.append(SIGNATURE_OVERRIDE_WARNING)
+                messages[1] = "该原板需本次人工确认适用，不会自动扩大库存的客户或产品范围。"
+                messages.append("请核对本次原板裁切、材质差异与每只耗片数；采用仅适用于本次预占。")
             warning_codes = tuple(codes)
             warning_messages = tuple(messages)
         elif scope == "general":
@@ -1391,6 +1431,10 @@ def browse_semi_finished_inventory(
                 "每次半成品库存抵扣都必须人工确认。",
                 "该批次为通用半成品库存，可跨客户按物理规格抵扣，必须人工确认。",
             )
+            if raw_review:
+                differences = _physical_signature_differences(expected, detail)
+                warning_codes += (SIGNATURE_OVERRIDE_WARNING,)
+                warning_messages += ("原片按张投入；每只耗片数按订单双拼/组装需求换算。",)
         else:
             source = "manual"
             differences = _signature_differences(requirement, detail)
@@ -1411,6 +1455,7 @@ def browse_semi_finished_inventory(
                 signature_differences=differences,
                 warning_codes=warning_codes,
                 warning_messages=warning_messages,
+                cut_plan=rectangular_cut_plan(db, lot, db.get(Product, product_id), expected, reviewed=raw_review),
             )
         )
     return _rank_sheet_candidates(db, product_id, expected, candidates)
@@ -1713,7 +1758,8 @@ def active_semi_coverage_by_order_item(
 ) -> dict[str, int]:
     requirements = db.scalars(
         select(OrderItemSemiRequirement).where(
-            OrderItemSemiRequirement.order_item_id == order_item_id
+            OrderItemSemiRequirement.order_item_id == order_item_id,
+            OrderItemSemiRequirement.sales_order_item_bom_component_id.is_(None)
         )
     ).all()
     return {
@@ -1733,6 +1779,7 @@ def active_semi_reserved_piece_qty(
     requirement = db.scalar(
         select(OrderItemSemiRequirement).where(
             OrderItemSemiRequirement.order_item_id == order_item_id,
+            OrderItemSemiRequirement.sales_order_item_bom_component_id.is_(None),
             OrderItemSemiRequirement.component_type == _component(component_type),
         )
     )
@@ -1751,14 +1798,16 @@ def inventory_fully_covers_order_item(db: Session, order_item_id: int) -> bool:
     production_boxes = max(int(item.quantity or 0) - finished_coverage, 0)
     requirements = db.scalars(
         select(OrderItemSemiRequirement).where(
-            OrderItemSemiRequirement.order_item_id == item.id
+            OrderItemSemiRequirement.order_item_id == item.id,
+            OrderItemSemiRequirement.sales_order_item_bom_component_id.is_(None)
         )
     ).all()
     product = db.get(Product, item.product_id)
     box_style = str(product.box_style or "") if product else ""
+    from app.services.product_readiness import is_telescoping_lid_box
     expected_components = (
         {"cover", "base"}
-        if "天地盖" in box_style or "A3" in box_style.upper()
+        if is_telescoping_lid_box(box_style)
         else {"whole"}
     )
     by_component = {row.component_type: row for row in requirements}
@@ -2434,7 +2483,8 @@ def reserve_semi_finished_inventory(
             )
             detail = lot.semi_finished_detail
             remaining_target = target - allocated
-            cut_plan = rectangular_cut_plan(db, lot, db.get(Product, _requirement_product_id(db, requirement)), requirement_signature(requirement))
+            cut_plan = rectangular_cut_plan(db, lot, db.get(Product, _requirement_product_id(db, requirement)), requirement_signature(requirement),
+                reviewed=override and SIGNATURE_OVERRIDE_WARNING in warnings)
             allocation_yield = cut_plan["yield_factor"] if cut_plan else detail.stock_yield_per_sheet
             capacity = lot.quantity_available * allocation_yield
             credited = min(remaining_target, capacity)

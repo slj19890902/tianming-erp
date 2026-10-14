@@ -117,6 +117,28 @@ def component_settings(value, component="whole"):
     return SheetCuttingSettings.from_dict(settings[key])
 
 
+def product_physical_components(product):
+    """Use the box-type contract before retired auxiliary dimensions.
+
+    Older records without a recognized box type retain their original
+    two-sheet projection. Known independent parts always have one whole sheet.
+    This is the same a3_set distinction used by product-save validation.
+    """
+    from app.services.box_type_rules import get_box_type_rule
+    rule = get_box_type_rule(getattr(product, "box_style", None))
+    if rule is not None:
+        components = ("cover", "base") if rule.code == "a3_set" else ("whole",)
+    else:
+        style = str(getattr(product, "box_style", "") or "")
+        has_base = any(getattr(product, name, None) is not None for name in
+                       ("base_report_length_mm", "base_report_width_mm"))
+        components = ("cover", "base") if has_base or "A3" in style.upper() or "天地盖" in style else ("whole",)
+    settings = normalize_settings(getattr(product, "sheet_cutting_settings", None))
+    if settings is not None and set(settings) - {"schema_version"} != set(components):
+        raise SheetCuttingContractError("箱式与开料实物组件不一致；独立子件须整片，天地盖须盖与底")
+    return components
+
+
 def product_yield_mode(product, component="whole"):
     settings = component_settings(getattr(product, "sheet_cutting_settings", None), component)
     return settings.legacy_yield_mode if settings else normalize_cutting_mode(product.default_cutting_mode)

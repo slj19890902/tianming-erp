@@ -161,16 +161,12 @@ def estimate_finished_product_cost(
     cover_area = _area_m2(report_length, report_width)
     if cover_area is None:
         return None
-    box_style = (product.box_style or "").strip()
-    is_a3 = "A3" in box_style.upper() or "天地盖" in box_style
-    has_any_base_dimension = (
-        product.base_report_length_mm is not None
-        or product.base_report_width_mm is not None
-    )
-    base_area = _area_m2(product.base_report_length_mm, product.base_report_width_mm)
-    if (is_a3 or has_any_base_dimension) and base_area is None:
+    from app.services.sheet_cutting_settings import component_settings, product_physical_components
+    physical_components = product_physical_components(product)
+    base_area = (_area_m2(product.base_report_length_mm, product.base_report_width_mm)
+                 if "base" in physical_components else None)
+    if "base" in physical_components and base_area is None:
         return None
-    from app.services.sheet_cutting_settings import component_settings
     sheet_settings = getattr(product, "sheet_cutting_settings", None)
     if sheet_settings is not None:
         cover_setting = component_settings(sheet_settings, "cover" if base_area is not None else "whole")

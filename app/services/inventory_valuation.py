@@ -312,7 +312,11 @@ def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_o
     if missing:
         return (None if for_entry else _authorized_product_recipe(db, product)) or CostResolution(None, missing)
     view.sheet_cutting_settings = getattr(product, "sheet_cutting_settings", None)
-    estimate = estimate_finished_product_cost(db, product=view)
+    from app.services.sheet_cutting_contract import SheetCuttingContractError
+    try:
+        estimate = estimate_finished_product_cost(db, product=view)
+    except SheetCuttingContractError as error:
+        return CostResolution(None, [f"{product.product_code or product.id} {product.product_name}：{error}；请在常用箱维护箱式与开料设置"])
     if estimate is None or estimate.unit_cost <= 0:
         return CostResolution(None, ["供应商平方价、价格单位或天地盖底片尺寸不完整"])
     from app.services.requisition_quantities import CUTTING_MODE_BOX_STYLES, cutting_factor, normalize_cutting_mode

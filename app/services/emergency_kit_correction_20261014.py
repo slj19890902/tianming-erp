@@ -274,6 +274,54 @@ def execute(db, *, actor, preview_hash, operation_key, evidence, physical_match_
         return receipt
 
 
+def _validate_transfer_movements(db, transfer):
+    """Bind a typed descendant edge to its actual paired ledger operation.
+
+    Movements do not store historical positions or lot versions. Preserve the
+    typed version contract; only corrections have a fully reproducible hash.
+    """
+    key=transfer.idempotency_key
+    operation=key[len('correction:'):] if key.startswith('correction:') else key
+    source=db.scalar(select(InventoryMovement).where(
+        InventoryMovement.idempotency_key==inv._transfer_key('goods-correction',operation,'source'))) if key.startswith('correction:') else None
+    correction=source is not None
+    if not correction:
+        operation=key
+        source=db.scalar(select(InventoryMovement).where(
+            InventoryMovement.idempotency_key==inv._transfer_key('location-transfer',operation,'source')))
+    kind='goods-correction' if correction else 'location-transfer'
+    same_lot=transfer.source_lot_id==transfer.target_lot_id
+    target=db.scalar(select(InventoryMovement).where(
+        InventoryMovement.idempotency_key==inv._transfer_key(kind,operation,'target')))
+    if correction:
+        expected=hashlib.sha256(f'{transfer.source_lot_id}:{transfer.source_version_before}:{transfer.quantity}:{operation}'.encode()).hexdigest()
+        if (same_lot or transfer.source_location_id!=transfer.target_location_id
+                or transfer.reserved_quantity or transfer.request_hash!=expected):
+            raise ValueError('原位拆分位置、数量或已存请求hash不一致')
+    names=('available','reserved','consumed','damaged','scrapped')
+    for movement,lid in ((source,transfer.source_lot_id),) if same_lot else (
+            (source,transfer.source_lot_id),(target,transfer.target_lot_id)):
+        if (not movement or movement.inventory_lot_id!=lid or movement.movement_type!='location_transfer'
+                or movement.quantity!=transfer.quantity or movement.unit!='boxes'
+                or movement.operator_id!=transfer.transferred_by or movement.reversal_of_movement_id is not None
+                or any(getattr(movement,prefix+n)<0 for prefix in ('before_','after_') for n in names)
+                or any(getattr(movement,field) is not None for field in (
+                    'reservation_id','related_order_id','related_order_item_id','related_requisition_id',
+                    'related_supplier_order_id','related_delivery_id'))):
+            raise ValueError('typed转移缺少精确键绑定的真实库存流水')
+    if same_lot:
+        if target is not None or any(getattr(source,'before_'+n)!=getattr(source,'after_'+n) for n in names):
+            raise ValueError('整批移动的流水余额不守恒')
+        if source.before_available+source.before_reserved!=transfer.quantity:
+            raise ValueError('整批移动数量与真实可用/预占不一致')
+        return
+    for name in names:
+        amount={'available':transfer.available_quantity,'reserved':transfer.reserved_quantity}.get(name,0)
+        if (getattr(source,'after_'+name)!=getattr(source,'before_'+name)-amount
+                or getattr(target,'before_'+name)!=0 or getattr(target,'after_'+name)!=amount):
+            raise ValueError('typed转移数量与真实移出/移入五余额不守恒')
+
+
 def validate_source_cost(db,lot,detail,visited):
     """Validate frozen evidence, including typed moved/split descendants.
 
@@ -378,10 +426,20 @@ def validate_source_cost(db,lot,detail,visited):
                 transfer=links[0]
                 if (transfer.source_lot_id not in by_id or transfer.quantity<=0 or transfer.quantity>QUANTITY
                         or transfer.available_quantity+transfer.reserved_quantity!=transfer.quantity
-                        or transfer.reserved_quantity<0 or transfer.source_version_after!=transfer.source_version_before+1):
+                        or transfer.reserved_quantity<0 or transfer.source_version_before<1
+                        or transfer.source_version_after!=transfer.source_version_before+1):
                     raise ValueError('成套派生跨伪源或typed数量版本不一致')
+                _validate_transfer_movements(db,transfer)
                 lid=transfer.source_lot_id
         for node in siblings:trace(node.id)
+        for moved in db.scalars(select(InventoryLotTransfer).where(
+                InventoryLotTransfer.source_lot_id.in_(by_id),
+                InventoryLotTransfer.source_lot_id==InventoryLotTransfer.target_lot_id)):
+            if (moved.quantity<=0 or moved.quantity>QUANTITY
+                    or moved.available_quantity+moved.reserved_quantity!=moved.quantity
+                    or moved.source_version_before<1 or moved.source_version_after!=moved.source_version_before+1):
+                raise ValueError('整批移动typed数量或版本不一致')
+            _validate_transfer_movements(db,moved)
         total=sum(n.quantity_available+n.quantity_reserved+n.quantity_consumed+n.quantity_damaged+n.quantity_scrapped for n in siblings)
         if total!=QUANTITY:raise ValueError('原输出及合法后裔数量不守恒')
         return UNIT_COST,dict(detail,temporary=True,actual=False,product_unit='套',

@@ -46,3 +46,13 @@ run_task自动回收尝试被既有“无法确认 ERP/测试进程已退出”�
 最终受管任务：`task-8f95f190d0ef45c29f2755fa9e00d708`，returncode=0；成功case明确transaction_entry_guard_passed=true，第二case为late_audit_fault成功回滚。每case全库指纹`b8fa090151cc1c4d87c428d50cd719ea03c46468aa88e8fbd50bf2fb58d00d53`一致。临时输出1432/下盖child1431仅属演练，不能作为正式id。真实runtime文件SHA为`cef9dfd43e8ef2b4d94abdd43c50e631d548e5f02a447041c996709832e1ab1b`。
 
 额外库存计价/旧无订单API回归44例，30通过、14在旧API测试未提交送货快照时被既有dispatch 409门禁拒绝。使用本分支HEAD原guard/cost模块代码重跑代表例，同样409“请刷新页面，先核对送货快照后再确认发货”；证据`stock-governance-sol/unordered-legacy-baseline-test.txt`。没有为旧测试撤掉新送货快照门禁，本次独立服务级dispatch/cancel实际通过。该额外套件未声称全绿，根整单验证使用新合法快照合同。
+
+## 独立复审P2：typed派生数量必须绑定真实移库流水
+
+Astra复审发现：父套50原位拆20后，仅将InventoryLotTransfer.quantity/available_quantity改19，实际child20/origin30及两条location_transfer流水仍20，旧校验错误保留12.8267成本。新增专用测试先复现该失败，未写正式数据。
+
+最小补充仅有限服务：每条派生typed边按已有goods-correction或location-transfer精确幂等键查实际移出/移入流水，验证movement lot/operator/unit/type/quantity、无其他订单/送货/反向用途、五类余额非负及逐项移出/移入delta守恒。原位correction还核同位、无reserved及其可完整重算的已存request_hash；普通partial move使用其实际键和独立可证字段，合法整批selfmove要求只有source流水且五余额不变、全部可用/预占数量相符。任何同源派生损坏，同时拒绝原输出及后裔成本。
+
+InventoryMovement没有历史location/version列：本修复不按movement条数推算lot.version，不发明缺失位置证据、不强制当前qty/version/location等于出生值。typed正版本与source_version_after=before+1保持；真实资料版本变化、正常split、partial move、full selfmove均兼容，普通move即使operation key以correction:开头也不会误判来源。
+
+专用54及组件/BOM相邻19合计73通过。新增13例覆盖typed20→19、缺source/target流水、错source/target余额、错lot、correction版本/hash/位置/key、正常partial/selfmove以及两种真实流水损坏。原无订单dispatch/cancel、真实session commit guard、完整Finance/late fault测试继续通过。本轮只改有限service、专用tests及本报告，其他业务文件未动，git diff --check通过。真实外层双更正的提交/回滚审计由根独立管理，此P2提交未触碰已批准原baseline及正式库存。

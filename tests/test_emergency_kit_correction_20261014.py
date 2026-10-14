@@ -351,3 +351,62 @@ def test_frozen_finished_specs_guard_is_exact_and_cannot_accept_missing_children
     assert not _physical_kit_specifications(copied,basis)
     copied=json.loads(json.dumps(detail));copied['frozen_assembly_spec'][0]['quantity_per_set']=2
     assert not _physical_kit_specifications(copied,basis)
+
+
+@pytest.mark.parametrize('fault',['typed_quantity','source_missing','target_missing','source_balance','target_balance','wrong_lot','version','location','key'])
+def test_descendant_typed_edge_must_match_real_transfer_movements(kit,fault):
+    from app.models.warehouse_inventory import InventoryMovement
+    from app.services.inventory_valuation import frozen_cost
+    db,actor=kit;receipt,output=_source_output(db,actor)
+    child=service.split_for_correction(db,output,20,actor,'review-typed-evidence')
+    edge=db.scalar(select(InventoryLotTransfer).where(InventoryLotTransfer.target_lot_id==child.id))
+    source=db.scalar(select(InventoryMovement).where(InventoryMovement.idempotency_key==service.inv._transfer_key('goods-correction','review-typed-evidence','source')))
+    target=db.scalar(select(InventoryMovement).where(InventoryMovement.idempotency_key==service.inv._transfer_key('goods-correction','review-typed-evidence','target')))
+    assert source.quantity==target.quantity==edge.quantity==20
+    assert frozen_cost(child,db)[0]==Decimal('12.8267')
+    if fault=='typed_quantity':edge.quantity=edge.available_quantity=19
+    elif fault=='source_missing':db.delete(source)
+    elif fault=='target_missing':db.delete(target)
+    elif fault=='source_balance':source.before_available-=1
+    elif fault=='target_balance':target.after_available-=1
+    elif fault=='wrong_lot':target.inventory_lot_id=666
+    elif fault=='version':edge.source_version_before+=1;edge.source_version_after+=1
+    elif fault=='location':
+        db.add(WarehouseLocation(id=1919,location_code='TEST-DAMAGED-EDGE',location_name='错误位置',warehouse_type='finished'))
+        db.flush();edge.target_location_id=1919
+    elif fault=='key':edge.idempotency_key='correction:other-unrelated-operation'
+    db.flush()
+    for node in (child,output):
+        cost,detail=frozen_cost(node,db)
+        assert cost is None and detail.get('validation_issue')
+
+
+@pytest.mark.parametrize('fault',[None,'quantity','missing_target','self_balance'])
+def test_normal_partial_and_full_self_move_are_bound_to_actual_ledgers(kit,fault):
+    from app.models.warehouse_inventory import InventoryMovement
+    from app.services.inventory_valuation import frozen_cost
+    db,actor=kit;receipt,output=_source_output(db,actor)
+    # A legitimate metadata version change is not inferred from ledger count.
+    output.version+=1;db.flush()
+    target=WarehouseLocation(id=1919,location_code='TEST-MOVE-LEDGER',location_name='移库',warehouse_type='finished',
+        warehouse_floor=1,placement_status='placed',is_active=True,source_version='P1-25C',storage_type='temporary_aisle',area_code='DISPATCH')
+    db.add(target);db.flush()
+    moved=service.inv.transfer_finished_lot_between_locations(db,lot_id=output.id,expected_version=output.version,
+        quantity=20,location_id=1919,operator_id=actor.id,idempotency_key='correction:normal-parent-partial-20')
+    child=moved.target_lot
+    whole=service.inv.transfer_finished_lot_between_locations(db,lot_id=child.id,expected_version=child.version,
+        quantity=20,location_id=1918,operator_id=actor.id,idempotency_key='normal-parent-full-20')
+    assert whole.target_lot.id==child.id
+    assert frozen_cost(child,db)[0]==Decimal('12.8267')
+    if fault=='quantity':moved.transfer.quantity=moved.transfer.available_quantity=19
+    elif fault=='missing_target':
+        row=db.scalar(select(InventoryMovement).where(InventoryMovement.idempotency_key==service.inv._transfer_key('location-transfer','correction:normal-parent-partial-20','target')))
+        db.delete(row)
+    elif fault=='self_balance':
+        row=db.scalar(select(InventoryMovement).where(InventoryMovement.idempotency_key==service.inv._transfer_key('location-transfer','normal-parent-full-20','source')))
+        row.after_available-=1
+    db.flush()
+    for node in (output,child):
+        cost,detail=frozen_cost(node,db)
+        if fault:assert cost is None and detail.get('validation_issue')
+        else:assert cost==Decimal('12.8267')

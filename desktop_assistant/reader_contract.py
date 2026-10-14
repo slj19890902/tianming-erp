@@ -4,6 +4,7 @@ import sqlite3
 
 from desktop_assistant import delivery_dispatch_contract as dispatch
 from desktop_assistant import order_inventory_contract as inventory
+from desktop_assistant import physical_kit_reader_contract as physical_kit
 
 TABLE_READERS = {
     'quotation_mutations': 'quotation_write_v1',
@@ -51,6 +52,7 @@ def target_readers(database, source, target, inventory_record, dispatch_record, 
             if any(row[1] == column for row in db.execute(f'PRAGMA table_info("{table}")')):
                 required.add(capability)
         if has_supplier_trim_facts(db): required.add('supplier_sheet_trim_v1')
+        if physical_kit.has_facts(db): required.add(physical_kit.CAPABILITY)
     if inventory_record is not None: required.add(inventory.CAPABILITY)
     if dispatch_record is not None: required.add(dispatch.CAPABILITY)
     if not required <= set(available) or (factory and available.get('factory_cutover_v1') != 1):

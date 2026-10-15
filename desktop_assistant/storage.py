@@ -170,6 +170,36 @@ def pack_recovery(shared: Path, packages: dict, archive: Path, metadata: dict) -
     return _pack_paths(paths, archive, metadata)
 
 
+def pack_data_recovery(shared: Path, database_snapshot: Path, archive: Path,
+                       metadata: dict, *, include=None) -> dict:
+    """Pack a consistent SQLite snapshot plus selected non-database shared files.
+
+    Program packages are deliberately not accepted here.  ``include`` receives
+    each path relative to ``shared`` and must make the business/config selection
+    explicit.  SQLite sidecars are always rejected because the snapshot already
+    contains the committed database state.
+    """
+    if (shared.is_symlink() or shared.is_junction() or database_snapshot.is_symlink()
+            or database_snapshot.is_junction() or not database_snapshot.is_file()):
+        raise ValueError('数据恢复点来源无效或包含链接')
+    items = sorted(shared.rglob('*'))
+    if any(path.is_symlink() or path.is_junction() for path in items):
+        raise ValueError('数据恢复点来源包含链接，请先规范数据路径')
+    database = Path('data/carton_erp.sqlite3')
+    sidecars = {Path(str(database) + suffix) for suffix in ('-wal', '-shm', '-journal')}
+    paths = [(database_snapshot, 'shared/' + database.as_posix())]
+    for path in items:
+        if not path.is_file():
+            continue
+        relative = path.relative_to(shared)
+        if relative == database or relative in sidecars:
+            continue
+        if include is not None and not include(relative):
+            continue
+        paths.append((path, 'shared/' + relative.as_posix()))
+    return _pack_paths(paths, archive, metadata)
+
+
 def _pack_paths(paths, archive: Path, metadata: dict, signer=None) -> dict:
     files = {safe_name(name): sha(path) for path, name in paths}
     if len(files) != len(paths):

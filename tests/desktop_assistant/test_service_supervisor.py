@@ -144,6 +144,38 @@ def test_system_timer_failure_is_sanitized_and_retries_without_stopping_erp(tmp_
     assert json.loads(text)['requires_user_login'] is False
 
 
+def test_database_snapshot_failure_exposes_stale_alert_without_secret_or_stopping_erp(tmp_path, monkeypatch):
+    from desktop_assistant import nightly, mac_system_service
+    manager = Manager(tmp_path)
+    manager.manifest = lambda: {'runtime_capabilities': {'data_recovery_v2': 1}}
+    monkeypatch.setattr(mac_system_service, 'nightly_enabled', lambda: True)
+
+    def failed_snapshot(_manager, **_kwargs):
+        raise TimeoutError('synthetic private backup detail')
+
+    monkeypatch.setattr(nightly, 'run_database_snapshot_once', failed_snapshot)
+    monkeypatch.setattr(nightly, 'run_once', lambda *_args, **_kwargs: {'status': 'up-to-date'})
+
+    class Stopping:
+        stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, delay):
+            assert delay == 300
+            self.stopped = True
+
+    stopping = Stopping()
+    service.nightly_loop(manager, stopping, system_identity={'uid': 499})
+    status = json.loads((tmp_path/'control/nightly-status.json').read_text())
+    assert status['database_status'] == 'failed'
+    assert status['database_backup_health']['stale'] is True
+    assert status['database_backup_health']['alert_code'] == 'DATABASE_BACKUP_STALE'
+    assert manager.starts == manager.stops == 0
+    assert 'synthetic private backup detail' not in json.dumps(status)
+
+
 def test_personal_supervisor_does_not_create_second_backup_timer(tmp_path,monkeypatch):
     manager=Manager(tmp_path);stopping=threading.Event()
     monkeypatch.setattr(service,'nightly_loop',lambda *a,**kw:pytest.fail('personal timer duplicated'))

@@ -559,6 +559,16 @@ class Manager:
         current = state['current']
         if not current:
             raise ValueError('尚未导入或恢复ERP数据')
+        # Authenticate the immutable program before any reader check consults
+        # its mutable extracted manifest cache.  Otherwise a damaged cache can
+        # produce a misleading business-reader error instead of the package
+        # identity failure that actually blocks the backup.
+        package = self.root / 'packages' / (current + '.zip')
+        if sha(package) != current:
+            raise ValueError('对应程序发布包已损坏')
+        authenticated_manifest = signed_release_manifest(package, self.public_key)
+        if authenticated_manifest != self.manifest(current):
+            raise ValueError('备份程序清单与原发布签名不一致')
         dispatch_activation = self._check_dispatch_reader(current, require_active=self._dispatch_reader(current))
         self._check_physical_kit_reader(current)
         before = database_info(self.root / 'shared/data/carton_erp.sqlite3')
@@ -566,12 +576,6 @@ class Manager:
         checks = inspect(self.root / 'shared/data/carton_erp.sqlite3', self.root / 'shared', managed=True)
         if any(checks['counts'][key] for key in ('missing', 'external', 'hash_mismatch')):
             raise ValueError('附件缺失或校验失败，不能标记为完整备份')
-        package = self.root / 'packages' / (current + '.zip')
-        if sha(package) != current:
-            raise ValueError('对应程序发布包已损坏')
-        authenticated_manifest = signed_release_manifest(package, self.public_key)
-        if authenticated_manifest != self.manifest(current):
-            raise ValueError('备份程序清单与原发布签名不一致')
         inventory_activation = inventory_contract.for_backup(state, authenticated_manifest)
         packages = {'release.zip': package}
         authority = state.get('schema_authority')
@@ -1345,3 +1349,53 @@ class Manager:
             return {'version': native['manifest']['version'] if native else release['version'],
                     'data_time': manifest['created'], 'started': False,
                     'credentials': credential_report}
+
+    def restore_data_point(self, backup: Path, password: str, program_package: Path, *,
+                           expected_backup_sha256: str | None = None):
+        """Restore the v2 data-only format with an exact separate signed program.
+
+        This is intentionally a separate entry from the legacy all-in-one
+        recovery path: callers cannot mistake a light database snapshot for a
+        complete recovery point, and the existing v1 restore contract is not
+        weakened.
+        """
+        with self.lock():
+            if self.state['current'] or any((self.root / 'shared').iterdir()):
+                raise ValueError('数据恢复仅允许全新安装目录，现有数据不被覆盖')
+            job = self.root / 'staging' / ('data-restore-' + uuid.uuid4().hex)
+            job.mkdir()
+            from desktop_assistant import data_recovery
+            restored_shared = job / 'shared'
+            result = data_recovery.restore(
+                backup, password, restored_shared, program_package, self.public_key,
+                expected_backup_sha256=expected_backup_sha256,
+            )
+            release = self.stage_release(program_package, verify_existing=True)
+            if release['id'] != result['program_sha256'] or release['revision'] != result['revision']:
+                raise ValueError('恢复后的程序缓存与数据恢复点不一致')
+            if sha(backup) != result['backup_sha256'] or sha(program_package) != release['id']:
+                raise ValueError('数据恢复输入在启用前变化')
+            (self.root / 'shared').rmdir()
+            restored_shared.rename(self.root / 'shared')
+            from desktop_assistant.mac_published_runtime import selected as service_identity_selected
+            state = {
+                'current': release['id'],
+                'previous': None,
+                'restored_at': datetime.now(CN).isoformat(),
+                'restored_backup_sha256': result['backup_sha256'],
+                'schema_authority': None,
+                'operation': 'restore_data_v2',
+                'credential_restore': {'status': 'not-included'},
+                'data_restore': result,
+                **({'manual_stop': True} if service_identity_selected() else {}),
+            }
+            write_json(self.root / 'state.json', state)
+            if self.state != state:
+                raise ValueError('数据恢复状态发布后回读不一致，保留现场')
+            return {
+                'version': release['version'],
+                'data_time': result['data_time'],
+                'started': False,
+                'credentials': {'status': 'not-included'},
+                'format': data_recovery.TYPE,
+            }

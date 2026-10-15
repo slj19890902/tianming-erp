@@ -284,6 +284,16 @@ def main():
             if not local_backup_files <= sources.keys():
                 raise ValueError('本地单份备份协议源码不完整')
             runtime_metadata['runtime_capabilities']['local_backup_only_v1'] = 1
+        data_recovery_files = {
+            'desktop_assistant/data_recovery.py',
+            'desktop_assistant/storage.py',
+            'desktop_assistant/manager.py',
+            'desktop_assistant/restore_cli.py',
+        }
+        if data_recovery_files <= sources.keys():
+            runtime_metadata['runtime_capabilities']['data_recovery_v2'] = 1
+        elif data_recovery_files & sources.keys():
+            raise ValueError('数据与程序拆分恢复协议源码不完整')
         if stream_wheels is not None:
             rotation_files = {'desktop_assistant/nas_backup_rotation_worker.py',
                               'desktop_assistant/nas_backup_rotation.py',

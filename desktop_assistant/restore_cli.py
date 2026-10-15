@@ -47,6 +47,12 @@ def preflight(args):
         raise ValueError('从移交包取恢复密码必须同时指定凭据包')
     if args.credentials is not None and not args.credentials.is_file():
         raise ValueError('凭据移交包不存在')
+    program_package = getattr(args, 'program_package', None)
+    if program_package is not None:
+        if not program_package.is_file():
+            raise ValueError('数据恢复点对应的签名程序包不存在')
+        if args.credentials is not None or args.backup_password_from_transfer:
+            raise ValueError('数据恢复点与跨机器凭据恢复须分步执行，不能冒充旧完整恢复')
     return root, public
 
 
@@ -78,8 +84,15 @@ def run(args, prompt=getpass.getpass):
     install_network_guard()
     from desktop_assistant.manager import Manager
     manager = Manager(root, public)
-    result = manager.restore(args.backup, password, credentials=transfer_raw,
-                             credential_password=transfer_password, expected_backup_sha256=args.backup_sha256)
+    program_package = getattr(args, 'program_package', None)
+    if program_package is not None:
+        result = manager.restore_data_point(
+            args.backup, password, program_package,
+            expected_backup_sha256=args.backup_sha256,
+        )
+    else:
+        result = manager.restore(args.backup, password, credentials=transfer_raw,
+                                 credential_password=transfer_password, expected_backup_sha256=args.backup_sha256)
     restored_sha = manager.state.get('restored_backup_sha256')
     if restored_sha != args.backup_sha256:
         raise ValueError('恢复结果与批准备份摘要不符，未发布完成回执')
@@ -111,6 +124,8 @@ def parser():
     result.add_argument('--publisher-sha256', required=True)
     result.add_argument('--credentials', type=Path)
     result.add_argument('--backup-password-from-transfer', action='store_true')
+    result.add_argument('--program-package', type=Path,
+                        help='恢复 tianming.data-recovery.v2 时提供摘要匹配的签名程序包')
     return result
 
 

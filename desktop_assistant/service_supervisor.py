@@ -66,10 +66,23 @@ def mode_status(manager):
 
 def nightly_loop(manager, stopping, *, system_identity, interval=60, retry_interval=300):
     """One system-session timer; failures do not take down the ERP supervisor."""
-    from desktop_assistant.nightly import run_once
+    from desktop_assistant.nightly import run_once, run_database_snapshot_once, database_backup_health
     from desktop_assistant.mac_system_service import nightly_enabled
     while not stopping.is_set():
         delay = interval
+        database_result = {'status': 'unsupported'}
+        try:
+            capabilities = manager.manifest().get('runtime_capabilities', {})
+            database_enabled = type(capabilities.get('data_recovery_v2')) is int \
+                and capabilities['data_recovery_v2'] == 1
+        except Exception:
+            database_enabled = False
+        if database_enabled:
+            try:
+                database_result = run_database_snapshot_once(manager, admission=nightly_enabled)
+            except Exception:
+                database_result = {'status': 'failed'}
+                delay = retry_interval
         try:
             result = run_once(manager, admission=nightly_enabled, restart_allowed=lambda: not stopping.is_set())
         except Exception:
@@ -80,6 +93,8 @@ def nightly_loop(manager, stopping, *, system_identity, interval=60, retry_inter
         try:
             write_json(manager.root/'control/nightly-status.json', {
                 'status': result['status'], 'at': datetime.now(timezone.utc).isoformat(),
+                'database_status': database_result['status'],
+                'database_backup_health': database_backup_health(manager) if database_enabled else None,
                 'requires_user_login': False, 'system_identity': system_identity,
                 **mode_status(manager)})
         except Exception:

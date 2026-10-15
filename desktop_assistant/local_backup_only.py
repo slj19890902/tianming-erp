@@ -159,7 +159,7 @@ def _retention(manager,keep,context):
                     protected.append({'name':path.name,'reasons':reasons});continue
                 if str(path)==state.get('update_backup'):
                     _closed_update_reference(manager,path,old_sha,context)
-                assert_idle(path)
+                assert_idle(path,allow_unrelated_inaccessible_file=True)
                 old.check();os.unlink(path);require(os.fstat(old.fd).st_nlink==0,'old cipher unlink not confirmed')
                 removed.append(path.name)
             finally:os.close(old.fd)

@@ -1003,6 +1003,7 @@ class Manager:
             prepare_migration(migration_release, self.root / 'shared', candidate['revision'],
                 environment=migration_environment, release_manifest=migration_manifest)
         from desktop_assistant import local_backup_only as local_only
+        local_backup_proof = None
         # This method runs from the already verified candidate runtime. Bind
         # the capability check to that signed manifest: checking the old
         # current package would compare its source hash with the candidate

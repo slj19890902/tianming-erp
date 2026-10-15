@@ -136,7 +136,7 @@ def test_real_cleanup_guard_failure_still_blocks_next_capture(local_case,monkeyp
     stale.write_bytes(b'backup still used by a process');stale.chmod(0o600)
     from desktop_assistant import cleanup
     monkeypatch.setattr(cleanup,'assert_idle',
-        lambda path:(_ for _ in ()).throw(ValueError('目录仍被运行进程引用')) if path==stale else None)
+        lambda path,**_:(_ for _ in ()).throw(ValueError('目录仍被运行进程引用')) if path==stale else None)
     proof=cutover(scene);result=local.finalize_local_update(scene.manager)
     assert result['retention']['status']=='retained'
     assert result['retention']['failures']==[{'name':stale.name,'reason':'目录仍被运行进程引用'}]

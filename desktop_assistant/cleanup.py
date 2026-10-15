@@ -37,26 +37,49 @@ def is_application_process(name: str) -> bool:
             or re.search(r'(^|[^a-z0-9])erp', name) is not None)
 
 
-def assert_idle(root: Path) -> None:
+def assert_idle(root: Path, *, allow_unrelated_inaccessible_file: bool = False) -> None:
     """An inaccessible application process cannot be treated as idle."""
+    root = Path(root)
+    narrow_file = allow_unrelated_inaccessible_file and root.is_file() and not is_link(root)
     prefix = str(root).casefold()
     for proc in psutil.process_iter(['pid', 'name']):
         if proc.pid == os.getpid():
             continue
-        try:
-            values = [proc.exe(), proc.cwd(), *proc.cmdline()]
-            name = (proc.info.get('name') or '').casefold()
-            if is_application_process(name):
+        name = (proc.info.get('name') or '').casefold()
+        application = is_application_process(name)
+        values = []
+        inaccessible = False
+        for read in (proc.exe, proc.cwd, proc.cmdline):
+            try:
+                value = read()
+                values.extend(value if isinstance(value, (list, tuple)) else [value])
+            except psutil.NoSuchProcess:
+                values = []
+                break
+            except psutil.AccessDenied:
+                inaccessible = True
+        if any(prefix in str(value).replace('/', os.sep).casefold() for value in values if value):
+            raise ValueError('目录仍被运行进程引用')
+        if application:
+            if inaccessible and not narrow_file:
+                raise ValueError('无法确认 ERP/测试进程已退出') from None
+            try:
                 values.extend(value for key, value in proc.environ().items()
                               if key.startswith(('ERP_', 'TM_ERP_'))
                               and key.endswith(('_PATH', '_DIR', '_ROOT', '_CONTROL')))
+            except psutil.NoSuchProcess:
+                continue
+            except psutil.AccessDenied:
+                inaccessible = True
             if any(prefix in str(value).replace('/', os.sep).casefold() for value in values if value):
                 raise ValueError('目录仍被运行进程引用')
-        except psutil.NoSuchProcess:
-            continue
-        except psutil.AccessDenied:
-            name = (proc.info.get('name') or '').casefold()
-            if is_application_process(name):
+            # Immutable backup ciphers have already passed ownership, identity,
+            # maintenance-state and active-reference checks. A privileged parent
+            # Python process may hide cwd/argv/env from the service UID while its
+            # executable remains visible. Do not let that unrelated parent make
+            # retention impossible; directory cleanup and wholly opaque processes
+            # keep the original conservative refusal.
+            if inaccessible and not (narrow_file and values):
                 raise ValueError('无法确认 ERP/测试进程已退出') from None
 
 

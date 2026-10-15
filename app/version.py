@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.638"
-APP_VERSION_NAME = "收料自动成品与备份留存闭环"
+APP_VERSION = "v0.22.639"
+APP_VERSION_NAME = "收料自动成品与备份进程门禁修复"
 APP_BUILD_DATE = "2026-10-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6199,3 +6199,15 @@ APP_VERIFICATION_STEPS = [
     "打开订单和送货单常用箱弹窗，核对勾选、数量、编码、信息顺序及左下角导入按钮。",
 ]
 APP_CHANGELOG = [*(f"v0.22.638：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "修复本地备份留存清理在管理员发布驱动等待期间，把可识别且未引用备份文件的受保护Python父进程误判为占用，导致更新无法继续的问题。",
+    "只有已通过所有权、密文身份、维护状态和活动引用核验的单个备份文件可使用窄化判定；真实路径引用、完全不可识别进程、目录清理和未知文件仍保持阻断。",
+    "保留v0.22.638的全部业务改动及eq1015sa迁移；本版不修改正式库存、订单、成本、位置或历史业务事实，也不运行NAS备份。",
+]
+APP_VERIFICATION_STEPS = [
+    "进入系统版本确认正式版本为v0.22.639、数据库revision为eq1015sa，服务健康且没有备份注意提示。",
+    "核对发布凭据显示旧普通本地备份已按守卫收口、受保护迁移来源仍保留，且本次只使用本地完整备份。",
+    "按本任务业务验收步骤抽查分批收料自动成品、盘点子件组套、成品抵扣状态及两个常用箱弹窗。",
+]
+APP_CHANGELOG = [*(f"v0.22.639：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

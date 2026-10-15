@@ -36,6 +36,48 @@ class CleanupProcessIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '仍被运行进程引用'):
                 assert_idle(Path('/synthetic-owned-directory'))
 
+    def test_verified_cipher_allows_visible_unrelated_privileged_parent(self):
+        with self.subTest('hidden parent fields do not poison immutable-file retention'):
+            from tempfile import TemporaryDirectory
+            with TemporaryDirectory() as folder:
+                target = Path(folder) / 'verified.tmbackup'
+                target.write_bytes(b'verified cipher')
+                process = Mock(pid=999999, info={'name': 'Python'})
+                process.exe.return_value = '/usr/bin/python3'
+                process.cwd.side_effect = psutil.AccessDenied(999999)
+                process.cmdline.side_effect = psutil.AccessDenied(999999)
+                process.environ.side_effect = psutil.AccessDenied(999999)
+                with patch('desktop_assistant.cleanup.psutil.process_iter', return_value=[process]):
+                    assert_idle(target, allow_unrelated_inaccessible_file=True)
+
+    def test_verified_cipher_still_blocks_visible_reference(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as folder:
+            target = Path(folder) / 'verified.tmbackup'
+            target.write_bytes(b'verified cipher')
+            process = Mock(pid=999999, info={'name': 'Python'})
+            process.exe.return_value = '/usr/bin/python3'
+            process.cwd.return_value = '/'
+            process.cmdline.return_value = ['/usr/bin/python3', str(target)]
+            process.environ.side_effect = psutil.AccessDenied(999999)
+            with patch('desktop_assistant.cleanup.psutil.process_iter', return_value=[process]):
+                with self.assertRaisesRegex(ValueError, '运行进程'):
+                    assert_idle(target, allow_unrelated_inaccessible_file=True)
+
+    def test_verified_cipher_still_blocks_wholly_opaque_application(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as folder:
+            target = Path(folder) / 'verified.tmbackup'
+            target.write_bytes(b'verified cipher')
+            process = Mock(pid=999999, info={'name': 'Python'})
+            process.exe.side_effect = psutil.AccessDenied(999999)
+            process.cwd.side_effect = psutil.AccessDenied(999999)
+            process.cmdline.side_effect = psutil.AccessDenied(999999)
+            process.environ.side_effect = psutil.AccessDenied(999999)
+            with patch('desktop_assistant.cleanup.psutil.process_iter', return_value=[process]):
+                with self.assertRaisesRegex(ValueError, '无法确认'):
+                    assert_idle(target, allow_unrelated_inaccessible_file=True)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -36,7 +36,10 @@ def _recipe(db,parent_id,jobs):
         plan=snapshot.get('frozen_bom_plan')
         if plan and plan.get('parent_product_id')==parent_id:
             plans.append((plan,snapshot.get('bom_parent_basis')))
-    if plans:
+    if plans and not (parent_profile and parent_profile.source == 'assembled'):
+        # Explicit current stock assembly uses today's validated master recipe;
+        # an old replenishment job is provenance, not a hidden recipe selector.
+        # Frozen order assembly and legacy-only contracts keep their own path.
         # Select one physical recipe from live output candidates. Historical
         # versions do not block a newer batch; each preview stays on one recipe.
         selected_identity=_plan_identity(plans[-1][0])
@@ -118,13 +121,23 @@ def assembly_outputs(db, *, product_id, customer_id, expected_basis):
     return sorted({lot.id:lot for lot in rows}.values(), key=lambda lot:(str(lot.stock_date or ''),lot.id))
 
 
-def preview(db,parent_id,sets):
+def preview(db,parent_id,sets,*,_dedicated_only=False):
     parent=db.get(Product,parent_id)
     if not parent:
         prep.fail('组合产品不存在')
     from app.models.shared_finished_stock import SharedBomMember
-    if db.get(SharedBomMember,parent_id):
-        return shared_preview(db,parent,sets)
+    if not _dedicated_only and db.get(SharedBomMember,parent_id):
+        # A shared-stock declaration adds optional sources. It must not force
+        # an extra confirmation before consuming this customer's exact SKU.
+        dedicated=preview(db,parent_id,sets,_dedicated_only=True)
+        if dedicated['available_sets'] >= sets:
+            return dedicated
+        try:
+            shared=shared_preview(db,parent,sets)
+        except prep.WarehouseInventoryError as error:
+            dedicated['shared_stock_notice']=str(error)
+            return dedicated
+        return shared if shared['available_sets'] >= dedicated['available_sets'] else dedicated
     jobs=[]
     from app.services.processed_component_stock import available_outputs
     eligible={}
@@ -297,7 +310,7 @@ def assemble_stock(db,payload,actor):
     from app.services.bom_entry_cost import freeze_consumed_assembly_spec
     try:
         consumed_spec=freeze_consumed_assembly_spec(db,parent_basis=basis,output_quantity=payload['sets'],
-            sources=[(db.get(InventoryLot,r['lot_id']),r['quantity'],r['product_id']) for r in inputs])
+            sources=[(db.get(InventoryLot,r['lot_id']),r['quantity'],r['product_id'],r.get('shared_bom')) for r in inputs])
     except ValueError as error:
         prep.fail(str(error))
     output=prep.manual_finished_in(db,customer_id=recipe['customer_id'],product_id=recipe['parent_id'],
@@ -340,14 +353,16 @@ def shared_preview(db,parent,sets):
     for child in recipe['children']:
         pid=child['product_id'];expected=bases[pid]
         valid=[]
-        for lot in available_outputs(db,product_id=pid,customer_id=parent.customer_id,expected_basis=expected):
-            if lot.source_ref_type!='stock_preparation':continue
-            job=db.get(Job,lot.source_ref_id)
-            if not job or job.status!='completed':continue
-            snapshot=json.loads(job.product_snapshot)
-            identity=bom.lot_product(db,lot)
-            if (not identity or identity[0]!=job.product_id
-                    or not matches_stock_identity(identity[2],snapshot.get('physical_basis'))):continue
+        for lot in assembly_outputs(db,product_id=pid,customer_id=parent.customer_id,expected_basis=expected):
+            job=db.get(Job,lot.source_ref_id) if lot.source_ref_type=='stock_preparation' else None
+            if job:
+                if job.status!='completed':continue
+                snapshot=json.loads(job.product_snapshot)
+                identity=bom.lot_product(db,lot)
+                if (not identity or identity[0]!=job.product_id
+                        or not matches_stock_identity(identity[2],snapshot.get('physical_basis'))):continue
+            elif not lot.finished_detail or lot.finished_detail.product_id!=pid:
+                continue
             valid.append((job,lot))
         available=sum(l.quantity_available for _,l in valid)
         availability[pid]=available;capacities.append(available//child['per_set'])
@@ -356,10 +371,10 @@ def shared_preview(db,parent,sets):
         for job,lot in valid:
             take=min(remaining,lot.quantity_available)
             if take<=0:break
-            sources.append(dict(job_id=job.id,job_version=job.version,output_version=lot.version,
-                lot_version=prep.source(db,job.receipt_item_id)[2].version,lot_id=lot.id,
+            sources.append(dict(job_id=job.id if job else None,job_version=job.version if job else 0,output_version=lot.version,
+                lot_version=prep.source(db,job.receipt_item_id)[2].version if job else lot.version,lot_id=lot.id,
                 product_id=pid,product_code=child['code'],product_name=child['name'],unit=child['unit'],
-                target_basis=expected,shared_stock=job.product_id!=pid,quantity=take,
+                target_basis=expected,shared_stock=(job.product_id if job else lot.finished_detail.product_id)!=pid,quantity=take,
                 available=lot.quantity_available,location=prep.location_name(db,lot)))
             remaining-=take
     result=dict(recipe=recipe,parent_product_id=parent.id,sets=sets,sources=sources,

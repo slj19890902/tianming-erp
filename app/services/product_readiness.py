@@ -135,7 +135,7 @@ def _order_save_missing(product: object, missing: list[tuple[str, str]], profile
     return [label for field, label in missing if field in required]
 
 
-def product_readiness(product: object, *, bom_profiles: dict | None = None) -> dict[str, object]:
+def _master_field_readiness(product: object, *, bom_profiles: dict | None = None) -> dict[str, object]:
     """Return a display-only readiness result for a common-box master record.
 
     This deliberately ignores ``manual_modified``: edit history is not proof that
@@ -159,7 +159,7 @@ def product_readiness(product: object, *, bom_profiles: dict | None = None) -> d
 
     profile = _bom_profile(product, bom_profiles)
     if profile is not None and profile.source == "assembled":
-        if not bool(_value(product, "is_composite")) or profile.delivery_mode != "parent":
+        if not bool(_value(product, "is_composite")) or profile.delivery_mode == "components":
             missing.append(("bom_components", "纯组套父件的有效 BOM 配方尚未保存"))
         if not str(_value(product, "unit") or "").strip():
             missing.append(("unit", "成品单位未填写"))
@@ -289,6 +289,57 @@ def product_readiness(product: object, *, bom_profiles: dict | None = None) -> d
         "missing_fields": fields,
         "missing_labels": labels,
     }
+
+
+def product_readiness(product: object, *, bom_profiles: dict | None = None) -> dict[str, object]:
+    """BOM readiness includes its real editable graph and entry reference data.
+
+    Availability/reservations and historical lot identity remain transaction
+    facts; they must not masquerade as missing product master fields.
+    """
+    result = _master_field_readiness(product, bom_profiles=bom_profiles)
+    profile = _bom_profile(product, bom_profiles)
+    if profile is None or not _value(product, 'is_composite'):
+        return result
+    from sqlalchemy.orm import object_session
+    from sqlalchemy import inspect
+    db = object_session(product) if inspect(product, raiseerr=False) is not None else None
+    if db is None:
+        return result
+    issues = [_issue(field, label, label, 'product_master',
+        repair_page='/?page=products', product=product)
+        for field, label in zip(result['missing_fields'], result['missing_labels'])]
+    from app.services.multilevel_bom_master import load_master_structure
+    try:
+        structure = load_master_structure(db, product.id)
+    except ValueError as error:
+        issues.append(_issue('bom_components', 'BOM关系', str(error), 'bom_master',
+            repair_page='/?page=products', product=product))
+    else:
+        for pid, child in structure['products'].items():
+            if pid == product.id:
+                continue
+            child_result = _master_field_readiness(child)
+            for field, label in zip(child_result['missing_fields'],child_result['missing_labels']):
+                issues.append(_issue(field, f'子件 {child.product_code}：{label}',
+                    label, 'product_master', repair_page='/?page=products', product=child))
+        if profile.source == 'assembled':
+            from app.services.bom_entry_cost import assembled_entry_cost
+            cost = assembled_entry_cost(db, product, for_entry=True)
+            for reason in cost.missing:
+                target = next((p for p in structure['products'].values()
+                    if str(reason).startswith(str(p.product_code)+' · ')), product)
+                field = ('material_id' if any(word in reason for word in ('材质','报价','价格','计价','税率')) else 'unit' if '单位' in reason
+                         else 'sheet_cutting_settings' if '开料' in reason or '出数' in reason else 'bom_components')
+                issues.append(_issue(field, str(reason), str(reason), 'bom_entry_reference',
+                    repair_page='/?page=products', product=target))
+    unique = {(issue['product_id'],issue['field'],issue['reason']):issue for issue in issues}
+    issues = list(unique.values())
+    return {**result, 'ready': not issues,
+        'status': '资料完整' if not issues else '资料待完善',
+        'readiness_scope': 'bom_product_operations', 'issues':issues,
+        'missing_fields':[issue['field'] for issue in issues],
+        'missing_labels':[issue['label']+('：'+str(issue['reason']) if issue['label']!=issue['reason'] else '') for issue in issues]}
 
 
 def material_code_token(value: str | None) -> str:

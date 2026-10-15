@@ -6895,6 +6895,15 @@
             <div v-else-if="modal.type === 'product'">
               <div v-if="productForm.id && !canEditProducts" class="notice readonly-hint">当前为只读查看；常用箱资料控件已禁用。</div>
               <fieldset class="product-edit-grid product-compact-editor" :class="'readonly-fieldset'" :disabled="!!productForm.id && !canEditProducts">
+              <div v-if="productForm.readiness && !productForm.readiness.ready" class="notice product-readiness-repair" style="grid-column:1/-1">
+                <strong>待完善资料（保存后自动重新核对）</strong>
+                <div v-for="(issue,index) in (productForm.readiness.issues || [])" :key="index">
+                  {{ issue.product_code || productForm.product_code }} · {{ issue.reason || issue.label }}
+                  <button v-if="issue.product_id && issue.product_id!==productForm.id" type="button" class="btn small" @click="openBomChildEditor({component_product_id:issue.product_id})">修改该子件</button>
+                  <button v-else-if="issue.field==='bom_components'" type="button" class="btn small" @click="focusProductBomEditor">修改BOM</button>
+                </div>
+                <div v-if="!(productForm.readiness.issues || []).length">{{ (productForm.readiness.missing_labels || []).join('；') }}</div>
+              </div>
               <div class="product-form-row product-core-row">
                 <div class="field"><label>客户</label><search-select v-model="productForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户" @change="onProductExternalCustomerChange"></search-select></div>
                 <div class="field"><label>存货编码</label><input class="input" v-model.trim="productForm.product_code" /></div>
@@ -7258,6 +7267,7 @@
                     <label class="process-option"><input type="checkbox" value="打钉" v-model="productForm._production_processes" @change="onProductProcessesChanged" />打钉</label>
                     <label class="process-option"><input type="checkbox" value="无需结合" v-model="productForm._production_processes" @change="onProductProcessesChanged" />无需结合</label>
                     <label class="process-option"><input type="checkbox" value="模切" v-model="productForm._production_processes" @change="onProductProcessesChanged" />模切</label>
+                    <label class="process-option"><input type="checkbox" value="二次粘合" v-model="productForm._production_processes" @change="onProductProcessesChanged" />二次粘合</label>
                   </div>
                 </div>
                 <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field product-mold-adjacent"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具标签名称、客户或位置" :allow-empty="false" @search="searchMoldTools"></search-select><div class="sheet-cutting-inputs"><label v-for="part in productSheetCuttingParts()" :key="part.key">{{ part.label }}几模 <input class="input" type="number" min="1" step="1" v-model.number="part.value.mold_count" /></label></div><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
@@ -13982,7 +13992,7 @@
           },
           commonBoxReadinessTitle(source) {
             const readiness = this.commonBoxReadiness(source);
-            return readiness.ready ? "报料资料完整（不代表盘点或其他入库已通过预检）" : (`报料资料待完善：${readiness.missing_fields.join("、") || "后端未返回完整性缺项"}`);
+            return readiness.ready ? "资料完善；正常入库与组套依据由系统自动生成，操作时核对实际数量、预占和位置" : (`资料待完善：${readiness.missing_fields.join("、") || "后端未返回完整性缺项"}`);
           },
           pdfDraftColumnCount(draft) {
             return this.canViewSalesAmounts ? 10 : 8;
@@ -29033,7 +29043,12 @@
                   });
                   this.bomEditor.componentOptions = this.bomEditor.componentOptions.filter(row => Number(row.id)!==productId);
                   this.bomEditor.componentOptions.push(this.bomComponentOption(data));
-                  this.showToast("子件已保存，上级未保存内容已保留");
+                  const parentId=Number(this.productForm.id);
+                  if (parentId) {
+                    const parentResult=await axios.get(`/api/master/products/${parentId}`);
+                    if (Number(this.productForm.id)===parentId) this.productForm.readiness=parentResult.data.readiness;
+                  }
+                  this.showToast("子件已保存，上级未保存内容已保留，资料状态已重新核对");
                 } catch (error) {
                   this.showToast(`子件已保存，名称刷新失败：${this.errorMessage(error)}`,true);
                 }
@@ -29733,7 +29748,7 @@
           },
           parseProductionProcesses(value) {
             const joining = ["粘贴", "打钉", "无需结合"];
-            const allowed = [...joining, "模切"];
+            const allowed = [...joining, "模切", "二次粘合"];
             const aliases = {
               "粘合":"粘贴", "粘箱":"粘贴", "糊箱":"粘贴", "糊盒":"粘贴",
               "钉箱":"打钉", "打钉箱":"打钉", "钉合":"打钉",
@@ -29742,21 +29757,21 @@
             const values = String(value || "").split(/[，、,]/).map(item => item.trim()).filter(Boolean);
             const normalized = values.map(item => aliases[item] || item).filter(item => allowed.includes(item));
             const selectedJoining = normalized.find(item => joining.includes(item)) || "无需结合";
-            return [selectedJoining, ...(normalized.includes("模切") ? ["模切"] : [])];
+            return [selectedJoining, ...(normalized.includes("模切") ? ["模切"] : []), ...(normalized.includes("二次粘合") ? ["二次粘合"] : [])];
           },
           unmanagedProductionProcesses(value) {
             const managed = new Set([
               "粘贴", "粘合", "粘箱", "糊箱", "糊盒",
               "打钉", "钉箱", "打钉箱", "钉合",
-              "无需结合", "无需", "不需结合", "不需要结合", "其他", "模切"
+              "无需结合", "无需", "不需结合", "不需要结合", "其他", "模切", "二次粘合"
             ]);
             return [...new Set(String(value || "").split(/[，、,]/).map(item => item.trim()).filter(item => item && !managed.has(item)))];
           },
           serializeProductionProcesses(values, legacyValue="") {
             const joining = ["粘贴", "打钉", "无需结合"];
             const selected = (values || []).find(item => joining.includes(item)) || "无需结合";
-            const managed = [selected, ...((values || []).includes("模切") ? ["模切"] : [])];
-            const legacy = String(legacyValue || "").split(/[，、,]/).map(item => item.trim()).filter(Boolean);
+            const managed = [selected, ...((values || []).includes("模切") ? ["模切"] : []), ...((values || []).includes("二次粘合") ? ["二次粘合"] : [])];
+            const legacy = String(legacyValue || "").split(/[，、,]/).map(item => item.trim()).filter(item => item && item !== "二次粘合");
             return [...new Set([...managed, ...legacy])].join(",");
           },
           productUsesMold(form) {
@@ -30024,6 +30039,14 @@
             if (selected.length > 1) {
               const keep = joining.includes(changed) && checked ? changed : selected[0];
               values = values.filter(value => !joining.includes(value) || value === keep);
+            }
+            if (changed === "二次粘合" && checked) {
+              this.productForm.box_style="模切内盒";
+              this.productForm.box_category="die_cut";
+              this.productForm._joining_choice_manual=true;
+              values=values.filter(value=>!joining.includes(value)).concat("粘贴","模切","二次粘合");
+            } else if (!values.includes("粘贴") || !values.includes("模切")) {
+              values=values.filter(value=>value!=="二次粘合");
             }
             this.productForm._production_processes = [...new Set(values)];
             this.syncProductSheetCuttingSettings();
@@ -32465,7 +32488,13 @@
               this.productExternalSupplyOptions = [];
             }
             if (this.productBoxStyleOptions.includes(selected)) {
-              this.productForm.box_category = selected === "异形箱" ? "die_cut" : "normal";
+              this.productForm.box_category = ["异形箱","模切内盒"].includes(selected) ? "die_cut" : "normal";
+            }
+            if (selected !== "模切内盒") {
+              const hadSecondary=(this.productForm._production_processes || []).includes("二次粘合");
+              this.productForm._production_processes=(this.productForm._production_processes || []).filter(value=>value!=="二次粘合");
+              this.productForm._production_process_legacy=String(this.productForm._production_process_legacy || "").split(/[,，、]/).map(value=>value.trim()).filter(value=>value && value!=="二次粘合").join(",");
+              if (hadSecondary) this.showToast("已取消不适用于当前箱型的二次粘合，保存后生效");
             }
             const supportedCreaseTypes = this.productSupportedCreaseTypes(selected);
             if (this.productForm.crease_type && !supportedCreaseTypes.includes(this.productForm.crease_type)) {

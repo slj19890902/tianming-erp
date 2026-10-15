@@ -778,7 +778,16 @@ def _preflight_add(
     if item.inventory_type == "finished":
         from app.services.finished_stock_identity import product_basis
         from app.services.product_readiness import inventory_entry_issues
-        basis_json = product_basis(product)
+        try:
+            basis_json = product_basis(product)
+        except ValueError as error:
+            issue = dict(field='bom_components',label='BOM关系',reason=str(error),source='bom_master',
+                repairable=True,repair_page='/?page=products',repair_field='bom_components',
+                product_id=product.id,product_code=product.product_code,product_name=product.product_name)
+            message = f'{product.product_code}：{error}'
+            raise WarehouseStocktakeBatchError(message,422,detail=dict(
+                code='INVENTORY_ENTRY_INCOMPLETE',message=message,product_id=product.id,
+                missing=[str(error)],issues=[issue],repair_url='/?page=products',retry_action='refresh_preflight')) from error
         try:
             basis = json.loads(basis_json)
         except (TypeError, ValueError):
@@ -799,8 +808,13 @@ def _preflight_add(
         issues = inventory_entry_issues(product, inventory_type="finished", basis=basis,
                                         has_legal_frozen_spec=legal_assembly)
         if issues and assembly_cost_missing:
-            issues[0] = {**issues[0], "label":"组套配方/成本依据：" + "；".join(assembly_cost_missing),
-                         "reason":"；".join(assembly_cost_missing)}
+            from app.services.product_readiness import product_readiness
+            repair_issues = product_readiness(product).get('issues', [])
+            issues = repair_issues or [{**issues[0],
+                'field':'bom_components','repair_field':'bom_components',
+                'label':'组套配方/成本依据：'+'；'.join(assembly_cost_missing),
+                'reason':'；'.join(assembly_cost_missing),
+                'repairable':True,'repair_page':'/?page=products'}]
         if issues:
             repairable = [issue for issue in issues if issue.get("repairable")]
             message = (

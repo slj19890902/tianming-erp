@@ -39,49 +39,68 @@ def assembly_standard(db, product_id):
 
 
 def assembled_entry_cost(db, product, *, for_entry=False):
-    from app.models.order import OrderItem
+    from types import SimpleNamespace
+    from sqlalchemy import select
+    from app.models.product_bom import ProductBomComponent
     from app.models.product import Product
-    from app.services.multilevel_bom_compile import compile_master_order_bom
+    from app.services.multilevel_bom_master import load_master_structure
+    from app.services.sheet_cutting_settings import component_settings
     from app.services.inventory_valuation import CostResolution, CONFIRMED_SOURCE, resolve_product_cost
     from app.services.inventory_cost_snapshot import InventoryCostEstimate
     from app.services.bom_physical_quantities import resolve_bom_sheet_yield
 
     try:
-        compiled = compile_master_order_bom(db, OrderItem(id=0, order_id=0,
-            product_id=product.id, quantity=1, unit_price=0, subtotal=0))
-        nodes = {n.product_id:n for n in compiled.graph.nodes}
-        snapshots = {s.component_product_id:s for s in compiled.snapshots}
+        # This values physical stock already present. A production compiler's
+        # mold-registration gate is not evidence of that stock's dimensions or
+        # material cost. Keep the real graph, sheet yield and current quote
+        # checks, without requiring employees to plan a new production run.
+        structure = load_master_structure(db, product.id)
+        profiles = structure['profiles']
+        edges = structure['edges']
+        relations = {row.id:row for row in db.scalars(select(ProductBomComponent).where(
+            ProductBomComponent.id.in_([edge['bom_component_id'] for edge in edges])))}
         cache = {}
 
         def visit(pid):
             if pid in cache:
                 return cache[pid]
-            node = nodes[pid]
-            children = [e for e in compiled.graph.edges if e.parent_id == pid and e.relation == 'assembly']
-            material, labour, parts = Decimal(0), Decimal(0), []
             master = db.get(Product, pid)
-            if node.source != 'assembled':
-                output = resolve_bom_sheet_yield(snapshots[pid], strict=True)
+            source = profiles.get(pid, 'purchased' if master.supply_mode == 'external_purchase' else 'manufactured')
+            children = [e for e in edges if e['parent_id'] == pid and e['relation'] == 'assembly']
+            material, labour, parts = Decimal(0), Decimal(0), []
+            if source != 'assembled':
+                incoming = [relations[e['bom_component_id']] for e in edges if e['child_id'] == pid]
+                limits = {(row.mold_max_yield_per_sheet, row.spare_sheet_quantity) for row in incoming}
+                if len(limits) > 1:
+                    raise ValueError(f'{master.product_code}：BOM开料出数配置不一致，请核对常用箱配方')
+                settings = component_settings(master.sheet_cutting_settings)
+                snapshot = SimpleNamespace(
+                    mold_max_yield_per_sheet=incoming[0].mold_max_yield_per_sheet if incoming else None,
+                    is_die_cut=settings.is_die_cut if settings else master.box_category == 'die_cut',
+                    sheet_cutting_settings_snapshot=master.sheet_cutting_settings,
+                    snapshot_component_box_style=master.box_style,
+                    snapshot_component_default_cutting_mode=master.default_cutting_mode)
+                output = resolve_bom_sheet_yield(snapshot, strict=True)
                 result = resolve_product_cost(db, master, main_only=True,
                     physical_yield=output.yield_per_sheet, assembled_body_only=True, for_entry=for_entry)
                 if not result.estimate:
-                    raise ValueError(f'{master.product_name}：' + '；'.join(result.missing))
+                    raise ValueError(f'{master.product_code} · {master.product_name}：' + '；'.join(result.missing))
                 material += result.estimate.unit_cost
                 parts.append(dict(product_id=pid, quantity_per_set='1', unit_cost=str(material),
                     evidence=result.estimate.detail))
-            if node.source == 'assembled' and not children:
+            if source == 'assembled' and not children:
                 raise ValueError(f'{master.product_name}：缺少组装消耗子件')
             for edge in children:
-                cm, cl, evidence = visit(edge.child_id)
-                quantity = Decimal(str(edge.quantity))
+                cm, cl, evidence = visit(edge['child_id'])
+                quantity = Decimal(str(edge['quantity']))
                 material += cm * quantity
                 labour += cl * quantity
-                parts.append(dict(product_id=edge.child_id, quantity_per_set=str(quantity),
+                parts.append(dict(product_id=edge['child_id'], quantity_per_set=str(quantity),
                     unit_cost=str(cm), standard_labour_unit_cost=str(cl), evidence=evidence))
             own = assembly_standard(db, pid) if children else None
             if own:
                 labour += Decimal(own['unit_cost'])
-            evidence = dict(product_id=pid, product_version=node.version, source=node.source,
+            evidence = dict(product_id=pid, product_version=master.version, source=source,
                 components=parts, assembly_standard=own, standard_labour_unit_cost=str(labour))
             cache[pid] = material, labour, evidence
             return cache[pid]

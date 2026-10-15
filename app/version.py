@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.642"
-APP_VERSION_NAME = "标签预览、精简订单与成品子件组套"
-APP_BUILD_DATE = "2026-10-15"
+APP_VERSION = "v0.22.643"
+APP_VERSION_NAME = "BOM盘点组套与二次粘合修复"
+APP_BUILD_DATE = "2026-10-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -6253,3 +6253,19 @@ APP_VERIFICATION_STEPS = [
     "000120按真实业务核对父件盘点和子件组套；未确认历史批次保持提示，不重复盘点或收料。",
 ]
 APP_CHANGELOG = [*(f"v0.22.642：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.643：现存成品盘点、当前配方组套及工艺编辑修复，无结构迁移。
+APP_CHANGES = [
+    "现存BOM成品盘点使用实际配方、开料出数和成本，不再误要求重新安排生产模具。",
+    "同客户自有子件可直接组套；当前配方生成的成品不再继承旧补库任务身份。",
+    "BOM待完善明确指向具体子件与字段，可在原编辑入口修改，保留上级草稿。",
+    "常用箱二次粘合可以取消；修改箱型同步移除不适用工艺，一次保存。",
+    "历史批次缺依据、停用子件和实际缺料仍逐项核对，不改既有库存或历史事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "按真实业务分别盘点000120合格子件并手动组套，核对数量与成品位置，旧160只仍单列。",
+    "常用箱取消二次粘合或修改适用箱型后保存，重开确认工艺没有写回。",
+    "查看000222停用格挡提示及BOM编辑入口；仅按真实产品关系维护。",
+]
+APP_CHANGELOG = [*(f"v0.22.643：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -9175,7 +9175,7 @@ def update_order_item(
                 ) from error
     material_changed = bool(item.product_id and material_reference_changed)
     effective_sync_product = bool(
-        item.product_id and (payload.sync_product or material_changed)
+        item.product_id and payload.sync_product
     )
     current_product = db.get(Product, item.product_id) if item.product_id else None
     requested_box_code = box_type_code(payload.box_style)

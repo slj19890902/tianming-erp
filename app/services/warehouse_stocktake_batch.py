@@ -783,7 +783,24 @@ def _preflight_add(
             basis = json.loads(basis_json)
         except (TypeError, ValueError):
             basis = {}
-        issues = inventory_entry_issues(product, inventory_type="finished", basis=basis)
+        # Stocktake records an already assembled physical parent. Validate the
+        # same frozen recipe/reference-cost evidence that commit will freeze;
+        # this does not manufacture a child-consumption transaction.
+        from app.models.multilevel_bom import ProductBomProfile
+        profile = db.get(ProductBomProfile, product.id)
+        legal_assembly = False
+        assembly_cost_missing = []
+        if profile is not None and profile.source == "assembled" and profile.delivery_mode == "parent":
+            from app.services.bom_entry_cost import assembled_entry_cost
+            from app.core.inventory_entry_guard import _assembled_specifications
+            cost = assembled_entry_cost(db, product, for_entry=True)
+            assembly_cost_missing = cost.missing
+            legal_assembly = bool(cost.estimate and _assembled_specifications(cost.estimate.detail, basis))
+        issues = inventory_entry_issues(product, inventory_type="finished", basis=basis,
+                                        has_legal_frozen_spec=legal_assembly)
+        if issues and assembly_cost_missing:
+            issues[0] = {**issues[0], "label":"组套配方/成本依据：" + "；".join(assembly_cost_missing),
+                         "reason":"；".join(assembly_cost_missing)}
         if issues:
             repairable = [issue for issue in issues if issue.get("repairable")]
             message = (

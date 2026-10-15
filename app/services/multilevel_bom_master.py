@@ -24,9 +24,14 @@ def load_master_structure(db, root_product_id):
         found = {p.id: p for p in db.scalars(select(Product).where(Product.id.in_(batch)))}
         for pid in batch:
             product = found.get(pid)
-            if (product is None or product.customer_id != root.customer_id or not product.is_active
-                    or product.deleted_at is not None or product.purged_at is not None):
-                raise BomPlanError("BOM包含失效产品或跨客户关系")
+            if product is None:
+                raise BomPlanError(f"BOM引用的产品 #{pid} 不存在，请维护父件配方")
+            if product.customer_id != root.customer_id:
+                # Do not expose another customer's product metadata in an error.
+                raise BomPlanError(f"BOM子件 #{pid} 与父件不属于同一客户，请维护父件配方")
+            if not product.is_active or product.deleted_at is not None or product.purged_at is not None:
+                state = "已清理" if product.purged_at else "已删除" if product.deleted_at else "已停用"
+                raise BomPlanError(f"BOM产品 {product.product_code} · {product.product_name}（#{pid}）{state}，请维护父件配方")
         products.update(found)
         profiles.update({p.product_id: p.source for p in db.scalars(
             select(ProductBomProfile).where(ProductBomProfile.product_id.in_(batch)))})

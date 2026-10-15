@@ -179,6 +179,14 @@ def process_creation_token(pid: int) -> str | None:
 
     if pid <= 0:
         return None
+    if sys.platform == "darwin":
+        import psutil
+        try:
+            return f"darwin:{psutil.Process(pid).create_time():.6f}"
+        except psutil.NoSuchProcess:
+            return None
+        except psutil.AccessDenied as error:
+            raise UatIsolationError(f"Cannot read process identity for PID {pid}") from error
     if os.name != "nt":
         proc_stat = Path(f"/proc/{pid}/stat")
         try:

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.641"
-APP_VERSION_NAME = "自动组套、默认货位与待采购库存抵扣"
+APP_VERSION = "v0.22.642"
+APP_VERSION_NAME = "标签预览、精简订单与成品子件组套"
 APP_BUILD_DATE = "2026-10-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6239,3 +6239,17 @@ APP_VERIFICATION_STEPS = [
     "正常盘点子件组套或归位后，核对实际位置及常用箱默认位置一致；本轮既有组套和标签修复继续有效。",
 ]
 APP_CHANGELOG = [*(f"v0.22.641：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.642：同一用户业务闭环，结构不迁移，历史实物不猜填。
+APP_CHANGES = [
+    "修复实收标签预览新窗口被原页核验/确认关闭；直接进入可重试的标签预览。",
+    "补齐BOM父件盘点预检依据及成品型子件组套；缺件、历史身份及停用关系逐项显示。",
+    "客户/存货编码搜索保持已选内容，实际换客户才确认；订单明细按产品类型精简。",
+    "新订单头部两行，回单交代底部折叠；常用箱导入固定操作、可用库存、单行无横滑。",
+]
+APP_VERIFICATION_STEPS = [
+    "实收记录选择研光80010631，打开标签预览并按正常业务打印，核对167张、末张20只。",
+    "新订单检查客户搜索、导入后重新选码、两行头部和可用库存；外购与虚拟父件无无关字段。",
+    "000120按真实业务核对父件盘点和子件组套；未确认历史批次保持提示，不重复盘点或收料。",
+]
+APP_CHANGELOG = [*(f"v0.22.642：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

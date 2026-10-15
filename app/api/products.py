@@ -75,7 +75,7 @@ from app.services.product_lifecycle import (
     has_historical_references,
 )
 from app.services.report_crease import crease_width_error
-from app.services.product_readiness import product_readiness
+from app.services.product_readiness import product_readiness, _bom_profile
 from app.services.production_label_strategy import (
     ProductionLabelStrategyError,
     normalize_production_label_strategy,
@@ -1511,6 +1511,7 @@ def _response(product: Product, user: User, *, bom_profiles: dict | None = None)
         "version": product.version,
         "is_composite": bool(getattr(product, "is_composite", False)),
         "order_parent_inventory_eligible": parent_inventory_eligible(product, profiles=bom_profiles),
+        "bom_inventory_mode": getattr(_bom_profile(product, bom_profiles), "source", None),
         "is_virtual_composite_parent": bool(
             getattr(product, "is_virtual_composite_parent", False)
         ),
@@ -1619,6 +1620,7 @@ def _summary_response(product: Product, user: User, *, bom_profiles: dict | None
         "is_active": product.is_active,
         "is_composite": bool(getattr(product, "is_composite", False)),
         "order_parent_inventory_eligible": parent_inventory_eligible(product, profiles=bom_profiles),
+        "bom_inventory_mode": getattr(_bom_profile(product, bom_profiles), "source", None),
         "is_virtual_composite_parent": bool(
             getattr(product, "is_virtual_composite_parent", False)
         ),
@@ -2051,6 +2053,7 @@ def list_products(
     spec: str = "",
     material: str = "",
     include_inactive: bool = False,
+    include_inventory: bool = False,
     response_mode: Literal["full", "summary"] = Query(default="full"),
     selection_context: Literal["master_data", "order"] = Query(
         default="master_data"
@@ -2175,15 +2178,32 @@ def list_products(
     ).all()
     items = [product for product, _profile in rows]
     bom_profiles = {product.id: profile for product, profile in rows}
+    inventory = {}
+    inventory_errors = {}
+    if include_inventory and has_permission(user, "warehouse.view"):
+        from app.services.warehouse_inventory import finished_inventory_candidates_for_product
+        from app.services.finished_stock_identity import product_basis, matches_component_stock_identity
+        from app.services.shared_finished_stock import match
+        for product in items:
+            try:
+                expected = product_basis(product)
+                candidates = finished_inventory_candidates_for_product(db, customer_id=product.customer_id, product_id=product.id)
+                inventory[product.id] = sum(lot.quantity_available for lot in candidates
+                    if lot.location and lot.location.is_active
+                    and (matches_component_stock_identity(lot, expected)
+                         or match(db, lot, product_id=product.id, customer_id=product.customer_id, expected_basis=expected)))
+            except ValueError as error:
+                inventory_errors[product.id] = str(error)
     return {
         "total": total,
         "page": page,
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size if total else 0,
         "items": [
-            _summary_response(item, user, bom_profiles=bom_profiles)
-            if is_summary
-            else _response(item, user, bom_profiles=bom_profiles)
+            {**(_summary_response(item, user, bom_profiles=bom_profiles)
+                if is_summary else _response(item, user, bom_profiles=bom_profiles)),
+             **({"available_finished_quantity": inventory[item.id]} if item.id in inventory else {}),
+             **({"inventory_error": inventory_errors[item.id]} if item.id in inventory_errors else {})}
             for item in items
         ],
     }

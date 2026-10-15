@@ -86,6 +86,38 @@ def _recipe(db,parent_id,jobs):
         version=parent.version,children=children,parent_basis=product_basis(parent),frozen_plan_hash=None)
 
 
+def _finished_output_matches(db, lot, *, product_id, customer_id, expected_basis):
+    from app.services.finished_stock_identity import matches_component_stock_identity
+    from app.services.bom_inventory_contract import is_body_lot
+    from app.services.fixed_shelf_staging import staging_owner
+    from app.services.bom_subkits import active_subkit_order
+    from app.models.warehouse_inventory import WarehouseLocation
+    detail = lot.finished_detail
+    location = db.get(WarehouseLocation, lot.warehouse_location_id)
+    return bool(lot.inventory_type == 'finished' and detail and not detail.is_general
+        and detail.product_id == product_id and detail.owner_customer_id == customer_id
+        and lot.status == 'active' and lot.quantity_available > 0 and not is_body_lot(lot)
+        and location and location.is_active
+        and (location.source_version != 'V11' or location.warehouse_floor == 3)
+        and staging_owner(db, lot.id) is None and active_subkit_order(db, lot) is None
+        and expected_basis and matches_component_stock_identity(lot, expected_basis))
+
+
+def assembly_outputs(db, *, product_id, customer_id, expected_basis):
+    """One free-component contract for listing, preview and actual consumption."""
+    from app.services.processed_component_stock import available_outputs
+    from app.models.warehouse_inventory import FinishedGoodsInventoryDetail
+    finished = db.scalars(select(InventoryLot).join(FinishedGoodsInventoryDetail).where(
+        FinishedGoodsInventoryDetail.product_id == product_id,
+        FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
+        InventoryLot.inventory_type == 'finished', InventoryLot.status == 'active',
+        InventoryLot.quantity_available > 0).order_by(InventoryLot.stock_date, InventoryLot.id)).all()
+    rows = available_outputs(db, product_id=product_id, customer_id=customer_id, expected_basis=expected_basis)
+    rows += [lot for lot in finished if _finished_output_matches(db, lot,
+        product_id=product_id, customer_id=customer_id, expected_basis=expected_basis)]
+    return sorted({lot.id:lot for lot in rows}.values(), key=lambda lot:(str(lot.stock_date or ''),lot.id))
+
+
 def preview(db,parent_id,sets):
     parent=db.get(Product,parent_id)
     if not parent:
@@ -138,7 +170,7 @@ def preview(db,parent_id,sets):
         basis_by_product[pid]=expected
         # Qualification is inventory-first.  A completed replenishment job is
         # retained as provenance when present, but is no longer a prerequisite.
-        for lot in available_outputs(db,product_id=pid,customer_id=parent.customer_id,expected_basis=expected):
+        for lot in assembly_outputs(db,product_id=pid,customer_id=parent.customer_id,expected_basis=expected):
             job=(jobs_by_id.get(lot.source_ref_id) if lot.source_ref_type=='stock_preparation' else None)
             by_product[pid].append((job,lot,expected))
     # Do not hide a known child lot merely because its identity is incomplete.
@@ -147,24 +179,44 @@ def preview(db,parent_id,sets):
     from app.services.warehouse_goods import goods_profile
     known_lots=db.scalars(select(InventoryLot).outerjoin(WarehouseGoodsProfile,
         WarehouseGoodsProfile.lot_id==InventoryLot.id).where(
-        InventoryLot.inventory_type=='semi_finished',InventoryLot.status=='active',
+        InventoryLot.inventory_type.in_(['semi_finished','finished']),InventoryLot.status=='active',
         InventoryLot.quantity_available>0).order_by(InventoryLot.id)).all()
     eligible_ids={lot.id for rows in by_product.values() for _job,lot,_basis in rows}
     for lot in known_lots:
         if lot.id in eligible_ids:continue
+        detail=lot.finished_detail or lot.semi_finished_detail
+        if not detail or detail.owner_customer_id != parent.customer_id:continue
         profile=goods_profile(db,lot) or {}
         allowed={int(v) for v in profile.get('product_ids',[]) if type(v) is int}
         allowed.update(int(row.product_id) for row in getattr(lot,'allowed_products',[]) or [])
+        if lot.finished_detail and lot.finished_detail.owner_customer_id == parent.customer_id:
+            allowed.add(lot.finished_detail.product_id)
         matching=allowed.intersection(child_ids)
         if not matching:continue
         reason='历史子件冻结实物身份不完整，请在库存资料核对中确认实际规格与适用配方'
+        if lot.finished_detail:
+            from app.services.finished_stock_identity import stock_identity_error
+            target_pid = next(iter(matching))
+            reason = stock_identity_error(lot, basis_by_product[target_pid])
         if profile.get('remaining_processes'):
             reason='子件尚有未完成加工：'+'、'.join(profile['remaining_processes'])
-        elif lot.quantity_reserved:
-            reason='子件存在订单预占，不得作为自由库存重复组套'
+        from app.models.warehouse_inventory import WarehouseLocation
+        from app.services.fixed_shelf_staging import staging_owner
+        from app.services.bom_subkits import active_subkit_order
+        from app.services.bom_inventory_contract import is_body_lot
+        location=db.get(WarehouseLocation,lot.warehouse_location_id)
+        if not location or not location.is_active:
+            reason='当前货位已失效，请核对实际位置并通过原移货入口处理'
+        elif staging_owner(db,lot.id) is not None or active_subkit_order(db,lot) is not None:
+            reason='该批次已集货或属于指定订单，不能用于自由组套'
+        elif is_body_lot(lot):
+            reason='该批为未完成组装本体，不能当作已完成子件消耗'
+        if lot.quantity_reserved:
+            reason += f'；另有 {lot.quantity_reserved} 已预占，不能重复使用'
         excluded.append(dict(lot_id=lot.id,lot_number=lot.lot_number,
             product_ids=sorted(matching),available=lot.quantity_available,
-            location=prep.location_name(db,lot),reason=reason,repairable=not bool(profile.get('remaining_processes'))))
+            location=prep.location_name(db,lot),reason=reason,repairable=not bool(profile.get('remaining_processes')),
+            repair_action='review_finished_identity' if lot.finished_detail else 'review_processing_identity'))
     sources=[];capacities=[];shortages=[];component_availability={}
     for child in recipe['children']:
         lots=by_product[child['product_id']]
@@ -219,9 +271,8 @@ def assemble_stock(db,payload,actor):
             from app.services.shared_finished_stock import match
             if not match(db,lot,product_id=row['product_id'],customer_id=plan['recipe']['customer_id'],expected_basis=expected_basis,lock=True):
                 prep.fail('共用关系已变化，请刷新')
-        if (not matches_output(db,lot,product_id=row['product_id'],customer_id=plan['recipe']['customer_id'],expected_basis=expected_basis)
-                or lot.id not in {l.id for l in available_outputs(db,product_id=row['product_id'],
-                    customer_id=plan['recipe']['customer_id'],expected_basis=expected_basis)}):
+        if lot.id not in {l.id for l in assembly_outputs(db,product_id=row['product_id'],
+                    customer_id=plan['recipe']['customer_id'],expected_basis=expected_basis)}:
             prep.fail('子件身份、实际位置或集货归属已变化，请刷新')
         take=row['quantity']
         changed=db.execute(update(InventoryLot).where(InventoryLot.id==lot.id,InventoryLot.version==row['output_version'],

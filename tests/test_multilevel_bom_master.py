@@ -117,7 +117,7 @@ def test_failed_deep_validation_rolls_back_all_master_changes(context):
     db.get(Product, 4).is_active = False
     db.commit()
     version = db.get(Product, 1).version
-    with pytest.raises(CompositeBOMError, match="失效产品"):
+    with pytest.raises(CompositeBOMError, match="已停用"):
         save(db, actor, 1, "manufactured", [(2, 1, "accompany")])
     db.commit()
     assert db.get(Product, 1).version == version

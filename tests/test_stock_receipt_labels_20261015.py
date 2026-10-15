@@ -115,8 +115,8 @@ const methods={'''+can+action+'''};
 const selected={receipt_item_id:540,receipt_status:'posted',source_type:'stock_replenishment',stock_replenishment_item_id:24,receipt_number:'IR-540'};
 const urls=[],windows=[];
 globalThis.axios={get:async url=>{urls.push(url);return {data:{label_count:167,plans:[{}],excluded_items:[]}};}};
-globalThis.confirm=()=>true;
-globalThis.window={open:()=>{const w={location:{},close(){}};windows.push(w);return w;}};
+globalThis.confirm=()=>{throw Error("preview must not require a background confirmation")};
+globalThis.window={open:url=>{const w={location:{href:url},close(){throw Error("preview closed")}};windows.push(w);return w;}};
 const vm={...methods,incomingProductionCardSelections:{540:selected},incomingReceived:[selected],incomingHistory:[],incomingProductionCardBatchBusy:false,authGeneration:1,user:{id:1},activePage:'incoming',incomingTab:'received',showToast(){},errorMessage:e=>String(e)};
 const enabled=vm.canPrintIncomingProductLabel(selected);
 const reversed=vm.canPrintIncomingProductLabel({...selected,receipt_status:'reversed'});
@@ -126,5 +126,5 @@ process.stdout.write(JSON.stringify({enabled,reversed,success,urls,windows:windo
     result=subprocess.run([shutil.which('node'),str(script)],capture_output=True,text=True,timeout=15)
     assert result.returncode==0,result.stderr
     assert json.loads(result.stdout)==dict(enabled=True,reversed=False,success=True,
-        urls=['/api/incoming/receipt-items/540/product-label-package'],
+        urls=[],
         windows=['/production-packaging-label.html?stock_receipt_id=540'])

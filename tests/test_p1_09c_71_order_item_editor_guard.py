@@ -57,7 +57,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 
 def test_open_order_item_latest_product_response_wins(tmp_path: Path) -> None:
-    body = _method_body("async openOrderItem(order, item) {", "async loadFinishedInventoryCandidates(")
+    body = _method_body("async openOrderItem(order, item) {", "canReserveFinishedForOrderItem(")
     assert 'const requestKey = "orders:item-editor";' in body
     assert "const orderSnapshot" in body and "const itemSnapshot" in body
     assert "signal:controller.signal" in body
@@ -78,7 +78,7 @@ def test_open_order_item_latest_product_response_wins(tmp_path: Path) -> None:
 
 
 def test_stale_order_item_error_is_ignored(tmp_path: Path) -> None:
-    body = _method_body("async openOrderItem(order, item) {", "async loadFinishedInventoryCandidates(")
+    body = _method_body("async openOrderItem(order, item) {", "canReserveFinishedForOrderItem(")
     script = _open_order_item_runtime(body) + """
 (async()=>{
   const first=vm.openOrderItem(orderA,itemA);
@@ -120,7 +120,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 
 def test_close_order_item_cancels_open_request_and_blocks_late_reopen(tmp_path: Path) -> None:
-    open_body = _method_body("async openOrderItem(order, item) {", "async loadFinishedInventoryCandidates(")
+    open_body = _method_body("async openOrderItem(order, item) {", "canReserveFinishedForOrderItem(")
     cancel_body = _method_body("cancelOrderItemEditorRequests() {", "async openOrderQuantityEditor(order, item) {")
     close_body = _method_body("closeModal() {", "handleMasterSaveRefreshFailure(")
     assert 'if (this.modal?.type === "orderItem") this.cancelOrderItemEditorRequests();' in close_body
@@ -138,7 +138,7 @@ vm.cancelOrderItemEditorRequests=new Function({json.dumps(cancel_body, ensure_as
 
 
 def test_open_order_item_preserves_existing_read_only_load_contracts() -> None:
-    body = _method_body("async openOrderItem(order, item) {", "async loadFinishedInventoryCandidates(")
+    body = _method_body("async openOrderItem(order, item) {", "canReserveFinishedForOrderItem(")
     assert "/api/master/products/${itemSnapshot.product_id}" in body
     assert "loadFinishedInventoryReservations(itemSnapshot.id, activeForm)" in body
     assert "loadExistingOrderItemBom(activeForm)" in body
@@ -148,7 +148,7 @@ def test_open_order_item_preserves_existing_read_only_load_contracts() -> None:
 
 
 def test_open_editor_retains_material_baseline_and_explicit_sync_choice(tmp_path: Path) -> None:
-    body = _method_body("async openOrderItem(order, item) {", "async loadFinishedInventoryCandidates(")
+    body = _method_body("async openOrderItem(order, item) {", "canReserveFinishedForOrderItem(")
     script = _open_order_item_runtime(body) + """
 (async()=>{
   itemA.material_id=7;
@@ -182,10 +182,10 @@ const base={{id:11,product_id:101,material_id:7,_original_material_id:7,quantity
   expect(!("product_expected_version" in saved[0].payload),"order-only save carried master mutation version");
   expect(saved[0].payload.production_notes==="order only","order note was lost");
   vm.orderItemForm={{...base,material_id:8}};await vm.saveItem();
-  expect(saved[1].payload.sync_product===true&&saved[1].payload.product_expected_version===5,"real material change lost guarded sync");
+  expect(saved[1].payload.sync_product===false&&!("product_expected_version" in saved[1].payload),"order material change silently mutated master");
   vm.orderItemForm={{...base,sync_product:true}};await vm.saveItem();
   expect(saved[2].payload.sync_product===true&&saved[2].payload.product_expected_version===5,"explicit master sync lost version guard");
-  vm.orderItemForm={{...base,material_id:8,product_version:null}};
+  vm.orderItemForm={{...base,material_id:8,product_version:null,sync_product:true}};
   let blocked=false;try{{await vm.saveItem();}}catch(error){{blocked=error.message.includes("版本读取失败");}}
   expect(blocked&&saved.length===3,"missing master version was not blocked");
 }})().catch(error=>{{console.error(error);process.exit(1);}});

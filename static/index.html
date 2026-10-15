@@ -3197,6 +3197,41 @@
       .original-business-confirm h2 { margin:0; font-size:18px; }
       .original-business-confirm p { margin:18px 0; line-height:1.65; white-space:pre-wrap; overflow-wrap:anywhere; }
       .original-business-confirm footer { display:flex; justify-content:flex-end; gap:10px; }
+      .order-entry-modal .order-entry-header,.order-entry-modal.order-entry-large .order-entry-header {grid-template-columns:minmax(240px,1.6fr) minmax(160px,1fr) 150px 150px;gap:6px 12px;margin-bottom:10px;}
+      .order-entry-modal .order-entry-header .field {margin:0;}
+      .order-entry-header .order-entry-actions {grid-column:2/-1;margin:0;min-height:36px;flex-wrap:nowrap;}
+      .order-number-inline {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      .order-reminder-disclosure {margin:12px 0;padding:8px;border-top:1px solid var(--line);}
+      .reminder-dot {display:inline-block;width:8px;height:8px;background:#dc2626;border-radius:50%;margin-left:4px;}
+      .order-common-box-top-action {position:sticky;top:0;background:white;z-index:4;padding:0 0 8px;}
+      .order-common-box-top-action .btn {min-height:38px;min-width:150px;font-weight:700;}
+      .order-common-box-modal .order-common-box-table {min-width:0;table-layout:fixed;}
+      .order-common-box-modal .order-common-box-table-wrap {overflow-x:hidden;}
+      .order-common-box-modal .order-common-box-table th,.order-common-box-modal .order-common-box-table td {white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal;}
+      .order-common-box-modal .order-common-box-table th:nth-child(1){width:42px!important;}
+      .order-common-box-modal .order-common-box-table th:nth-child(2){width:86px!important;}
+      .order-common-box-modal .order-common-box-table th:nth-child(3){width:15%!important;}
+      .order-common-box-modal .order-common-box-table th:nth-child(4){width:auto!important;}
+      .order-common-box-modal .order-common-box-table th:nth-child(5){width:13%!important;}
+      .order-common-box-modal .order-common-box-table th:nth-child(6){width:12%!important;}
+      .order-common-box-modal .order-common-box-table input {min-width:0;width:100%;}
+      .order-common-box-modal .status {padding:3px 6px;font-size:12px;}
+      .order-item-edit-grid .order-item-size-row {grid-template-columns:140px 160px minmax(140px,1fr);}
+      .order-item-edit-actions {display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;}
+      .readonly-value {background:#f5f7fa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      .order-item-edit-grid .order-item-report-row {display:flex!important;flex-wrap:wrap;gap:12px!important;}
+      .order-item-edit-grid .order-item-report-row .field {min-width:180px;flex:1;}
+      .order-item-master-summary {margin:8px 0;padding:8px;border:1px solid var(--line);border-radius:8px;}
+      .product-notes-group {grid-column:1/-1;margin:6px 0;padding:10px;border:1px solid var(--line);border-radius:8px;}
+      .product-notes-fields {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:8px;}
+      .product-notes-fields textarea {min-height:60px;resize:vertical;}
+      @media(max-width:900px){.order-entry-modal .order-entry-header{grid-template-columns:repeat(2,minmax(0,1fr));}.order-entry-header .order-entry-actions{grid-column:1/-1;flex-wrap:wrap;}.product-notes-fields{grid-template-columns:1fr;}}
+
+      .order-entry-header .order-entry-actions {display:flex!important;flex-wrap:nowrap!important;}
+      .order-entry-header .order-number-inline {flex:0 1 auto!important;white-space:nowrap!important;}
+      .order-entry-header .input,.order-entry-header .select {min-height:34px;height:36px;padding:6px 10px;}
+      .order-common-box-modal .common-picker-sticky-select,.order-common-box-modal .common-picker-sticky-quantity {left:auto!important;}
+      .product-material-details>summary {grid-column:1/-1;font-weight:600;cursor:pointer;padding:6px 0;}
 </style>
     <link rel="stylesheet" href="/static/warehouse-workspace-shell.css?v=20260928">
     <link rel="stylesheet" href="/static/product-editor-compact.css?v=20261008-cutting-v2" />
@@ -4881,6 +4916,8 @@
                     <strong>{{output.product_name}}</strong><input class="input" type="number" min="0" :max="row.expected_outputs[output.product_id]" step="1" v-model.number="output.quantity" :aria-label="output.product_name+'实际组套数量'" style="width:90px" /><span>{{output.unit}}（最多{{row.expected_outputs[output.product_id]}}）</span>
                     <select v-model="output.location_id" class="select" :aria-label="output.product_name+'成套位置'" style="max-width:360px"><option :value="null">选择成套实际位置</option><option v-for="loc in assemblyLocations" :key="loc.id" :value="loc.id">{{loc.name}}</option></select>
                   </div>
+                  <details v-if="row.excluded_sources?.length" class="assembly-excluded"><summary>待核对批次（{{row.excluded_sources.length}}）</summary><div v-for="source in row.excluded_sources" :key="source.lot_id" style="margin:6px 0;white-space:normal">{{source.lot_number || source.lot_id}} · {{source.available}}：{{source.reason}}<button v-if="hasPermission('warehouse.view')" class="btn small" type="button" @click="openAssemblyInventoryReview(source)">库存核对</button></div></details>
+                  <button v-if="row.error && row.parent_product_id && canEditProducts" class="btn small" type="button" @click="openProduct({id:row.parent_product_id})">维护父件BOM</button>
                   <details open v-if="row.sources?.length" style="margin:8px 0"><summary>{{row.source_kind==='stock'?'子件库存与位置':'本次组套子件与位置'}}</summary><div v-for="source in row.sources" :key="source.lot_id">{{source.product_code}} · {{source.product_name}} · {{source.quantity}} {{source.unit}} · {{source.location}}</div></details>
                    <button v-if="row.source_kind!=='stock' && !row.error && canProductionExecute" class="btn success" :disabled="assemblyLoading || productionBusy || !row.outputs.some(o=>Number(o.quantity)>0) || row.outputs.some(o=>!o.location_id)" @click="confirmPendingAssembly(row)">组套完成并入库</button>
                    <button v-if="row.source_kind==='stock' && row.parent_product_id && canAdmin" class="btn success" :disabled="assemblyLoading || productionBusy || !row.can_assemble_stock" @click="openStockAssembly(row)">组套入库</button><span v-if="row.source_kind==='stock' && row.assembly_block" class="status orange">{{row.assembly_block}}</span>
@@ -7089,10 +7126,10 @@
                   </div>
                   <div v-else-if="canViewCosts && productBoardCostText" class="muted" style="font-size:12px;color:#0369a1">纸板成本参考：{{ productBoardCostText }}</div>
                 </div>
-                <div class="field wide"><label>生产备注</label><textarea class="input" rows="2" maxlength="2000" v-model.trim="productForm.production_notes" placeholder="生产任务使用的备注"></textarea></div>
+
                 </div>
 
-                <div class="product-material-details">
+                <details class="product-material-details"><summary>材质候选与报料轨迹（按需展开）</summary>
                   <div class="product-material-tabs" role="tablist" aria-label="材质核对">
                     <button type="button" :class="['product-material-tab',{active:productMaterialActiveTab==='candidates'}]" role="tab" :aria-selected="productMaterialActiveTab==='candidates'" @click="productMaterialActiveTab='candidates'">材质候选</button>
                     <button type="button" :class="['product-material-tab',{active:productMaterialActiveTab==='history'}]" role="tab" :aria-selected="productMaterialActiveTab==='history'" @click="productMaterialActiveTab='history'">报料轨迹</button>
@@ -7211,7 +7248,7 @@
                   </div>
                 </section>
                   </div>
-                </div>
+                </details>
               </div>
 
               <div class="product-form-row product-print-row">
@@ -7279,6 +7316,11 @@
                 </div>
               </div>
 
+              <details class="product-notes-group"><summary>生产说明与备注</summary><div class="product-notes-fields">
+                <div class="field"><label>生产说明</label><textarea class="input" rows="2" maxlength="2000" v-model.trim="productForm.production_notes"></textarea></div>
+                <div class="field"><label>报料备注</label><textarea class="input" rows="2" v-model.trim="productForm.report_notes"></textarea></div>
+                <div class="field"><label>常用箱备注</label><textarea class="input" rows="2" v-model.trim="productForm.remark"></textarea></div>
+              </div></details>
               <div class="product-form-row product-final-row">
                 <div class="field"><label>数量单位</label><strong>{{ productUnitLabel(productForm, true) }}</strong><span v-if="productUnitNeedsReview(productForm, true)" class="status orange">单位待完善：请补充结合工艺</span></div>
                 <div v-if="canViewSalesAmounts" class="field sensitive-price product-inline-price"><label>{{ productForm.supply_mode==='external_purchase' ? `${commonBoxPriceLabel(productForm.customer_id)} / ${productForm.external_packaging_purchase_unit || '采购单位'}` : commonBoxPriceLabel(productForm.customer_id).replace("PCS",productUnitLabel(productForm,true)) }}</label><input class="input" type="number" min="0" step="0.000001" v-model="productForm.sale_unit_price" /></div>
@@ -8093,42 +8135,23 @@
             </div>
             <div v-else-if="modal.type === 'order'">
               <div class="order-entry-header">
-                <div class="field" data-order-entry-focus="customer"><label>客户</label><search-select v-model="orderForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="输入客户名称或拼音首字母" @change="handleOrderCustomerChange"></search-select></div>
+                <div class="field" data-order-entry-focus="customer"><label>客户</label><search-select :model-value="orderForm.customer_id" @update:model-value="chooseOrderCustomer" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="输入客户名称或拼音首字母"></search-select></div>
                 <div class="field" data-order-entry-focus="customer-po"><label>客户订单号</label><input class="input customer-po" data-order-entry-enter-next data-order-entry-next="order-date" v-model.trim="orderForm.customer_po" /></div>
                 <div class="field" data-order-entry-focus="order-date"><label>下单日期</label><input class="input" type="date" data-order-entry-enter-next data-order-entry-next="requisition-strategy" v-model="orderForm.order_date" @change="refreshOrderNumberPreview" /></div>
-                <div class="field" data-order-entry-focus="requisition-strategy"><label>报料策略</label><select class="select" v-model="orderForm.requisition_strategy" @change="onOrderRequisitionStrategyChange"><option value="normal">正常进入待报料</option><option value="wait_previous_batch">同款上一批送完后再报</option></select></div>
                 <div class="field" data-order-entry-focus="delivery-date"><label>交货日期</label><input class="input" type="date" data-order-entry-enter-next data-order-entry-next="product-0" v-model="orderForm.delivery_date" /></div>
+                <div class="field" data-order-entry-focus="requisition-strategy"><label>报料策略</label><select class="select" v-model="orderForm.requisition_strategy" @change="onOrderRequisitionStrategyChange"><option value="normal">正常进入待报料</option><option value="wait_previous_batch">同款上一批送完后再报</option></select></div>
+              <div class="order-entry-actions">
+                <button class="btn primary" type="button" data-order-entry-focus="add-line" @click="addOrderItem">增加明细</button>
+                <button class="btn success" type="button" :disabled="!orderForm.customer_id" @click="openOrderCommonBoxPicker">导入常用箱</button>
+                <button class="btn manual-size-entry" type="button" :disabled="!orderForm.customer_id" @click="addManualSizeOrderItem">手工尺寸</button>
+                <span class="muted order-number-inline" :title="orderNumberPreview">{{ orderNumberPreview || "先选择客户" }}</span>
               </div>
-              <div v-if="!orderForm.customer_id" class="status orange" style="margin:10px 0">请先选择客户，再选择常用箱并填写数量。</div>
-              <div v-else class="muted" style="font-size:12px;margin:6px 0 10px;color:#6b7280">
-                系统编号预览：<span class="sys-num" style="font-size:12px">{{ orderNumberPreview || "-" }}</span>
-                <span style="margin:0 6px">/</span>
-                <span class="sys-num" style="font-size:12px">{{ orderForm.items.map((item,index)=>itemOrderNumberPreview(index)).join(" · ") }}</span>
-              </div>
-              <div v-if="orderForm.customer_id" class="panel" aria-label="内部生产提醒" style="margin:0 0 10px;border-color:var(--warning,#d99000)">
-                <div class="toolbar"><div><strong>客户回单交代</strong><span v-if="orderReminderDisplayRows().length" class="status orange" style="margin-left:8px">{{ orderReminderDisplayRows().length }} 条</span><div class="muted">仅供订单与生产内部核对，不会写入订单备注、客户单据或自动修改数量。</div></div><div class="toolbar-group"><button v-if="orderReminderDisplayRows().length && !orderReminderState.visible" class="btn small" type="button" @click="reopenOrderReminderSummary">重新查看</button><button v-if="orderReminderState.error" class="btn small" type="button" @click="loadOrderRemindersForCustomer(orderForm.customer_id)">重试</button></div></div>
-                <div v-if="orderReminderState.loading" class="muted">正在一次性读取该客户的生产提醒…</div>
-                <div v-else-if="orderReminderState.error" class="status orange" style="white-space:normal">{{ orderReminderState.error }}</div>
-                <div v-else-if="!orderReminderDisplayRows().length" class="muted">当前客户和已选正式产品没有到期的生产提醒。</div>
-                <div v-if="orderReminderState.visible" class="panel" role="dialog" aria-modal="true" aria-label="订单生产提醒汇总" style="margin-top:10px">
-                  <div class="toolbar" style="margin-bottom:8px"><div><strong>保存前请核对 {{ orderReminderDisplayRows().length }} 条提醒</strong><div class="muted">指定常用箱的提醒会随当前正式产品即时出现，手工尺寸只匹配客户级提醒。</div></div><button class="btn primary" type="button" @click="acknowledgeOrderReminders">知道了，继续保存</button></div>
-                  <div v-for="row in orderReminderDisplayRows()" :key="row.id" :class="['panel',{'warning-row':orderReminderMatchesCurrentProducts(row)}]" style="padding:8px;margin:6px 0">
-                    <span class="status blue">{{ orderReminderScopeLabel(row) }}</span><span v-if="orderReminderMatchesCurrentProducts(row)" class="status orange" style="margin-left:5px">当前订单匹配</span>
-                    <div style="white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px">{{ row.content }}</div>
-                    <div class="muted">来源 {{ row.source_delivery_number || '-' }}｜回单日 {{ row.source_received_date || '-' }}｜记录人 {{ row.created_by_name || '-' }}</div>
-                  </div>
-                </div>
               </div>
               <div v-if="orderForm.requisition_strategy==='wait_previous_batch'" class="notice" style="margin:0 0 10px">
                 <div class="toolbar-group"><strong>等候报料预检</strong><span class="muted">正常唯一上一批会自动带出；多候选、缺编码或规格材质差异请逐行选择后再保存。</span><button class="btn small" type="button" :disabled="orderRequisitionPreview.loading || !orderForm.customer_id" @click="previewOrderRequisitionHolds">{{ orderRequisitionPreview.loading ? '预检中…' : '重新预检' }}</button></div>
                 <div v-if="orderRequisitionPreview.error" class="danger-text" style="margin-top:5px">{{ orderRequisitionPreview.error }}</div>
               </div>
-              <div class="order-entry-actions">
-                <button class="btn primary" type="button" data-order-entry-focus="add-line" @click="addOrderItem">增加明细</button>
-                <button class="btn success" type="button" :disabled="!orderForm.customer_id" @click="openOrderCommonBoxPicker">导入常用箱</button>
-                <button class="btn manual-size-entry" type="button" :disabled="!orderForm.customer_id" @click="addManualSizeOrderItem">手工尺寸</button>
-                <span class="muted">每款只占一行；可一次选择多款。</span>
-              </div>
+
 
               <manual-replenishment-picker v-if="canRequisition" :customer-id="orderForm.customer_id" :lines="orderForm.items"></manual-replenishment-picker>
               <demand-stock-summary :enabled="hasPermission('warehouse.view')" :customer-id="orderForm.customer_id" :lines="orderForm.items">
@@ -8349,6 +8372,20 @@
 	              </tbody></table>
 	              </div>
               </template></demand-stock-summary>
+              <details v-if="orderForm.customer_id && (orderReminderDisplayRows().length || orderReminderState.error)" class="order-reminder-disclosure" :open="orderReminderExpanded" @toggle="orderReminderExpanded=$event.target.open"><summary>客户回单交代 <span v-if="orderReminderDisplayRows().length" class="reminder-dot" aria-label="有生产提醒"></span></summary>
+                <div class="toolbar"><div><strong>客户回单交代</strong><span v-if="orderReminderDisplayRows().length" class="status orange" style="margin-left:8px">{{ orderReminderDisplayRows().length }} 条</span><div class="muted">仅供订单与生产内部核对，不会写入订单备注、客户单据或自动修改数量。</div></div><div class="toolbar-group"><button v-if="orderReminderDisplayRows().length && !orderReminderState.visible" class="btn small" type="button" @click="reopenOrderReminderSummary">重新查看</button><button v-if="orderReminderState.error" class="btn small" type="button" @click="loadOrderRemindersForCustomer(orderForm.customer_id)">重试</button></div></div>
+                <div v-if="orderReminderState.loading" class="muted">正在一次性读取该客户的生产提醒…</div>
+                <div v-else-if="orderReminderState.error" class="status orange" style="white-space:normal">{{ orderReminderState.error }}</div>
+                <div v-else-if="!orderReminderDisplayRows().length" class="muted">当前客户和已选正式产品没有到期的生产提醒。</div>
+                <div v-if="orderReminderState.visible" class="panel" role="dialog" aria-modal="true" aria-label="订单生产提醒汇总" style="margin-top:10px">
+                  <div class="toolbar" style="margin-bottom:8px"><div><strong>保存前请核对 {{ orderReminderDisplayRows().length }} 条提醒</strong><div class="muted">指定常用箱的提醒会随当前正式产品即时出现，手工尺寸只匹配客户级提醒。</div></div><button class="btn primary" type="button" @click="acknowledgeOrderReminders">知道了，继续保存</button></div>
+                  <div v-for="row in orderReminderDisplayRows()" :key="row.id" :class="['panel',{'warning-row':orderReminderMatchesCurrentProducts(row)}]" style="padding:8px;margin:6px 0">
+                    <span class="status blue">{{ orderReminderScopeLabel(row) }}</span><span v-if="orderReminderMatchesCurrentProducts(row)" class="status orange" style="margin-left:5px">当前订单匹配</span>
+                    <div style="white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px">{{ row.content }}</div>
+                    <div class="muted">来源 {{ row.source_delivery_number || '-' }}｜回单日 {{ row.source_received_date || '-' }}｜记录人 {{ row.created_by_name || '-' }}</div>
+                  </div>
+                </div>
+              </details>
               <div class="field" style="width:280px;margin:10px 0 0 auto"><label>备注（选填）</label><textarea class="input" rows="3" v-model.trim="orderForm.remark"></textarea></div>
 	            </div>
             <div v-else-if="modal.type === 'orderEdit'">
@@ -8402,20 +8439,17 @@
               <fieldset :disabled="!!finishedReservationActionState.action" style="border:0;padding:0;margin:0;min-width:0;display:contents">
               <div class="product-form-row order-item-core-row">
                 <div class="field"><label>客户</label><div class="input" style="background:#f5f7fa">{{ orderItemForm.customer_name || "-" }}</div></div>
-                <div class="field"><label>存货编码</label><input class="input" v-model.trim="orderItemForm.product_code" /></div>
-                <div class="field"><label>产品名称</label><input class="input" v-model.trim="orderItemForm.product_name" /></div>
-                <div class="field"><label>箱型</label><select class="select" v-model="orderItemForm.box_style" @change="onOrderItemBoxStyleChange"><option value="">未设置</option><option v-for="boxType in productBoxStyleOptions" :key="boxType" :value="boxType">{{ boxType }}</option></select></div>
+                <div class="field"><label>存货编码</label><div class="input readonly-value">{{ orderItemForm.product_code }}</div></div>
+                <div class="field"><label>产品名称</label><div class="input readonly-value">{{ orderItemForm.product_name }}</div></div>
+                <div class="field"><label>箱型</label><div class="input readonly-value">{{ orderItemForm.box_style || "—" }}</div></div>
               </div>
+              <div class="order-item-edit-actions"><span>{{ orderItemForm.specification || '按产品类型及配方处理' }}</span><button v-if="canEditProducts && orderItemForm.product_id" class="btn small" type="button" @click="openOrderItemCommonBoxEditor">编辑常用箱</button></div>
               <div class="product-form-row order-item-size-row">
-                <div class="field"><label>长(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.length_mm" /></div>
-                <div class="field"><label>宽(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.width_mm" /></div>
-                <div v-if="productRequiresDimension(orderItemForm.box_style,'height_mm')" class="field"><label>高(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.height_mm" /></div>
-                <div class="field"><label>实际数量</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.quantity" @input="syncOrderBomDemandsForQuantity(orderItemForm)" /></div>
+                <div class="field"><label>订单数量</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.quantity" @input="syncOrderBomDemandsForQuantity(orderItemForm)" /></div>
                 <div v-if="canViewSalesAmounts" class="field sensitive-price"><label>客户单价</label><input class="input" type="number" min="0" step="0.01" v-model.number="orderItemForm.unit_price" /></div>
                 <div v-if="canViewSalesAmounts" class="field sensitive-price"><label>销售金额</label><strong>¥ {{ money(orderItemSaleAmount(orderItemForm)) }}</strong></div>
-                <div class="field"><label>规格mm</label><input class="input" v-model.trim="orderItemForm.specification" /></div>
               </div>
-              <div class="product-form-row order-item-material-row">
+              <div v-if="orderItemNeedsPaperFields()" class="product-form-row order-item-material-row">
                 <div class="field"><label>材质供应商</label>
                   <select class="select" v-model="orderItemForm._material_supplier"
                     @change="resetMaterialIfNotMatched(orderItemForm, orderItemForm._material_supplier, orderItemForm.layer_count, orderItemForm.flute_type)">
@@ -8447,7 +8481,7 @@
                   <div class="muted" style="font-size:12px;margin-top:2px">{{ orderItemForm._material_display || '' }}</div>
                 </div>
               </div>
-              <div class="product-form-row order-item-report-row">
+              <div v-if="orderItemNeedsPaperFields()" class="product-form-row order-item-report-row">
                 <div v-if="usesProductSplice(orderItemForm.box_style)" class="field"><label>拼箱方式</label><select class="select" v-model="orderItemForm.snapshot_splice_mode" @change="onOrderItemSpliceModeChange"><option v-for="mode in productSupportedSpliceModes(orderItemForm.box_style)" :key="mode" :value="mode">{{ mode === 'double' ? '双拼' : '单拼' }}</option></select></div>
                 <div v-if="usesProductSplice(orderItemForm.box_style)" class="field"><label>每箱片数</label><div class="input" style="background:#f5f7fa">{{ orderItemForm.snapshot_pieces_per_box || 1 }} 片</div></div>
                 <div v-if="usesProductTongue(orderItemForm.box_style)" class="field"><label>舌头(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.snapshot_flap_mm" @input="markOrderItemReportManual" /></div>
@@ -8472,13 +8506,7 @@
                   </div>
                 </div>
               </div>
-              <div class="product-form-row order-item-notes-row">
-                <div class="field"><label>生产工艺</label><input class="input" v-model.trim="orderItemForm.production_process" placeholder="粘贴、打钉、模切等" /></div>
-                <div class="field"><label>印刷内容</label><select class="select" v-model="orderItemForm.print_content"><option value="无印刷">无印刷</option><option value="单色印刷">单色印刷</option><option value="双色印刷">双色印刷</option><option value="多色印刷">多色印刷</option></select></div>
-                <div class="field"><label>生产说明</label><input class="input" v-model.trim="orderItemForm.production_notes" placeholder="印刷、摆放、颜色、警示等" /></div>
-                <div class="field"><label>报料备注 / 常用箱备注</label><input class="input" v-model.trim="orderItemForm.snapshot_report_notes" placeholder="供应商直发、特殊要求等" /></div>
-                <div class="field"><label>常用箱备注</label><input class="input" v-model.trim="orderItemForm.product_remark" /></div>
-              </div>
+              <details class="order-item-master-summary"><summary>产品工艺与说明（在常用箱维护）</summary><div>{{ orderItemForm.production_process || '工艺未设置' }} · {{ orderItemForm.print_content }}</div><div>{{ orderItemForm.production_notes }}</div><div>{{ orderItemForm.product_remark }}</div></details>
               <div v-if="canViewCosts" class="order-item-cost-row cost-sensitive">
                 <div class="cost-metric"><label>单个预估成本</label><strong>{{ orderItemForm.cost_status === "calculated" ? `¥ ${money(orderItemForm.estimated_cost)}` : "待计算" }}</strong></div>
                 <div class="cost-metric primary"><label>总预估成本</label><strong>{{ orderItemForm.cost_status === "calculated" ? `¥ ${money(orderItemTotalCost(orderItemForm))}` : "待计算" }}</strong></div>
@@ -9537,7 +9565,7 @@
                 <span v-if="deliveryFormIsDirty()" class="muted">请先保存或取消当前送货单修改，再返回原预送货批次。</span>
               </div>
               <div class="form-grid delivery-header-grid">
-                <div :class="['field',{'delivery-guide-target':deliveryGuideStage === 'customer'}]"><label>客户</label><search-select v-model="deliveryForm.customer_id" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading" @change="onDeliveryCustomerChange"></search-select><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && deliveryCandidateError" class="status orange" style="white-space:normal">客户候选加载失败：{{ deliveryCandidateError }} <button class="btn small" type="button" @click="loadDeliveryCustomerOptions">重试</button></div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">当前没有待送订单或可送成品库存</div></div>
+                <div :class="['field',{'delivery-guide-target':deliveryGuideStage === 'customer'}]"><label>客户</label><search-select :model-value="deliveryForm.customer_id" @update:model-value="chooseDeliveryCustomer" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading"></search-select><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && deliveryCandidateError" class="status orange" style="white-space:normal">客户候选加载失败：{{ deliveryCandidateError }} <button class="btn small" type="button" @click="loadDeliveryCustomerOptions">重试</button></div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">当前没有待送订单或可送成品库存</div></div>
                 <div class="field"><label>业务类型</label><label v-if="!deliveryForm.editingId" class="delivery-customer-source-option"><input type="checkbox" v-model="deliveryForm.historical_backfill" @change="onDeliveryHistoricalBackfillChange" />补录历史送货</label><span v-else :class="['status',deliveryForm.historical_backfill?'blue':'green']">{{ deliveryForm.historical_backfill ? '历史补录' : '普通送货' }}</span><div class="muted">普通送货自动使用服务器当天，不增加输入。</div></div>
                 <div v-if="deliveryForm.historical_backfill || deliveryForm.editingId" class="field"><label>{{ deliveryForm.historical_backfill ? '实际送货日期' : '送货日期' }}</label><input class="input" type="date" v-model="deliveryForm.delivery_date" :disabled="deliveryForm.editingId && !deliveryForm.historical_backfill && !(deliveryForm.editing_status==='dispatched' && canAdjustReconciliationPeriod)" /><div v-if="deliveryForm.historical_backfill || (deliveryForm.editing_status==='dispatched' && canAdjustReconciliationPeriod)" class="muted">不得早于关联订单日期，不得晚于服务器今天。</div></div>
                 <div v-if="!deliveryForm.editingId" class="field delivery-customer-source-field"><label>选择客户范围</label><div class="delivery-customer-source-options"><label class="delivery-customer-source-option"><input type="checkbox" v-model="deliveryCustomerSources.orders" @change="onDeliveryCustomerSourceFilterChange" />有订单客户</label><label class="delivery-customer-source-option"><input type="checkbox" v-model="deliveryCustomerSources.inventory" @change="onDeliveryCustomerSourceFilterChange" />有库存客户</label></div></div>
@@ -10258,6 +10286,7 @@
             <button class="btn small" type="button" @click="closeOrderCommonBoxPicker">关闭</button>
           </div>
           <div class="order-common-box-body">
+            <div class="order-common-box-top-action"><button class="btn success" type="button" :disabled="!orderCommonBoxSelectedCount() || orderCommonBoxPicker.importing" @click="importSelectedOrderCommonBoxes">{{ orderCommonBoxPicker.importing ? "导入中…" : `导入已选（${orderCommonBoxSelectedCount()}）` }}</button></div>
             <div class="order-common-box-filters">
               <div class="field"><label>存货编码</label><input class="input" v-model.trim="orderCommonBoxPicker.filters.product_code" placeholder="输入编码" @keyup.enter="searchOrderCommonBoxes" /></div>
               <div class="field"><label>产品名称</label><input class="input" v-model.trim="orderCommonBoxPicker.filters.product_name" placeholder="输入名称" @keyup.enter="searchOrderCommonBoxes" /></div>
@@ -10279,29 +10308,29 @@
                   <th style="width:150px">规格mm</th>
                   <th style="width:135px">材质楞型</th>
                   <th class="sensitive-price" style="width:95px">单价</th>
-                  <th style="width:95px">资料状态</th>
+                  <th v-if="hasPermission('warehouse.view')" style="width:85px">当前库存</th><th style="width:80px">资料状态</th>
                 </tr></thead>
                 <tbody>
                   <tr v-for="row in orderCommonBoxPicker.items" :key="row.id" :class="{'selected-row': isOrderCommonBoxSelected(row.id)}" @click="toggleOrderCommonBoxSelection(row,!isOrderCommonBoxSelected(row.id))" @keydown.space.self.prevent="toggleOrderCommonBoxSelection(row,!isOrderCommonBoxSelected(row.id))" tabindex="0">
                     <td class="common-picker-sticky-select"><input type="checkbox" :checked="isOrderCommonBoxSelected(row.id)" @click.stop @change="toggleOrderCommonBoxSelection(row,$event.target.checked)" /></td>
                     <td class="common-picker-sticky-quantity"><input class="input" type="number" min="1" :value="orderCommonBoxSelectedQuantity(row.id)" @click.stop="toggleOrderCommonBoxSelection(row,true)" @focus="toggleOrderCommonBoxSelection(row,true)" @input="setOrderCommonBoxQuantity(row,$event.target.value)" placeholder="可稍后填" /></td>
-                    <td><strong>{{ row.product_code || "-" }}</strong></td>
-                    <td>{{ row.product_name || "-" }}<span v-if="orderCommonBoxImportedRow(row.id)" class="status blue">已导入 · 第{{orderCommonBoxImportedRow(row.id)}}行</span></td>
+                    <td :title="row.product_code"><strong>{{ row.product_code || "-" }}</strong></td>
+                    <td :title="row.product_name">{{ row.product_name || "-" }}<span v-if="orderCommonBoxImportedRow(row.id)" class="status blue">已导入 · 第{{orderCommonBoxImportedRow(row.id)}}行</span></td>
                     <td>{{ orderSpecificationText(spec(row)) }}</td>
                     <td>{{ orderCommonBoxMaterialText(row) }}</td>
-                    <td class="sensitive-price">{{ money(row.sale_unit_price) }}</td>
-                    <td><button v-if="!commonBoxReadiness(row).ready && canEditProducts" type="button" class="status orange order-readiness-link" :disabled="orderContextOpening" :title="commonBoxReadinessTitle(row)" @click.stop="openCommonBoxEditorFromPicker(row)">报料资料待完善</button><span v-else :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']">{{ commonBoxReadiness(row).ready ? "报料资料完整" : "报料资料待完善" }}</span></td>
+                    <td class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td v-if="hasPermission('warehouse.view')" :title="row.inventory_error || '可用成品数量，已排除预占'">{{ row.inventory_error ? '待核对' : (row.available_finished_quantity ?? '—') }}</td>
+                    <td><button v-if="!commonBoxReadiness(row).ready && canEditProducts" type="button" class="status orange order-readiness-link" :disabled="orderContextOpening" :title="commonBoxReadinessTitle(row)" @click.stop="openCommonBoxEditorFromPicker(row)">待完善</button><span v-else :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']">{{ commonBoxReadiness(row).ready ? "完善" : "待完善" }}</span></td>
                   </tr>
-                  <tr v-if="!orderCommonBoxPicker.loading && !orderCommonBoxPicker.items.length"><td colspan="8" class="empty">当前筛选没有可用常用箱</td></tr>
-                  <tr v-if="orderCommonBoxPicker.loading"><td colspan="8" class="empty">正在读取常用箱…</td></tr>
+                  <tr v-if="!orderCommonBoxPicker.loading && !orderCommonBoxPicker.items.length"><td :colspan="hasPermission('warehouse.view') ? 9 : 8" class="empty">当前筛选没有可用常用箱</td></tr>
+                  <tr v-if="orderCommonBoxPicker.loading"><td :colspan="hasPermission('warehouse.view') ? 9 : 8" class="empty">正在读取常用箱…</td></tr>
                 </tbody>
               </table>
             </div>
-            <demand-stock-summary v-if="hasPermission('warehouse.view')" :customer-id="orderForm.customer_id" :lines="commonBoxDemandLines()"></demand-stock-summary>
+
             </div>
             <div class="order-common-box-summary">
               <div class="toolbar-group">
-                <button class="btn success" type="button" :disabled="!orderCommonBoxSelectedCount() || orderCommonBoxPicker.importing" @click="importSelectedOrderCommonBoxes">{{ orderCommonBoxPicker.importing ? "导入中…" : "导入所选" }}</button>
+
                 <strong>已选 {{ orderCommonBoxSelectedCount() }} 款</strong>
                 <span class="muted">共 {{ orderCommonBoxPicker.total }} 款，每页 {{ orderCommonBoxPicker.page_size }} 款；切换筛选不会丢失勾选，排序和翻页也保留。</span>
               </div>
@@ -11213,7 +11242,7 @@
             materialForm: blankMaterial(),
             orderForm: { customer_id: null, customer_po: "", order_date: today(), delivery_date: plusDays(7), requisition_strategy:"normal", remark: "", items: [] },
             orderCreateSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
-            orderReminderState:{loading:false,loaded:false,error:"",items:[],total:0,customerId:null,visible:false,acknowledgedCustomerId:null,acknowledgedSignature:""},
+            orderReminderExpanded:false, orderReminderState:{loading:false,loaded:false,error:"",items:[],total:0,customerId:null,visible:false,acknowledgedCustomerId:null,acknowledgedSignature:""},
             orderBomStockReview:null,
             orderBomDemandSaveState:{saving:false,outcomeUncertain:false,itemId:null,componentId:null,result:null},
             orderGroupSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
@@ -23329,109 +23358,28 @@
               groups.get(key).itemIds.add(itemId);
             }
             const unifiedSupplierBatch=groups.size>1 && [...groups.values()].every(group=>group.source_type === "supplier_order");
-            const pageCount=unifiedSupplierBatch ? 1 : groups.size;
-            const windows=Array.from({length:pageCount},()=>{
-              try { const opened=window.open("about:blank","_blank"); if(opened) opened.opener=null; return opened; } catch(_error) { return null; }
-            });
-            const authGeneration=this.authGeneration;
-            const userId=this.user?.id ?? null;
-            this.incomingProductionCardBatchBusy=true;
-            try {
-              const noEligiblePackage=(error,documentNumber)=>{
-                const detail=error?.response?.data?.detail;
-                const code=String(detail?.code || "");
-                if (Number(error?.response?.status || 0)!==409 || !code.includes("no_eligible")) return null;
-                const explicit=Array.isArray(detail?.excluded_items) ? detail.excluded_items : [];
-                const reasons=Array.isArray(detail?.reasons) ? detail.reasons : [];
-                return {label_count:0,production_task_count:0,excluded_items:explicit.length ? explicit : reasons.map(reason=>({reason,document_number:documentNumber}))};
-              };
-              const excludedMessage=(item,documentNumber)=>{
-                const document=item?.supplier_order_number || item?.material_requisition_number || item?.document_number || documentNumber || "实收来源";
-                const product=item?.product_code || item?.product_name || (item?.production_task_id ? `任务 #${item.production_task_id}` : "所选产品");
-                return `${document}｜${product}：${item?.reason || '当前常用箱未启用打印标签'}；处理：到常用箱打开“打印标签”并保存，刷新后即可加入`;
-              };
-              const supplierBatchIds=unifiedSupplierBatch ? [...groups.values()].map(group=>Number(group.document_id)).sort((a,b)=>a-b) : [];
-              const selectedSupplierItemIds=unifiedSupplierBatch ? [...groups.values()].flatMap(group=>[...group.itemIds]).sort((a,b)=>a-b) : [];
-              const packages=unifiedSupplierBatch
-                ? [await (async()=>{
-                    try {
-                      const {data}=await axios.get(`/api/requisition/supplier-order-label-batches/package?order_ids=${encodeURIComponent(supplierBatchIds.join(","))}&item_ids=${encodeURIComponent(selectedSupplierItemIds.join(","))}`);
-                      return {group:null,itemIds:selectedSupplierItemIds,data,documentNumber:`${supplierBatchIds.length} 张报料单`};
-                    } catch(error) {
-                      const data=noEligiblePackage(error,`${supplierBatchIds.length} 张报料单`);
-                      if (!data) throw error;
-                      return {group:null,itemIds:selectedSupplierItemIds,data,documentNumber:`${supplierBatchIds.length} 张报料单`};
-                    }
-                  })()]
-                : await Promise.all([...groups.values()].map(async group=>{
-                    const itemIds=[...group.itemIds].sort((a,b)=>a-b);
-                    const url=group.source_type === "stock_receipt"
-                      ? `/api/incoming/receipt-items/${group.document_id}/product-label-package`
-                      : group.source_type === "supplier_order"
-                      ? `/api/requisition/supplier-orders/${group.document_id}/production-packaging-label-package?item_ids=${encodeURIComponent(itemIds.join(","))}`
-                      : `/api/requisition/batches/${group.document_id}/production-packaging-label-package?item_ids=${encodeURIComponent(itemIds.join(","))}`;
-                    try {
-                      const {data}=await axios.get(url);
-                      return {group,itemIds,data,documentNumber:group.document_number};
-                    } catch(error) {
-                      const data=noEligiblePackage(error,group.document_number);
-                      if (!data) throw error;
-                      return {group,itemIds,data,documentNumber:group.document_number};
-                    }
-                  }));
-              if (this.authGeneration !== authGeneration || (this.user?.id ?? null) !== userId || this.activePage !== "incoming" || this.incomingTab === "pending") {
-                windows.forEach(opened=>{ try { opened?.close(); } catch(_error) {} });
-                return false;
-              }
-              const excludedMessages=[...new Set(packages.flatMap(item=>(item.data?.excluded_items || []).map(excluded=>excludedMessage(excluded,item.documentNumber))))];
-              const printablePackages=packages.filter(item=>Number(item.data?.label_count || 0)>0);
-              if (!printablePackages.length) {
-                windows.forEach(opened=>{ try { opened?.close(); } catch(_error) {} });
-                this.incomingProductLabelMessages=excludedMessages.length
-                  ? excludedMessages
-                  : ["所选实收产品均没有可打印标签；处理：到常用箱打开“打印标签”并保存，刷新后重新勾选"];
-                return false;
-              }
-              const eligibleProducts=printablePackages.reduce((sum,item)=>sum+Number(item.data?.production_task_count || item.data?.plans?.length || 0),0);
-              const excludedSection=excludedMessages.length ? `\n\n以下 ${excludedMessages.length} 款本次不打印：\n${excludedMessages.join("\n")}` : "";
-              if (!confirm(`已核验 ${eligibleProducts || '所选'} 款有效产品，将打开 ${printablePackages.length} 个产品标签页。${excludedSection}\n\n确认继续打印有效产品？`)) {
-                windows.forEach(opened=>{ try { opened?.close(); } catch(_error) {} });
-                return false;
-              }
-              const recovery=[];
-              printablePackages.forEach(({group,itemIds},index)=>{
-                const url=unifiedSupplierBatch
-                  ? `/production-packaging-label.html?ids=${encodeURIComponent(supplierBatchIds.join(","))}&item_ids=${encodeURIComponent(selectedSupplierItemIds.join(","))}`
-                  : group.source_type === "stock_receipt"
+            const supplierBatchIds=unifiedSupplierBatch ? [...groups.values()].map(group=>Number(group.document_id)).sort((a,b)=>a-b) : [];
+            const selectedSupplierItemIds=unifiedSupplierBatch ? [...groups.values()].flatMap(group=>[...group.itemIds]).sort((a,b)=>a-b) : [];
+            const targets=unifiedSupplierBatch
+              ? [{url:`/production-packaging-label.html?ids=${encodeURIComponent(supplierBatchIds.join(","))}&item_ids=${encodeURIComponent(selectedSupplierItemIds.join(","))}`,document_number:`${supplierBatchIds.length} 张报料单`}]
+              : [...groups.values()].map(group=>({
+                  url:group.source_type === "stock_receipt"
                     ? `/production-packaging-label.html?stock_receipt_id=${encodeURIComponent(group.document_id)}`
                     : group.source_type === "supplier_order"
-                    ? `/production-packaging-label.html?id=${encodeURIComponent(group.document_id)}&item_ids=${encodeURIComponent(itemIds.join(","))}`
-                    : `/production-packaging-label.html?batch_id=${encodeURIComponent(group.document_id)}&item_ids=${encodeURIComponent(itemIds.join(","))}`;
-                const opened=windows[index];
-                if (opened) { try { opened.location.href=url; } catch(_error) { recovery.push({url,document_number:group?.document_number || `${supplierBatchIds.length} 张报料单`}); } }
-                else recovery.push({url,document_number:group?.document_number || `${supplierBatchIds.length} 张报料单`});
-              });
-              windows.slice(printablePackages.length).forEach(opened=>{ try { opened?.close(); } catch(_error) {} });
-              this.incomingProductLabelMessages=excludedMessages;
-              this.incomingProductLabelRecoveryUrls=recovery;
-              this.showToast(`已核验并打开 ${printablePackages.length} 个产品标签页${excludedMessages.length ? `，另有 ${excludedMessages.length} 款未启用标签` : ""}`);
-              return true;
-            } catch(error) {
-              windows.forEach(opened=>{ try { opened?.close(); } catch(_error) {} });
-              if (this.authGeneration !== authGeneration || (this.user?.id ?? null) !== userId) return false;
-              const status=Number(error?.response?.status || 0);
-              if (status===401 || status===403) {
-                this.resetPagePerformanceState();
-                this.showToast(this.errorMessage(error),true);
-                return false;
-              }
-              const detail=error?.response?.data?.detail;
-              const reasons=Array.isArray(detail?.reasons) ? detail.reasons : [];
-              this.incomingProductLabelMessages=[`产品标签核验失败：${reasons.join("；") || detail?.message || this.errorMessage(error)}；处理：按明细提示修复后刷新重试`];
-              return false;
-            } finally {
-              if (this.authGeneration === authGeneration && (this.user?.id ?? null) === userId) this.incomingProductionCardBatchBusy=false;
+                    ? `/production-packaging-label.html?id=${encodeURIComponent(group.document_id)}&item_ids=${encodeURIComponent([...group.itemIds].join(","))}`
+                    : `/production-packaging-label.html?batch_id=${encodeURIComponent(group.document_id)}&item_ids=${encodeURIComponent([...group.itemIds].join(","))}`,
+                  document_number:group.document_number
+                }));
+            const recovery=[];
+            for (const target of targets) {
+              let opened=null;
+              try { opened=window.open(target.url,"_blank"); if (opened) opened.opener=null; } catch(_error) {}
+              if (!opened) recovery.push(target);
             }
+            this.incomingProductLabelMessages=[];
+            this.incomingProductLabelRecoveryUrls=recovery;
+            this.showToast(recovery.length ? "部分预览被浏览器拦截，请点击下方链接打开" : `已打开 ${targets.length} 个产品标签预览`);
+            return true;
           },
           async openIncomingProductionCard(row) {
             if (this.incomingProductionCardOpening) return false;
@@ -29061,6 +29009,11 @@
           async returnFromCommonBoxEditor(savedProductId, { saved=false }={}) {
             const context = this.productEditReturnContext;
             if (!context) return false;
+            if (context.source === "order-item") {
+              this.orderItemForm=context.orderItemForm;this.modal=context.returnModal;this.productEditReturnContext=null;
+              if (saved) this.showToast("常用箱已保存，本单未保存内容与冻结资料已保留");
+              return true;
+            }
             if (context.source !== "bom") return this.restoreOrderContextProduct(savedProductId, {saved});
             const productId = Number(savedProductId || context.productId);
             const returnModal = context.returnModal;
@@ -32050,7 +32003,9 @@
               th,td{border:1px solid #999;padding:4px 6px}
               th{background:#f0f0f0}
               @media print{body{margin:0}}
-            </style></head><body>${area.innerHTML}</body></html>`);
+
+
+    </style></head><body>${area.innerHTML}</body></html>`);
             w.document.close();
             w.focus();
             setTimeout(() => { w.print(); w.close(); }, 300);
@@ -33433,7 +33388,7 @@
 	                  product_code:this.orderCommonBoxPicker.filters.product_code || "",
 	                  product_name:this.orderCommonBoxPicker.filters.product_name || "",
 	                  spec:this.orderCommonBoxPicker.filters.spec || "",
-	                  selection_context:"order",
+	                  selection_context:"order", include_inventory:true,
 	                  sort_by:picker.sort_by || "newest",
 	                  source_order_id:picker.source_order_id || undefined,
 	                  page, page_size:this.orderCommonBoxPicker.page_size,
@@ -34629,7 +34584,34 @@
               this.loading = false;
             }
           },
-	          async handleOrderCustomerChange() {
+	          openAssemblyInventoryReview(source) {
+            const target="/warehouse-ledger.html?"+new URLSearchParams({tab:"finished",q:source.lot_number || "",lot_id:String(source.lot_id)});
+            const params=new URLSearchParams({page:"warehouse",warehouse_target:target});
+            window.open(`/static/index.html?${params.toString()}`,"_blank","noopener");
+          },
+          orderItemNeedsPaperFields() { return this.orderItemForm?._paper_fields !== false; },
+          async openOrderItemCommonBoxEditor() {
+            const productId=Number(this.orderItemForm.product_id || 0);
+            if (!productId || !this.canEditProducts) return false;
+            this.productEditReturnContext={source:"order-item",productId,returnModal:{...this.modal},orderItemForm:this.orderItemForm};
+            if (!await this.openProduct({id:productId})) return this.returnFromCommonBoxEditor(productId,{saved:false});
+            return true;
+          },
+          async chooseOrderCustomer(value) {
+            if (String(value || "")===String(this.orderForm.customer_id || "")) return;
+            const populated=this.orderForm.items.some(row=>row.product_id || row.product_code || row.manual_size_entry || Number(row.quantity)>0);
+            if (populated && !confirm("更换客户将清空当前客户的明细，是否继续？")) return;
+            this.orderForm.customer_id=value;
+            this.orderForm.items=[];
+            await this.handleOrderCustomerChange();
+          },
+          chooseDeliveryCustomer(value) {
+            if (String(value || "")===String(this.deliveryForm.customer_id || "")) return;
+            if (this.deliveryForm.lines.length && !confirm("更换客户将清空当前客户的明细，是否继续？")) return;
+            this.deliveryForm.customer_id=value;
+            this.onDeliveryCustomerChange();
+          },
+          async handleOrderCustomerChange() {
 	            const form = this.orderForm, customerId = form.customer_id;
 	            const generation = this.authGeneration, actorId = this.user?.id;
 	            const isCurrent = () => form === this.orderForm && customerId === form.customer_id
@@ -36180,6 +36162,7 @@
                 bom_production_expected_revision:Number(itemSnapshot.bom_production_revision || 0),
                 requisition_status:itemSnapshot.requisition_status || "未报料",
                 supply_mode_snapshot:itemSnapshot.supply_mode_snapshot,
+                _paper_fields:!(itemSnapshot.supply_mode_snapshot === "external_purchase" || product.is_virtual_composite_parent || product.box_style === "BOM组合" || ["assembled","separate"].includes(product.bom_inventory_mode) || itemSnapshot.bom_graph?.root_source === "separate"),
                 finished_inventory_reserved_qty:Number(itemSnapshot.finished_inventory_reserved_qty || 0),
                 production_required_qty:Number(itemSnapshot.production_required_qty ?? itemSnapshot.quantity),
                 cost_status:itemSnapshot.cost_status || "pending", estimated_cost:itemSnapshot.estimated_cost || null,
@@ -41069,8 +41052,8 @@
                 payload.material_id = this.orderItemForm.material_id || null;
                 payload.layer_count = this.orderItemForm.layer_count || null;
                 payload.flute_type = this.orderItemForm.flute_type || null;
-                const materialChanged = Number(this.orderItemForm.material_id || 0) !== Number(this.orderItemForm._original_material_id || 0);
-                payload.sync_product = !!this.orderItemForm.product_id && (materialChanged || !!this.orderItemForm.sync_product);
+                payload.sync_product = !!this.orderItemForm.product_id && !!this.orderItemForm.sync_product;
+                delete payload._paper_fields;
                 if (payload.sync_product) {
                   if (!this.orderItemForm.product_version) throw new Error("常用箱版本读取失败，请关闭后重新打开明细");
                   payload.product_expected_version = Number(this.orderItemForm.product_version);
@@ -43378,11 +43361,14 @@
               if (runtime && this.componentMounted) this.pinyinRuntimeVersion += 1;
             });
           },
+          onFocus() {
+            if (this.disabled) return;
+            clearTimeout(this.timer); this.query=""; this.open=true;
+            this.$emit("search", "");
+          },
+          onBlur() { this.open=false; this.query=this.selectedLabel; },
           onInput() {
             if (this.disabled) return;
-            if (this.modelValue !== null && this.modelValue !== undefined && this.modelValue !== "" && this.normalize(this.query) !== this.normalize(this.selectedLabel)) {
-              this.$emit("update:modelValue", null);
-            }
             this.open=true; clearTimeout(this.timer);
             this.requestPinyinRuntime();
             this.timer=setTimeout(()=>this.$emit("search",this.query),220);
@@ -43391,6 +43377,7 @@
             if (this.disabled) return;
             const value=row[this.valueKey]; this.query=row[this.labelKey]; this.open=false;
             this.$emit("update:modelValue",value); this.$emit("change",value);
+            this.$nextTick(()=>{ this.query=this.selectedLabel; });
           },
           clear() {
             if (this.disabled) return;
@@ -43399,7 +43386,7 @@
           }
         },
         template:`<div class="search-select">
-          <input class="input" v-model="query" :disabled="disabled" :placeholder="placeholder" @focus="!disabled && (open = true)" @input="onInput" @keydown.esc="open=false" />
+          <input class="input" v-model="query" :disabled="disabled" :placeholder="placeholder" @focus="onFocus" @blur="onBlur" @input="onInput" @keydown.esc="onBlur" />
           <div v-if="open" class="search-select-list">
             <button v-if="allowEmpty" type="button" class="search-select-option muted" @mousedown.prevent="clear">全部 / 清空</button>
             <button v-for="row in filtered" :key="row[valueKey]" type="button" class="search-select-option" @mousedown.prevent="choose(row)">{{ row[labelKey] }}</button>

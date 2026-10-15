@@ -46,10 +46,21 @@ def pending_stock(db, scope):
     parents = db.scalars(select(ProductBomComponent.parent_product_id).join(
         ProductBomInventoryRelation, ProductBomInventoryRelation.bom_component_id == ProductBomComponent.id
     ).where(ProductBomComponent.component_product_id.in_(lots_by_product), ProductBomInventoryRelation.relation == 'assembly').distinct())
+    parent_ids = set(parents)
+    frontier = set(parent_ids)
+    # An active carton may reference a retired intermediate kit. Keep that
+    # active ancestor's actionable error visible, rather than listing the
+    # retired kit as normal work or losing the invalid parent altogether.
+    while frontier and len(parent_ids) <= 1000:
+        ancestors = set(db.scalars(select(ProductBomComponent.parent_product_id).join(
+            ProductBomInventoryRelation, ProductBomInventoryRelation.bom_component_id == ProductBomComponent.id
+        ).where(ProductBomComponent.component_product_id.in_(frontier), ProductBomInventoryRelation.relation == 'assembly')))
+        frontier = ancestors - parent_ids
+        parent_ids.update(frontier)
     result = []
-    for parent_id in parents:
+    for parent_id in sorted(parent_ids):
         parent = db.get(Product, parent_id)
-        if not parent or (scope is not None and parent.customer_id not in scope):
+        if not parent or not parent.is_active or parent.deleted_at or parent.purged_at or (scope is not None and parent.customer_id not in scope):
             continue
         try:
             structure = load_master_structure(db, parent_id)
@@ -81,7 +92,7 @@ def pending_stock(db, scope):
             verified = preview(db,parent_id,1)
             can_assemble=verified['available_sets']>0
             verified_capacity=verified['available_sets']
-            assembly_block=None if can_assemble else '实物子件不足或身份待核对'
+            assembly_block=None if can_assemble else '；'.join(f"{c['name']}：至少缺 {c['missing']} {c['unit']}" for c in verified.get('shortages',[])) or '子件身份或用途待核对'
             if not can_assemble and verified.get('excluded_recipes'):
                 assembly_block='当前按最新冻结配方核对；其他版本子件保留，需按原配方另行核对'
         except WarehouseInventoryError as error:
@@ -90,13 +101,13 @@ def pending_stock(db, scope):
         for child in children:
             child['reference_quantity']=child['quantity']
             child['verified_quantity']=(verified or {}).get('component_availability',{}).get(child['product_id'],0)
-            child['missing_next_set'] = max(0, (capacity+1)*child['per_set']-child['quantity'])
+            child['missing_next_set'] = max(0, child['per_set']-child['verified_quantity'])
         result.append(dict(key=f'stock:{parent_id}', source_kind='stock', customer_id=parent.customer_id,
             parent_product_id=parent_id,can_assemble_stock=can_assemble,assembly_block=assembly_block,
             customer_name=parent.customer.chinese_short_name or parent.customer.name,
             order_number='备库 · '+parent.product_code, product_name=parent.product_name,
-            available_sets=capacity,reference_available_sets=capacity,verified_available_sets=verified_capacity,
+            available_sets=verified_capacity,reference_available_sets=capacity,verified_available_sets=verified_capacity,
             unit=product_unit_label(parent),verified_output_unit=(verified or {}).get('output_unit'),
-            children=children, sources=sources, outputs=[],
-            notice='未预占子件，配套数仅供参考；组装仍需核实本体、实物身份及实际数量。'))
+            children=children, sources=sources, excluded_sources=(verified or {}).get('excluded_sources',[]), outputs=[],
+            notice='可组套数按合格自由库存核验；待核对批次另列，预览不会预占或消耗库存。'))
     return result

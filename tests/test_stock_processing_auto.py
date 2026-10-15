@@ -250,6 +250,8 @@ def test_stocktake_component_lots_assemble_without_fake_preparation_jobs(stock_r
 def test_pure_assembly_parent_without_own_physical_spec_uses_consumed_children(stock_replenishment_app,monkeypatch):
     """80012500 class: a pure assembly parent is not an independently made sheet."""
     app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
+    from app.core.receipt_price_guard import ReceiptPriceGuardSession
+    factory.class_ = ReceiptPriceGuardSession
     from app.api.production import router as production_router
     app.include_router(production_router,prefix='/api/production')
     from app.services import stock_preparation_processing as processing
@@ -284,8 +286,13 @@ def test_pure_assembly_parent_without_own_physical_spec_uses_consumed_children(s
         with factory() as db:
             output=db.get(InventoryLot,response.json()['output_lot_id'])
             assert output.quantity_available==5
+            assert output.cost_snapshot_at is not None
+            frozen_at = output.cost_snapshot_at
             assert not json.loads(output.finished_detail.physical_basis_json)['spec']
             assert all(db.get(InventoryLot,row['lot_id']).quantity_consumed==row['quantity'] for row in plan['sources'])
+        assert client.post('/api/production/stock-preparation/group-actions',json=body).json()==response.json()
+        with factory() as db:
+            assert db.get(InventoryLot,response.json()['output_lot_id']).cost_snapshot_at==frozen_at
 
 
 def test_pure_assembly_missing_child_spec_names_child_and_rolls_back(stock_replenishment_app,monkeypatch):

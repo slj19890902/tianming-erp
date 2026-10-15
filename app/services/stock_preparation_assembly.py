@@ -259,6 +259,7 @@ def assemble_stock(db,payload,actor):
     from app.services.bom_entry_cost import freeze_assembly_standard
     labour=freeze_assembly_standard(db,recipe['parent_id'],[(db.get(InventoryLot,r['lot_id']),r['quantity']) for r in inputs],payload['sets'])
     output.cost_snapshot_source='stock_preparation_assembly';output.cost_snapshot_detail_json=encode(dict(inputs=inputs,total_cost=str(total),consumed_assembly_spec=consumed_spec,**labour))
+    output.cost_snapshot_at = utc_now_naive()
     from app.services.stock_preparation_disposition import release_empty_output_pallet
     for row in inputs:release_empty_output_pallet(db,db.get(InventoryLot,row['lot_id']),actor)
     result.update(output_lot_id=output.id,placed_at_utc=utc_now_naive().isoformat())

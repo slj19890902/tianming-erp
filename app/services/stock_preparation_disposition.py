@@ -150,6 +150,7 @@ def assemble(db,payload,actor,*,result_builder=None):
     from app.services.bom_entry_cost import freeze_assembly_standard
     labour=freeze_assembly_standard(db,recipe['parent_id'],[(db.get(InventoryLot,r['lot_id']),r['quantity']) for r in inputs],sets)
     output.cost_snapshot_source='stock_preparation_assembly';output.cost_snapshot_detail_json=encode(dict(inputs=inputs,total_cost=str(total_cost) if cost_known else None,consumed_assembly_spec=consumed_spec,**labour))
+    output.cost_snapshot_at = utc_now_naive()
     for source in inputs:release_empty_output_pallet(db,db.get(InventoryLot,source['lot_id']),actor)
     result['output_lot_id']=output.id;result['placed_at_utc']=utc_now_naive().isoformat()
     if result_builder is not None:

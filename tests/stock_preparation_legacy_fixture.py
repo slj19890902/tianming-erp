@@ -11,4 +11,5 @@ from test_stock_replenishment_flow import stock_replenishment_app as base_stock_
 def stock_replenishment_app(base_stock_replenishment_app,monkeypatch):
     from app.services import stock_preparation_processing
     monkeypatch.setattr(stock_preparation_processing,'auto_plan_receipt',lambda *args:None)
+    monkeypatch.setattr(stock_preparation_processing,'auto_complete_receipt',lambda *args:None)
     return base_stock_replenishment_app

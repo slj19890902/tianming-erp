@@ -131,8 +131,10 @@ def validate_entries(session):
             if not cost.is_finite() or cost <= 0:
                 missing.append('有效材料成本')
             evidence = json.loads(lot.cost_snapshot_detail_json or '{}')
-            if not isinstance(evidence, dict) or not evidence or not lot.cost_snapshot_source or not lot.cost_snapshot_at:
+            if not isinstance(evidence, dict) or not evidence or not lot.cost_snapshot_source:
                 missing.append('冻结成本来源')
+            if not lot.cost_snapshot_at:
+                missing.append('成本冻结时间')
         except (InvalidOperation, ValueError, TypeError):
             missing.append('冻结成本来源')
         from app.services.inventory_valuation import frozen_cost
@@ -234,8 +236,9 @@ def validate_entries(session):
                 message = '本次入库尚未保存：' + '、'.join(
                     str(issue.get('label')) for issue in issues) + '未填写或依据不足'
             else:
-                message = ('产品资料完整，但本次入库未正确生成可核验依据。本次未保存，'
-                           '原表单可继续保留；请管理员处理，不需要重复修改产品资料')
+                message = ('系统未能完成入库依据校验（' + '、'.join(dict.fromkeys(missing)) +
+                           '）。本次未保存，原表单可继续保留；需系统维护人员修复，'
+                           '无需重复修改产品资料或提升账号权限')
             raise HTTPException(422, detail=dict(code='INVENTORY_ENTRY_INCOMPLETE', lot_number=lot.lot_number,
                 missing=missing, issues=issues, message=message,
                 product_id=detail.product_id if detail else None,

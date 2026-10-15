@@ -317,6 +317,7 @@ def build_order_business_statuses(
     required_external_component_ids_by_item: dict[int, set[int]] = defaultdict(set)
     task_statuses_by_item: dict[int, dict[int | None, str]] = defaultdict(dict)
     finished_coverage_by_item: dict[int, int] = defaultdict(int)
+    bom_delivery_by_item: dict[int, int] = {}
     semi_requirement_quantity_by_id: dict[int, tuple[int, int]] = {}
     semi_coverage_by_requirement_id: dict[int, int] = defaultdict(int)
     dispatched_rows_by_item: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
@@ -494,6 +495,15 @@ def build_order_business_statuses(
         finished_coverage_by_item.update(
             active_finished_reservations_by_item_ids(db, list(item_id_chunk))
         )
+        # Graph output reservations name a frozen BOM node, including the
+        # physical parent.  The ordinary finished-order reader excludes those
+        # rows. Use the delivery planner's real pick nodes so consumed children,
+        # unassembled bodies and prior rule versions cannot masquerade as kits.
+        from app.services.composite_bom_workflow import kit_available_sets_by_order_item_ids
+        graph_ids = list(db.scalars(select(OrderBomGraph.order_item_id).where(
+            OrderBomGraph.order_item_id.in_(item_id_chunk))))
+        if graph_ids:
+            bom_delivery_by_item.update(kit_available_sets_by_order_item_ids(db, graph_ids))
         semi_requirement_rows = db.execute(
             select(
                 OrderItemSemiRequirement.id,
@@ -717,6 +727,9 @@ def build_order_business_statuses(
             production_ready = tasks.get(None) in READY_PRODUCTION_STATUSES
         finished_coverage = finished_coverage_by_item.get(item_id, 0)
         remaining_finished_coverage = max(finished_coverage - delivered_quantity, 0)
+        if item_id in bom_delivery_by_item:
+            remaining_finished_coverage = min(remaining_quantity, bom_delivery_by_item[item_id])
+            finished_coverage = delivered_quantity + remaining_finished_coverage
         finished_shortage = max(remaining_quantity - remaining_finished_coverage, 0)
         from app.services.liner_direct_delivery import liner_direct_coverage
         direct_liner = liner_direct_coverage(

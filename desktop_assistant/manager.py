@@ -1013,7 +1013,8 @@ class Manager:
             # rehearse and run against the same frozen source point.
             try:
                 backup, local_backup_proof = local_only.backup_locked(
-                    self, password, restart_allowed=lambda: False, publish=False
+                    self, password, restart_allowed=lambda: False, publish=False,
+                    manifest=candidate
                 )
             except Exception:
                 if self._process() is None:
@@ -1037,7 +1038,8 @@ class Manager:
                 self.start()
                 if local_backup_proof is not None:
                     local_only.finalize_captured_locked(
-                        self, local_backup_proof, sourcepoint='before-schema-update'
+                        self, local_backup_proof, sourcepoint='before-schema-update',
+                        manifest=candidate
                     )
                 raise
             shared = self.root / 'shared'
@@ -1096,12 +1098,14 @@ class Manager:
             self.start()
             if local_backup_proof is not None:
                 local_only.finalize_captured_locked(
-                    self, local_backup_proof, sourcepoint='before-schema-update'
+                    self, local_backup_proof, sourcepoint='before-schema-update',
+                    manifest=candidate
                 )
             raise ValueError('新版本启动失败，已切回原程序，业务数据库未回退') from None
         if local_backup_proof is not None:
             local_only.finalize_captured_locked(
-                self, local_backup_proof, sourcepoint='before-schema-update'
+                self, local_backup_proof, sourcepoint='before-schema-update',
+                manifest=candidate
             )
         return candidate['version']
 

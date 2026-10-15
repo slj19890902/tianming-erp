@@ -165,8 +165,8 @@ def _retention(manager,keep,context):
     return {'status':'one_complete' if not retained else 'retained','removed':removed,'retained':retained}
 
 
-def _finalize_locked(manager,proof,sourcepoint):
-    enabled(manager);_,context,policy_sha=_authority()
+def _finalize_locked(manager,proof,sourcepoint,manifest=None):
+    enabled(manager,manifest);_,context,policy_sha=_authority()
     require(manager._process() is not None and manager.state.get('manual_stop') is False,
         'ERP must be ready before local publication/retention')
     path=_check_proof(manager,proof,context)
@@ -221,9 +221,9 @@ def verified_at(root,state,*,now=None):
     except (OSError,ValueError,KeyError,TypeError):return None
 
 
-def backup_locked(manager,password,*,restart_allowed=None,publish=True):
+def backup_locked(manager,password,*,restart_allowed=None,publish=True,manifest=None):
     """Original maintenance caller owns lock; one capture, resume then verify."""
-    enabled(manager);_,context,_=_authority()
+    enabled(manager,manifest);_,context,_=_authority()
     old_index=manager.state.get('last_backup_local')
     if old_index:
         old=_owned_read(_receipt_path(manager.root,old_index['sha256']),context)
@@ -276,6 +276,6 @@ def backup_locked(manager,password,*,restart_allowed=None,publish=True):
             manager.stop()
 
 
-def finalize_captured_locked(manager,proof,*,sourcepoint):
+def finalize_captured_locked(manager,proof,*,sourcepoint,manifest=None):
     """Publish one already authenticated capture after the service is ready."""
-    return _finalize_locked(manager,proof,sourcepoint)
+    return _finalize_locked(manager,proof,sourcepoint,manifest)

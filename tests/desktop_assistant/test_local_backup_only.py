@@ -90,3 +90,58 @@ def test_manage_destination_local_even_with_old_smb_metadata(local_case,monkeypa
     from desktop_assistant import mac_smb_stream_target as stream
     monkeypatch.setattr(stream,'approved_destination',lambda *args:(_ for _ in ()).throw(AssertionError('NAS destination')))
     assert mac_service_manage.approved_destination({})==scene.manager.root/'backups'
+
+
+def test_protected_migration_source_does_not_poison_next_local_backup(local_case):
+    scene=local_case;root=scene.manager.root
+    protected=root/'backups'/'20260101-010101-aaaaaaaa.tmbackup'
+    protected.write_bytes(b'protected migration recovery source');protected.chmod(0o600)
+    state=scene.manager.state;state['migration_backup_sha256']=sha(protected)
+    write_json(root/'state.json',state)
+    proof=cutover(scene);first=local.finalize_local_update(scene.manager)
+    assert first['retention']=={'status':'one_complete','removed':[],'retained':[],'failures':[],
+        'protected':[{'name':protected.name,'reasons':['migration_source']}]}
+    previous=root/'backups'/proof['backup_filename'];assert previous.exists()
+    with scene.manager.lock():
+        current=local.backup_locked(scene.manager,PASSWORD)
+    assert current.exists() and protected.exists() and not previous.exists()
+    assert {path.name for path in (root/'backups').glob('*.tmbackup')}=={protected.name,current.name}
+
+
+def test_previous_retained_receipt_is_reconciled_before_fresh_capture(local_case):
+    scene=local_case;root=scene.manager.root
+    protected=root/'backups'/'20260101-010101-bbbbbbbb.tmbackup'
+    protected.write_bytes(b'protected migration recovery source');protected.chmod(0o600)
+    state=scene.manager.state;state['migration_backup_sha256']=sha(protected)
+    write_json(root/'state.json',state)
+    proof=cutover(scene);local.finalize_local_update(scene.manager)
+    previous=root/'backups'/proof['backup_filename']
+    stale=root/'backups'/'20260101-020202-cccccccc.tmbackup'
+    stale.write_bytes(b'unreferenced retired local backup');stale.chmod(0o600)
+    receipt=local._receipt_path(root,proof['backup_sha256']);value=read_json(receipt)
+    value['retention']={'status':'retained','removed':[],
+        'retained':[protected.name,stale.name]}
+    write_json(receipt,value)
+    state=scene.manager.state;state['backup_error']=local.RETENTION_ATTENTION
+    write_json(root/'state.json',state)
+    with scene.manager.lock():
+        current=local.backup_locked(scene.manager,PASSWORD)
+    assert current.exists() and protected.exists() and not stale.exists() and not previous.exists()
+    assert scene.manager.state.get('backup_error') is None
+
+
+def test_real_cleanup_guard_failure_still_blocks_next_capture(local_case,monkeypatch):
+    scene=local_case;root=scene.manager.root
+    stale=root/'backups'/'20260101-030303-dddddddd.tmbackup'
+    stale.write_bytes(b'backup still used by a process');stale.chmod(0o600)
+    from desktop_assistant import cleanup
+    monkeypatch.setattr(cleanup,'assert_idle',
+        lambda path:(_ for _ in ()).throw(ValueError('目录仍被运行进程引用')) if path==stale else None)
+    proof=cutover(scene);result=local.finalize_local_update(scene.manager)
+    assert result['retention']['status']=='retained'
+    assert result['retention']['failures']==[{'name':stale.name,'reason':'目录仍被运行进程引用'}]
+    before={path.name for path in (root/'backups').glob('*.tmbackup')}
+    with scene.manager.lock(),pytest.raises(ValueError,match='previous local retention needs owner closure'):
+        local.backup_locked(scene.manager,PASSWORD)
+    assert {path.name for path in (root/'backups').glob('*.tmbackup')}==before
+    assert (root/'backups'/proof['backup_filename']).exists() and stale.exists()

@@ -19,6 +19,7 @@ CAPABILITY='local_backup_only_v1'
 MODULE='desktop_assistant/local_backup_only.py'
 TYPE='tianming.local-only-backup-policy.v1'
 RECEIPT='tianming.local-only-backup-receipt.v1'
+RETENTION_ATTENTION='本地完整备份已验证；旧备份仍受引用或清理守卫保护，请管理员收口'
 
 
 def require(ok,message):
@@ -130,7 +131,7 @@ def _closed_update_reference(manager,path,cipher_sha,context):
 
 
 def _retention(manager,keep,context):
-    """Only authenticated old ciphers; unresolved activity retains and alarms."""
+    """Delete ordinary predecessors while preserving explicitly referenced sources."""
     from .cleanup import assert_idle
     state=manager.state
     require(not state.get('onboarding_pending') and not state.get('backup_work_retained')
@@ -138,7 +139,7 @@ def _retention(manager,keep,context):
         'pending maintenance protects previous recovery points')
     active_paths,active_hashes=_active_references(manager,context)
     from .nas_full_backup_retention import _comparison_key
-    removed=[];retained=[]
+    removed=[];retained=[];failures=[];protected=[]
     for path in sorted((manager.root/'backups').iterdir()):
         if path==keep:continue
         try:
@@ -148,21 +149,50 @@ def _retention(manager,keep,context):
             old=Lease(path,uid=context['uid'],gid=context['gid'],mode=0o600)
             try:
                 old_sha=sha(path)
-                require(old_sha not in {state.get('restored_backup_sha256'),state.get('migration_backup_sha256')},
-                    'previous cipher remains a restore/migration source reference')
-                require(old_sha not in active_hashes and not any(_comparison_key(str(path))==_comparison_key(name) for name in active_paths),
-                    'previous cipher remains an active task source')
+                reasons=[]
+                if old_sha==state.get('restored_backup_sha256'):reasons.append('restore_source')
+                if old_sha==state.get('migration_backup_sha256'):reasons.append('migration_source')
+                if (old_sha in active_hashes
+                        or any(_comparison_key(str(path))==_comparison_key(name) for name in active_paths)):
+                    reasons.append('active_task_source')
+                if reasons:
+                    protected.append({'name':path.name,'reasons':reasons});continue
                 if str(path)==state.get('update_backup'):
                     _closed_update_reference(manager,path,old_sha,context)
                 assert_idle(path)
                 old.check();os.unlink(path);require(os.fstat(old.fd).st_nlink==0,'old cipher unlink not confirmed')
                 removed.append(path.name)
             finally:os.close(old.fd)
-        except (OSError,ValueError):retained.append(path.name)
+        except (OSError,ValueError) as error:
+            retained.append(path.name);failures.append({'name':path.name,'reason':str(error)})
     fd=os.open(manager.root/'backups',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
     try:os.fsync(fd)
     finally:os.close(fd)
-    return {'status':'one_complete' if not retained else 'retained','removed':removed,'retained':retained}
+    return {'status':'one_complete' if not retained else 'retained','removed':removed,
+        'retained':retained,'failures':failures,'protected':protected}
+
+
+def _reconcile_previous_retention_locked(manager,index,context,policy_sha):
+    """Recheck an old finalized receipt before refusing a fresh local capture."""
+    require(isinstance(index,dict) and set(index)=={'receipt','sha256','source_time'},
+        'previous local receipt index changed')
+    receipt=_receipt_path(manager.root,index['sha256']);value=_owned_read(receipt,context)
+    state=manager.state;path=Path(value.get('path',''))
+    require(value.get('type')==RECEIPT and value.get('policy_sha256')==policy_sha
+        and value.get('sha256')==index['sha256'] and receipt.name==index['receipt']
+        and value.get('verified_at')==index['source_time']==state.get('last_backup_at')
+        and str(path)==state.get('last_backup') and path.parent==manager.root/'backups',
+        'previous local receipt publication changed')
+    with Lease(path,uid=context['uid'],gid=context['gid'],mode=0o600) as held:
+        identity={key:getattr(os.fstat(held.fd),'st_'+key) for key in value['identity']}
+        require(identity==value['identity'] and sha(path)==value['sha256'],
+            'previous complete local cipher identity changed')
+    if value.get('retention',{}).get('status')!='one_complete':
+        value['retention']=_retention(manager,path,context);write_json(receipt,value)
+    require(value['retention']['status']=='one_complete','previous local retention needs owner closure')
+    if state.get('backup_error')==RETENTION_ATTENTION:
+        state['backup_error']=None;write_json(manager.root/'state.json',state)
+    return value
 
 
 def _finalize_locked(manager,proof,sourcepoint,manifest=None):
@@ -179,7 +209,7 @@ def _finalize_locked(manager,proof,sourcepoint,manifest=None):
     if receipt.exists():
         old=_owned_read(receipt,context)
         require(all(old.get(key)==value[key] for key in value),'existing local receipt differs')
-    value['retention']={'status':'pending','removed':[],'retained':[]}
+    value['retention']={'status':'pending','removed':[],'retained':[],'failures':[],'protected':[]}
     write_json(receipt,value)  # Durable new proof BEFORE state publication or old unlink.
     control_fd=os.open(receipt.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
     try:os.fsync(control_fd)
@@ -191,7 +221,7 @@ def _finalize_locked(manager,proof,sourcepoint,manifest=None):
     value['retention']=_retention(manager,path,context)
     write_json(receipt,value)
     if value['retention']['status']!='one_complete':
-        state=manager.state;state['backup_error']='本地完整备份已验证；旧备份仍受引用或清理守卫保护，请管理员收口'
+        state=manager.state;state['backup_error']=RETENTION_ATTENTION
         write_json(manager.root/'state.json',state)
     return dict(status='verified',backup=str(path),verified_at=value['verified_at'],
         source_time=proof['authenticated_recovery']['source_time'],sourcepoint=sourcepoint,retention=value['retention'])
@@ -223,11 +253,10 @@ def verified_at(root,state,*,now=None):
 
 def backup_locked(manager,password,*,restart_allowed=None,publish=True,manifest=None):
     """Original maintenance caller owns lock; one capture, resume then verify."""
-    enabled(manager,manifest);_,context,_=_authority()
+    enabled(manager,manifest);_,context,policy_sha=_authority()
     old_index=manager.state.get('last_backup_local')
     if old_index:
-        old=_owned_read(_receipt_path(manager.root,old_index['sha256']),context)
-        require(old['retention']['status']=='one_complete','previous local retention needs owner closure')
+        _reconcile_previous_retention_locked(manager,old_index,context,policy_sha)
     budget=manager._backup_inputs()
     require(shutil.disk_usage(manager.root).free>=budget['required'],'insufficient complete local backup space')
     job=manager.root/'staging'/('local-backup-'+uuid.uuid4().hex);job.mkdir(mode=0o700)

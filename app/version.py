@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.637"
-APP_VERSION_NAME = "收料自动成品与库存组套闭环"
+APP_VERSION = "v0.22.638"
+APP_VERSION_NAME = "收料自动成品与备份留存闭环"
 APP_BUILD_DATE = "2026-10-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6187,3 +6187,15 @@ APP_VERIFICATION_STEPS = [
     "新建订单与送货单打开常用箱，核对勾选框、数量、编码、名称顺序及左下角导入按钮；再核对采用成品后的报料缺口为零。",
 ]
 APP_CHANGELOG = [*(f"v0.22.637：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "修复正式迁移恢复点仍受引用时，本地备份把受保护恢复点误当作清理失败并永久阻塞下一次更新的问题；受保护来源继续保留，普通旧备份按原身份、引用和占用守卫清理。",
+    "下一次备份前会重新核验旧留存收据和完整密文身份；未知文件、真实占用、收据变化或清理失败仍会阻止更新并记录具体原因，不运行NAS备份。",
+    "保留v0.22.637的收料自动成品、统一货位、子件组套、入库完整性、履约状态与常用箱布局全部改动；数据库迁移仍为eq1015sa。",
+]
+APP_VERIFICATION_STEPS = [
+    "进入系统版本确认正式版本为v0.22.638、数据库revision为eq1015sa，服务健康且没有备份注意提示。",
+    "按本次业务验收步骤抽查分批收料自动成品、盘点子件组套及采用成品后的报料缺口；重试不得重复记账。",
+    "打开订单和送货单常用箱弹窗，核对勾选、数量、编码、信息顺序及左下角导入按钮。",
+]
+APP_CHANGELOG = [*(f"v0.22.638：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

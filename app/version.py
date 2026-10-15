@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.639"
-APP_VERSION_NAME = "收料自动成品与备份进程门禁修复"
+APP_VERSION = "v0.22.640"
+APP_VERSION_NAME = "组套保存、BOM状态与补库实收标签修复"
 APP_BUILD_DATE = "2026-10-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6211,3 +6211,17 @@ APP_VERIFICATION_STEPS = [
     "按本任务业务验收步骤抽查分批收料自动成品、盘点子件组套、成品抵扣状态及两个常用箱弹窗。",
 ]
 APP_CHANGELOG = [*(f"v0.22.639：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "修复自由子件及分组组套缺少成本冻结时间导致无法保存的问题，保留原入库校验和失败回滚。",
+    "订单状态使用真实BOM交付容量，已预留父件成品不再误显示待报料，不重复扣减库存。",
+    "补库有效实收支持从来料记录勾选产品标签，按实际成品产出生成，保留来源、客户范围、幂等和冻结打印记录。",
+    "实收页改为近24小时实收，并明确勾选用于标签打印，不会重复收料；本版不包含生产工作台整体简化。",
+]
+APP_VERIFICATION_STEPS = [
+    "确认系统版本为v0.22.640；在正常业务中核对组套完成并入库，不再出现缺少成本冻结时间的保存失败。",
+    "查询TM20261009004的80012500，核对已有300套成品覆盖，不重复抵扣库存。",
+    "在近24小时实收或历史入库中勾选研光80010631，打开产品标签，核对5000只、每张30只、167张且末张20只；预览不登记实际打印。",
+]
+APP_CHANGELOG = [*(f"v0.22.640：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

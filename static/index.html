@@ -4725,7 +4725,7 @@
                 <div class="toolbar-group incoming-compact-head-main">
                   <strong class="incoming-page-title">纸板收料</strong>
                   <button :class="['btn',{primary:incomingTab==='pending'}]" @click="selectIncomingTab('pending')">待入库 {{ incomingPendingTotal }}</button>
-                  <button :class="['btn',{primary:incomingTab==='received'}]" @click="selectIncomingTab('received')">今日实收 {{ incomingReceivedTotal }}</button>
+                  <button :class="['btn',{primary:incomingTab==='received'}]" @click="selectIncomingTab('received')">近24小时实收 {{ incomingReceivedTotal }}</button>
                   <button :class="['btn',{primary:incomingTab==='history'}]" @click="selectIncomingTab('history')">历史入库 {{ incomingHistoryTotal }}</button>
                 </div>
                 <div class="toolbar-group incoming-compact-head-actions">
@@ -4756,6 +4756,7 @@
                 <div v-for="item in incomingProductLabelRecoveryUrls" :key="item.url">标签已核验；若浏览器阻止新窗口，请点击 <a :href="item.url" target="_blank" rel="noopener">{{ item.document_number || '打开产品标签' }}</a>。</div>
                 <button class="btn small" type="button" @click="incomingProductLabelRecoveryUrls=[]">关闭提示</button>
               </div>
+              <div v-if="incomingTab!=='pending'" class="muted" style="margin:8px 0">此页为收料记录，勾选用于打印有效实收的产品标签，不会再次入库。</div>
               <div v-if="incomingTab==='pending' && incomingPendingLoading" class="status blue" style="display:block;margin:8px 0">正在读取当前页待入库，已显示的记录不会被清空。</div>
               <div v-if="incomingTab==='pending' && incomingPendingError" class="status orange" style="display:block;margin:8px 0">{{ incomingPendingError }} <button class="btn small" :disabled="incomingPendingLoading" @click="retryIncomingPendingPage">重试</button></div>
               <div v-if="incomingTab==='pending' && incomingLocationsLoading" class="status blue" style="display:block;margin:8px 0">正在读取余量转半成品所需库位…</div>
@@ -22204,7 +22205,7 @@
           },
           canPrintIncomingProductLabel(row) {
             if (!Number(row?.receipt_item_id || 0) || row?.receipt_status !== "posted") return false;
-            if (row?.source_type === "stock_replenishment" || row?.stock_replenishment_item_id) return false;
+            if (row?.source_type === "stock_replenishment" || row?.stock_replenishment_item_id) return Number(row?.stock_replenishment_item_id || 0) > 0;
             const supplierSource = Number(row?.supplier_order_id || 0) > 0 && Number(row?.supplier_order_item_id || 0) > 0;
             const compositeSource = Number(row?.material_requisition_id || 0) > 0 && Number(row?.requisition_item_id || 0) > 0;
             return supplierSource || compositeSource;
@@ -22213,7 +22214,7 @@
             if (this.canPrintIncomingProductLabel(row)) return "";
             const identity=`${row?.receipt_number || '实收明细'}｜${row?.product_code || row?.product_name || `#${row?.receipt_item_id || '-'}`}`;
             if (row?.receipt_status === "reversed") return `${identity}：当前状态为已撤销，已撤销实收不能打印产品标签；请选择有效实收记录`;
-            if (row?.source_type === "stock_replenishment" || row?.stock_replenishment_item_id) return `${identity}：库存补库实收不绑定订单生产标签；请到已报料打印补库计划任务单`;
+            if (row?.source_type === "stock_replenishment" || row?.stock_replenishment_item_id) return `${identity}：补库实收来源不完整，请核对该实收记录`;
             if (row?.receipt_status !== "posted") return `${identity}：当前状态不是有效实收；请刷新并选择状态为有效实收的记录`;
             return `${identity}：缺少正式供应商报料或组合 BOM 来源；请刷新，仍缺失时联系管理员核对来源链`;
           },
@@ -23320,9 +23321,9 @@
               const supplierItemId=Number(row.supplier_order_item_id || 0);
               const materialRequisitionId=Number(row.material_requisition_id || 0);
               const requisitionItemId=Number(row.requisition_item_id || 0);
-              const sourceType=supplierOrderId && supplierItemId ? "supplier_order" : "composite_bom_requisition";
-              const documentId=sourceType === "supplier_order" ? supplierOrderId : materialRequisitionId;
-              const itemId=sourceType === "supplier_order" ? supplierItemId : requisitionItemId;
+              const sourceType=row.stock_replenishment_item_id ? "stock_receipt" : supplierOrderId && supplierItemId ? "supplier_order" : "composite_bom_requisition";
+              const documentId=sourceType === "stock_receipt" ? Number(row.receipt_item_id) : sourceType === "supplier_order" ? supplierOrderId : materialRequisitionId;
+              const itemId=sourceType === "stock_receipt" ? Number(row.receipt_item_id) : sourceType === "supplier_order" ? supplierItemId : requisitionItemId;
               const key=`${sourceType}:${documentId}`;
               if (!groups.has(key)) groups.set(key,{source_type:sourceType,document_id:documentId,document_number:row.supplier_order_number || row.material_requisition_number || row.receipt_number || `#${documentId}`,itemIds:new Set()});
               groups.get(key).itemIds.add(itemId);
@@ -23364,7 +23365,9 @@
                   })()]
                 : await Promise.all([...groups.values()].map(async group=>{
                     const itemIds=[...group.itemIds].sort((a,b)=>a-b);
-                    const url=group.source_type === "supplier_order"
+                    const url=group.source_type === "stock_receipt"
+                      ? `/api/incoming/receipt-items/${group.document_id}/product-label-package`
+                      : group.source_type === "supplier_order"
                       ? `/api/requisition/supplier-orders/${group.document_id}/production-packaging-label-package?item_ids=${encodeURIComponent(itemIds.join(","))}`
                       : `/api/requisition/batches/${group.document_id}/production-packaging-label-package?item_ids=${encodeURIComponent(itemIds.join(","))}`;
                     try {
@@ -23399,7 +23402,9 @@
               printablePackages.forEach(({group,itemIds},index)=>{
                 const url=unifiedSupplierBatch
                   ? `/production-packaging-label.html?ids=${encodeURIComponent(supplierBatchIds.join(","))}&item_ids=${encodeURIComponent(selectedSupplierItemIds.join(","))}`
-                  : group.source_type === "supplier_order"
+                  : group.source_type === "stock_receipt"
+                    ? `/production-packaging-label.html?stock_receipt_id=${encodeURIComponent(group.document_id)}`
+                    : group.source_type === "supplier_order"
                     ? `/production-packaging-label.html?id=${encodeURIComponent(group.document_id)}&item_ids=${encodeURIComponent(itemIds.join(","))}`
                     : `/production-packaging-label.html?batch_id=${encodeURIComponent(group.document_id)}&item_ids=${encodeURIComponent(itemIds.join(","))}`;
                 const opened=windows[index];

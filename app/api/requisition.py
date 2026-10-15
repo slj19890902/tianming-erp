@@ -23806,6 +23806,10 @@ def _require_packaging_label_job_access(
     job: ProductionPackagingLabelPrintJob,
     user: User,
 ) -> None:
+    from app.services.production_label_operations import _load_job_package
+    package = _load_job_package(job, db)
+    if package.get("source_type") == "stock_receipt":
+        require_customer_access(int(package["customer_id"]), user, db)
     if job.supplier_order_id is not None:
         order = db.get(SupplierRequisitionOrder, job.supplier_order_id)
         if order is None:

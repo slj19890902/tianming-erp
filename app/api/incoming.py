@@ -5398,3 +5398,81 @@ def revert_item(
     except Exception:
         db.rollback()
         raise
+
+
+class StockReceiptLabelCount(BaseModel):
+    selection_key: str = Field(min_length=1, max_length=160)
+    print_label_count: int = Field(ge=0, strict=True)
+
+
+class StockReceiptLabelRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    plan_fingerprint: str = Field(min_length=64, max_length=64)
+    confirmed: Literal[True]
+    items: list[StockReceiptLabelCount] = Field(min_length=1, max_length=200)
+
+
+def _stock_label_access(db, receipt_id, user):
+    from app.services.stock_receipt_labels import receipt_source
+    receipt, item = receipt_source(db, receipt_id)
+    if item.customer_id is None:
+        raise HTTPException(409, "补库实收缺少客户归属")
+    require_customer_access(item.customer_id, user, db)
+
+
+@router.get("/receipt-items/{receipt_id}/product-label-package")
+def stock_receipt_label_package(receipt_id: int, db: Session = Depends(get_db),
+                                user: User = Depends(PermissionChecker("orders.view"))):
+    from app.services.stock_receipt_labels import build_package, Error
+    from app.services.production_packaging_label import ProductionPackagingLabelError
+    from app.services.production_packaging_label_layout import ProductionPackagingLabelLayoutError
+    try:
+        _stock_label_access(db, receipt_id, user)
+        package = build_package(db, receipt_id)
+        if not package['label_count']:
+            raise HTTPException(409, detail=dict(code='stock_receipt_label_no_eligible',
+                message='本次补库成品未启用标签', excluded_items=package['excluded_items']))
+        return package
+    except Error as error:
+        raise HTTPException(error.status_code, str(error)) from error
+    except (ProductionPackagingLabelError, ProductionPackagingLabelLayoutError, ValueError) as error:
+        raise HTTPException(409, str(error)) from error
+
+
+from app.services.production_label_operations import production_label_write_guard
+
+
+@router.post("/receipt-items/{receipt_id}/product-label-jobs")
+def stock_receipt_label_job(receipt_id: int, payload: StockReceiptLabelRequest,
+                            db: Session = Depends(get_db),
+                            user: User = Depends(PermissionChecker("orders.view")),
+                            _guard: None = Depends(production_label_write_guard)):
+    from app.services.stock_receipt_labels import prepare_job, Error
+    from app.services.production_label_operations import packaging_label_job_response
+    from app.services.audit_log import append_audit_event
+    try:
+        _stock_label_access(db, receipt_id, user)
+        counts = {row.selection_key: row.print_label_count for row in payload.items}
+        if len(counts) != len(payload.items) or not payload.idempotency_key.strip():
+            raise HTTPException(422, '标签选择重复或请求标识为空')
+        result = prepare_job(db, receipt_id=receipt_id, key=payload.idempotency_key.strip(),
+                             fingerprint=payload.plan_fingerprint, counts=counts, operator_id=user.id)
+        if not result.replayed:
+            append_audit_event(db, event_category='business', result='success', source='web',
+                module_code='production', action_code='production.stock_receipt_label_job.prepared',
+                legacy_action='PREPARE_STOCK_LABEL_JOB', resource='ProductionPackagingLabelPrintJob',
+                actor=user, entity_type='production_packaging_label_print_job', entity_id=result.job.id,
+                description='冻结补库实收成品标签', details=dict(receipt_item_id=receipt_id,
+                    plan_fingerprint=result.job.plan_fingerprint, payload_hash=result.job.payload_hash,
+                    label_count=result.package['label_count']))
+        db.commit()
+        return packaging_label_job_response(result.job, result.package, replayed=result.replayed)
+    except Error as error:
+        db.rollback()
+        raise HTTPException(error.status_code, str(error)) from error
+    except ValueError as error:
+        db.rollback()
+        raise HTTPException(409, str(error)) from error
+    except Exception:
+        db.rollback()
+        raise

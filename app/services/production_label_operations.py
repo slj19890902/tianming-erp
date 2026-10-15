@@ -600,6 +600,10 @@ def _validate_job_task_links(
             )
         ).all()
     )
+    if package.get("source_type") == "stock_receipt":
+        from app.services.stock_receipt_labels import validate_frozen_source
+        validate_frozen_source(job, package, links)
+        return []
     if job.delivery_id is not None:
         plans = package.get("plans") or []
         keys = [
@@ -725,6 +729,10 @@ def _assert_prepared_job_is_current(
     """Do not let an unprinted draft masquerade as the current label plan."""
 
     if job.status != "prepared":
+        return
+    if package.get("source_type") == "stock_receipt":
+        from app.services.stock_receipt_labels import assert_current
+        assert_current(db, job, package)
         return
     if job.delivery_id is not None:
         delivery = db.get(Delivery, job.delivery_id)
@@ -1230,7 +1238,10 @@ def confirm_packaging_label_job_printed(
         raise ProductionLabelOperationError("只有待确认的标签打印作业可以登记实际打印")
 
     links = _validate_job_task_links(db, job, package)
-    if job.delivery_id is not None:
+    if package.get("source_type") == "stock_receipt":
+        from app.services.stock_receipt_labels import assert_current
+        assert_current(db, job, package, claim=True)
+    elif job.delivery_id is not None:
         delivery = _claim_delivery_label_source(
             db,
             delivery_id=int(job.delivery_id),

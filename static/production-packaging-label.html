@@ -278,6 +278,7 @@
       )].sort((a, b) => a - b);
       const compositeBatchId = Number(params.get("batch_id"));
       const deliveryId = Number(params.get("delivery_id"));
+      const stockReceiptId = Number(params.get("stock_receipt_id"));
       const compositeItemIds = [...new Set(
         String(params.get("item_ids") || "")
           .split(",")
@@ -286,6 +287,7 @@
       )].sort((a, b) => a - b);
       const requestedJobId = Number(params.get("job_id"));
       const deliverySource = Number.isInteger(deliveryId) && deliveryId > 0;
+      if (stockReceiptId > 0) totalQuantityHeading.textContent = "本次实收加工成品数";
       if (deliverySource) {
         totalQuantityHeading.textContent = "送货总数量";
         unitsPerLabelHeading.textContent = "每张标签数量";
@@ -795,6 +797,7 @@
           linkParams.set("item_ids", compositeItemIds.join(","));
         }
         if (Number.isInteger(deliveryId) && deliveryId > 0) linkParams.set("delivery_id", String(deliveryId));
+        if (Number.isInteger(stockReceiptId) && stockReceiptId > 0) linkParams.set("stock_receipt_id", String(stockReceiptId));
         latestJobLink.href = `${window.location.pathname}?${linkParams.toString()}`;
         latestJobLink.textContent = latest.template_version === LEGACY_TEMPLATE_VERSION
           ? "补打最近 65 × 45 mm 历史作业"
@@ -1132,7 +1135,8 @@
         const loadingSupplierBatch = supplierOrderIds.length > 0;
         const loadingComposite = Number.isInteger(compositeBatchId) && compositeBatchId > 0 && compositeItemIds.length > 0;
         const loadingDelivery = Number.isInteger(deliveryId) && deliveryId > 0;
-        const liveSourceCount = [loadingSupplier, loadingSupplierBatch, loadingComposite, loadingDelivery].filter(Boolean).length;
+        const loadingStock = Number.isInteger(stockReceiptId) && stockReceiptId > 0;
+        const liveSourceCount = [loadingSupplier, loadingSupplierBatch, loadingComposite, loadingDelivery, loadingStock].filter(Boolean).length;
         if (!loadingJob && liveSourceCount !== 1) {
           showMessage(liveSourceCount > 1 ? "标签实时来源冲突，已停止加载" : "报料单或送货单编号无效", "message error");
           return;
@@ -1140,6 +1144,8 @@
         try {
           const url = loadingJob
             ? `/api/requisition/production-packaging-label-jobs/${requestedJobId}`
+            : loadingStock
+              ? `/api/incoming/receipt-items/${stockReceiptId}/product-label-package`
             : loadingDelivery
               ? `/api/deliveries/${deliveryId}/production-packaging-label-package`
               : loadingSupplierBatch
@@ -1188,8 +1194,9 @@
         const fingerprint = planFingerprint(loadedPackage);
         if (!fingerprint) throw new Error("标签计划缺少校验指纹，已停止创建打印作业；请重新加载");
         const isDelivery = Number.isInteger(deliveryId) && deliveryId > 0;
+        const isStock = Number.isInteger(stockReceiptId) && stockReceiptId > 0;
         const isSupplierBatch = supplierOrderIds.length > 0;
-        const items = (plannedPackage?.plans || []).map((plan) => isDelivery ? ({
+        const items = (plannedPackage?.plans || []).map((plan) => (isDelivery || isStock) ? ({
           selection_key:planSelectionKey(plan),
           print_label_count:parsePrintCount(printCounts.get(planSelectionKey(plan)), Number(plan.label_count)),
         }) : ({
@@ -1197,7 +1204,9 @@
           print_label_count:parsePrintCount(printCounts.get(planSelectionKey(plan)), Number(plan.label_count)),
         }));
         if (!items.some((item) => item.print_label_count > 0)) throw new Error("本次未选择需要打印的标签");
-        const sourceSignature = isDelivery
+        const sourceSignature = isStock
+          ? `stock-receipt:${stockReceiptId}`
+          : isDelivery
           ? `delivery:${deliveryId}`
           : isSupplierBatch
             ? `supplier-batch:${supplierOrderIds.join(",")}:${compositeItemIds.join(",")}`
@@ -1209,7 +1218,9 @@
           prepareAttempt = {signature, idempotencyKey:newIdempotencyKey("p1106-label-job"), uncertain:false};
         }
         const isComposite = Number.isInteger(compositeBatchId) && compositeBatchId > 0;
-        const url = isDelivery
+        const url = isStock
+          ? `/api/incoming/receipt-items/${stockReceiptId}/product-label-jobs`
+          : isDelivery
           ? `/api/deliveries/${deliveryId}/production-packaging-label-jobs`
           : isSupplierBatch
             ? "/api/requisition/supplier-order-label-batches/production-packaging-label-jobs"

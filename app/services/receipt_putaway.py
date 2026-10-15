@@ -109,10 +109,19 @@ def save(db, product_id, *, expected_version, area_id, location_id, address_vers
 
 def remember_stocktake(db, lot, operator_id, *, follow_position=False):
     operator = db.get(User, operator_id) if operator_id else None
-    if (not operator or operator.role not in {"admin", "boss"} or not lot.finished_detail
-            or lot.finished_detail.is_general):
+    if not operator or operator.role not in {"admin", "boss"}:
         return
-    product_id = lot.finished_detail.product_id
+    if lot.finished_detail and not lot.finished_detail.is_general:
+        product_id = lot.finished_detail.product_id
+        customer_id = lot.finished_detail.owner_customer_id
+    elif lot.semi_finished_detail and len(lot.allowed_products) == 1:
+        product_id = lot.allowed_products[0].product_id
+        customer_id = lot.semi_finished_detail.owner_customer_id
+    else:
+        return
+    product = db.get(Product, product_id)
+    if not product or product.customer_id != customer_id or not product.is_active or product.deleted_at:
+        return
     # Serialize against explicit edits and other stocktakes for this product.
     db.execute(update(Product).where(Product.id == product_id).values(product_code=Product.product_code))
     previous = db.get(ProductStoragePreference, product_id)
@@ -122,7 +131,7 @@ def remember_stocktake(db, lot, operator_id, *, follow_position=False):
     if not follow_position and db.scalar(select(ShelfBinding.location_id).where(ShelfBinding.product_id == product_id).limit(1)):
         return
     location = db.get(WarehouseLocation, lot.warehouse_location_id)
-    if not location or location.storage_type != "rack" or location_issue(db, location):
+    if not location or location_issue(db, location) or is_staging_location(db, location):
         return
     area = db.scalar(select(WarehouseArea).join(WarehouseFloor).where(
         WarehouseFloor.floor_number == location.warehouse_floor, WarehouseArea.area_code == location.area_code))

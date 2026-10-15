@@ -13,27 +13,8 @@ from tests.test_multilevel_bom_master import save
 
 
 def _receive(client, *args, **kwargs):
-    """Legacy end-to-end scenarios now explicitly confirm physical assembly.
-
-    Receipt-only assertions live in test_bom_confirmation396, which calls the
-    original receipt helper and verifies no assembly before this separate POST.
-    """
-    result = _receive_cut_parts(client, *args, **kwargs)
-    if result.status_code == 200:
-        import hashlib, json
-        plans = client.get('/api/production/pending-assemblies')
-        assert plans.status_code == 200, plans.text
-        for row in plans.json()['items']:
-            if row.get('source_kind') == 'stock' or not any(row.get('expected_outputs', {}).values()):
-                continue
-            assert not row.get('error'), row
-            payload = dict(source_lot_versions=row['source_lot_versions'], available_lot_ids=row['available_lot_ids'],
-                expected_outputs=row['expected_outputs'], target_locations={o['product_id']:o['location_id'] for o in row['outputs']},
-                physical_assembly_confirmed=True)
-            payload['operation_key']='fixture-physical-'+hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest()[:40]
-            confirmed=client.post(f"/api/production/assemblies/{row['order_item_id']}/confirm",json=payload)
-            assert confirmed.status_code==200,confirmed.text
-    return result
+    # Normal receipts must complete assembly themselves; no hidden manual POST.
+    return _receive_cut_parts(client, *args, **kwargs)
 
 
 def _reverse_physical_assemblies(client):
@@ -238,10 +219,14 @@ def test_split_movement_keeps_receipt_cost_and_finished_coverage(
             assert task.status == "completed"
         if not move_before_assembly:
             blocked = client.put(f"/api/incoming/receipt-items/{response.json()['receipt_item_id']}/revert", json={})
-            assert blocked.status_code == 409, blocked.text
+            # The receipt owns its automatic assembly. Existing transfer lineage
+            # allows an unused moved output to unwind atomically with that receipt.
+            assert blocked.status_code == 200, blocked.text
             with factory() as db:
                 active = list(db.scalars(select(BomAssembly).where(BomAssembly.status == "posted")))
-                assert sum(a.quantity for a in active) == 10
+                assert not active
+                moved_lot = db.get(InventoryLot, moved.target_lot.id)
+                assert moved_lot.quantity_available + moved_lot.quantity_reserved == 0
 
 
 def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, separate=False, quantity=None, cutting_modes=None, finished_slot_count=8, accompany=False, two_piece=False, pure_parent_without_spec=False):

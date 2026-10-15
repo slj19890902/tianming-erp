@@ -131,6 +131,9 @@ def _closed_update_reference(manager,path,cipher_sha,context):
 
 
 RELEASE_20261015_PRESERVED_CIPHERS = frozenset({
+    # Owner explicitly retains all existing recovery points for v641.
+    '97ea8026f34413ebed883d071e075875732adefe0951faf7b7cb6fe14b797563',
+    '2619daac69cf4b10b5c905db5619e3441ba6683731551f08c6b7cd3e0bb36c12',
     'b18fb6fc02fa44f3f2ad51b4c124528f5169a8d86f3014158ae94e756ab3fc12',
     '578a72d44a4c51c6123590914f80ee5ac4633d190d005a0a6009ceb3d6ee3de1',
     'cc754062e2c006962b509af3c7693ef409108b40d99b80b81225981126110f3a',

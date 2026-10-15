@@ -4845,7 +4845,7 @@
                 <div class="toolbar-group production-tab-strip">
                   <h2>生产工作台</h2>
                   <button class="btn" :disabled="productionBusy" @click="incomingTab='pending'; go('incoming')">待收料</button>
-                  <button :class="['btn',{primary:productionTab==='assembly'}]" @click="productionTab='assembly'; loadPendingAssemblies(1)">可组套子件</button>
+                  <button :class="['btn',{primary:productionTab==='assembly'}]" @click="productionTab='assembly'; loadPendingAssemblies(1)">待处理子件</button>
                   <button :class="['btn',{primary:productionTab==='placement'}]" @click="productionTab='placement'; loadProductionPlacement()">已入库 / 成品<span v-if="productionPlacementPendingTotal"> · 待归位 {{productionPlacementPendingTotal}}</span></button>
                   <button :class="['btn',{primary:productionTab==='history'}]" @click="productionTab='history'; loadProductionHistory()">记录与异常</button>
                   <details class="toolbar-more"><summary class="btn">更多</summary><button class="btn small" @click="selectStockProductionTab('pending')">历史待核对 {{productionPendingTotal + stockPrepPendingCount}}</button><button class="btn small" @click="selectStockProductionTab('preparation')">材料与来料记录</button><button class="btn small" @click="selectStockProductionTab('stock')">子件库存位置</button></details>
@@ -4867,7 +4867,7 @@
                 </div>
               </div>
               <section v-if="productionTab==='assembly'" class="panel">
-                <div class="toolbar-group"><span>仅处理盘点或自动流程后仍属自由库存的真实子件；订单预占子件不会进入本列表，余片保留原位。</span><button class="btn small" @click="loadPendingAssemblies(assemblyPage)">刷新</button><pager :page="assemblyPage" :total="assemblyTotal" :page-size="30" :always="true" @change="loadPendingAssemblies($event)"></pager></div>
+                <div class="toolbar-group"><span>订单与指定产品补库收料后自动加工、齐套入库。这里只处理盘点自由子件和需人工核对的余料；已保存货位直接入库，无需重复归位。</span><button class="btn small" @click="loadPendingAssemblies(assemblyPage)">刷新</button><pager :page="assemblyPage" :total="assemblyTotal" :page-size="30" :always="true" @change="loadPendingAssemblies($event)"></pager></div>
                 <div v-if="assemblyError" class="status orange">{{assemblyError}}</div>
                 <div v-if="assemblyLoading" class="muted">正在核对配套库存…</div>
                 <div v-else-if="!pendingAssemblies.length" class="empty">暂无未组套子件</div>
@@ -8498,8 +8498,8 @@
                 </div>
                 <div class="toolbar-group">
                   <button v-if="hasBomComponents(orderItemForm) && hasPermission('warehouse.view')" type="button" class="btn small" @click="openOrderBomStockReview(orderItemForm)">BOM库存核对</button>
-                  <button v-if="canSales && orderItemForm.requisition_status==='未报料'" type="button" class="btn small" :disabled="!!finishedReservationActionState.action" @click="finishedReservationActionBlocked() ? refreshFinishedInventoryState() : loadFinishedInventoryCandidates()">{{ finishedReservationActionBlocked() ? "核对库存状态" : "查看可用成品库存" }}</button>
-                  <span v-else-if="orderItemForm.requisition_status!=='未报料'" class="status orange">订单已进入报料，如需抵扣请先取消报料</span>
+                  <button v-if="canSales && canReserveFinishedForOrderItem(orderItemForm)" type="button" class="btn small" :disabled="!!finishedReservationActionState.action" @click="finishedReservationActionBlocked() ? refreshFinishedInventoryState() : loadFinishedInventoryCandidates()">{{ finishedReservationActionBlocked() ? "核对库存状态" : "查看可用成品库存" }}</button>
+                  <span v-else-if="!canReserveFinishedForOrderItem(orderItemForm)" class="status orange">{{ orderItemForm.supply_mode_snapshot==='external_purchase' ? '已确认包材采购；请在订单详情的外购包装中撤销未实收采购后抵扣。已有实收须先处理实收。' : '已确认报料；请先在报料采购中处理未实收采购后抵扣。' }}</span>
                 </div>
                 <div v-if="finishedInventoryCandidatesLoaded && !finishedInventoryCandidates.length" class="muted" style="margin-top:8px">暂无可用成品库存</div>
                 <table v-if="finishedInventoryCandidates.length" style="margin-top:8px">
@@ -8512,7 +8512,7 @@
                 </table>
                 <table v-if="finishedInventoryReservations.length" style="margin-top:10px">
                   <thead><tr><th>库存批次</th><th>预占实物数量</th><th>抵扣客户数量</th><th>状态</th><th>预占时间</th><th>操作</th></tr></thead>
-                  <tbody><tr v-for="reservation in finishedInventoryReservations" :key="reservation.id"><td>{{ reservation.lot_number }}</td><td>{{ reservation.reserved_stock_quantity }}</td><td><span v-if="reservation.requirement_quantity_denominator>1 && !Number.isInteger(reservation.credited_requirement_quantity)">{{ reservation.credited_requirement_quantity_numerator }}/{{ reservation.requirement_quantity_denominator }}</span><span v-else>{{ reservation.credited_requirement_quantity }}</span></td><td>{{ reservation.status }}</td><td>{{ formatDateTime(reservation.reserved_at) }}</td><td><button v-if="reservation.status==='active' && canSales && orderItemForm.requisition_status==='未报料'" type="button" class="btn small danger" :disabled="finishedReservationActionBlocked()" @click="releaseFinishedInventoryReservation(reservation)">{{ finishedReservationActionLabel("release",reservation) }}</button></td></tr></tbody>
+                  <tbody><tr v-for="reservation in finishedInventoryReservations" :key="reservation.id"><td>{{ reservation.lot_number }}</td><td>{{ reservation.reserved_stock_quantity }}</td><td><span v-if="reservation.requirement_quantity_denominator>1 && !Number.isInteger(reservation.credited_requirement_quantity)">{{ reservation.credited_requirement_quantity_numerator }}/{{ reservation.requirement_quantity_denominator }}</span><span v-else>{{ reservation.credited_requirement_quantity }}</span></td><td>{{ reservation.status }}</td><td>{{ formatDateTime(reservation.reserved_at) }}</td><td><button v-if="reservation.status==='active' && canSales && canReserveFinishedForOrderItem(orderItemForm)" type="button" class="btn small danger" :disabled="finishedReservationActionBlocked()" @click="releaseFinishedInventoryReservation(reservation)">{{ finishedReservationActionLabel("release",reservation) }}</button></td></tr></tbody>
                 </table>
               </div>
               <div v-if="orderItemForm.product_id" class="panel" style="margin-top:10px;padding:10px">
@@ -11026,7 +11026,7 @@
             externalReceiptHistoryOpen:false, externalReceiptHistory:[], externalReceiptHistoryPage:1, externalReceiptHistoryTotal:0, externalReceiptHistoryQuery:"", externalReceiptHistoryLoading:false, externalReceiptHistoryError:"", externalReceiptReverseBusy:null, externalReceiptReverseAttempts:{},
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
             stockPrepRows: [], stockPrepTotal: 0, stockPrepCounts: {}, stockPrepState: "", stockPrepQuery: "", stockPrepPage: 1, stockPrepBusy: false, stockPrepError: "", stockPrepSequence: 0,
-            productionTab: "history", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryLoading:false, productionHistoryError:"", productionHistoryTotal: 0, productionHistoryFilterVisible: false, productionPlacement: [], productionPlacementTotal: 0, productionPlacementLoading: false, productionPlacementError: "", productionPlacementFilterVisible: false, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
+            productionTab: "assembly", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryLoading:false, productionHistoryError:"", productionHistoryTotal: 0, productionHistoryFilterVisible: false, productionPlacement: [], productionPlacementTotal: 0, productionPlacementLoading: false, productionPlacementError: "", productionPlacementFilterVisible: false, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"", record_type:"", operator_name:"" },
             productionPlacementFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"" },
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {}, productionActualAdjustmentAttempts: {}, productionLabelRefreshAttempts: {},
@@ -36179,6 +36179,7 @@
                 quantity:itemSnapshot.quantity, unit_price:this.money(itemSnapshot.unit_price),
                 bom_production_expected_revision:Number(itemSnapshot.bom_production_revision || 0),
                 requisition_status:itemSnapshot.requisition_status || "未报料",
+                supply_mode_snapshot:itemSnapshot.supply_mode_snapshot,
                 finished_inventory_reserved_qty:Number(itemSnapshot.finished_inventory_reserved_qty || 0),
                 production_required_qty:Number(itemSnapshot.production_required_qty ?? itemSnapshot.quantity),
                 cost_status:itemSnapshot.cost_status || "pending", estimated_cost:itemSnapshot.estimated_cost || null,
@@ -36236,6 +36237,10 @@
             } finally {
               if (latestRequestControllers.get(requestKey) === controller) this.finishLatestRequest(requestKey, controller);
             }
+          },
+          canReserveFinishedForOrderItem(item) {
+            return item?.requisition_status === "未报料" || (
+              item?.supply_mode_snapshot === "external_purchase" && item?.requisition_status === "外购包材待确认");
           },
           async loadFinishedInventoryCandidates(expectedForm=this.orderItemForm) {
             const itemId = Number(expectedForm?.id || 0);

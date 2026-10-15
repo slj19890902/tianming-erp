@@ -316,28 +316,37 @@ def assemble_graph_order_receipt(db, *, compiled, order_item_id, operation_key, 
     Each adapter supplies its own namespaced receipt key, not a synthetic board
     allocation or production completion. The original caller owns the commit.
     """
-    # Receipt is evidence of cut parts, not evidence of physical insertion.
-    # Historical assembly facts remain untouched; only an explicit completion
-    # command can consume components and create new assembled stock.
-    if confirmed_command is None:
-        from app.services.bom_pending_assembly import reserve_pending_parts
-        reserve_pending_parts(db, order_item_id=order_item_id, compiled=compiled, operator_id=operator_id)
-        from app.models.audit import OperationLog
-        from app.models.user import User
-        from app.services.audit_log import append_audit_event
-        if not db.scalar(select(OperationLog.id).where(OperationLog.action_code=='bom.awaiting_assembly',
-                OperationLog.entity_id==order_item_id, OperationLog.object_ref==operation_key)):
-            append_audit_event(db,event_category='business',result='success',source='web',module_code='production',
-                action_code='bom.awaiting_assembly',resource='production',actor=db.get(User,operator_id) if operator_id else None,
-                entity_type='order_item',entity_id=order_item_id,object_ref=operation_key,
-                details=dict(source_ids=sorted(s.id for s in compiled.snapshots),physical_assembly_confirmed=False))
-        return ()
-    from app.services.multilevel_bom_inventory import assemble_order_inventory
     pids = {n.product_id for n in compiled.graph.nodes if n.source == "assembled"
             or (n.source in ("manufactured", "purchased") and any(e.parent_id == n.product_id and e.relation == "assembly"
                                                    for e in compiled.graph.edges))}
     if not pids:
         return ()
+    # Normal receipts execute the frozen recipe automatically (2026-10-14).
+    # Only this order's own output and already reserved stock may be consumed.
+    # Preview and execution share the receipt transaction and current versions.
+    automatic = confirmed_command is None
+    if automatic:
+        from app.services.bom_pending_assembly import preview, reserve_pending_parts
+        plan = preview(db, order_item_id)
+        if not any(plan['expected_outputs'].values()):
+            reserve_pending_parts(db, order_item_id=order_item_id, compiled=compiled, operator_id=operator_id)
+            # Record why this receipt produced no parent. Reversal must distinguish
+            # a verified zero-output receipt from a missing assembly ledger.
+            from app.models.audit import OperationLog
+            from app.models.user import User
+            from app.services.audit_log import append_audit_event
+            if not db.scalar(select(OperationLog.id).where(OperationLog.action_code=='bom.awaiting_assembly',
+                    OperationLog.entity_id==order_item_id, OperationLog.object_ref==operation_key)):
+                append_audit_event(db,event_category='business',result='success',source='web',module_code='production',
+                    action_code='bom.awaiting_assembly',resource='production',actor=db.get(User,operator_id) if operator_id else None,
+                    entity_type='order_item',entity_id=order_item_id,object_ref=operation_key,
+                    details=dict(source_ids=sorted(s.id for s in compiled.snapshots),physical_assembly_confirmed=False,
+                                 mode='automatic_waiting_for_parts', expected_outputs=plan['expected_outputs']))
+            return ()
+        confirmed_command = dict(source_lot_versions=plan['source_lot_versions'],
+            available_lot_ids=plan['available_lot_ids'], expected_outputs=plan['expected_outputs'],
+            target_locations={o['product_id']: o['location_id'] for o in plan['outputs']})
+    from app.services.multilevel_bom_inventory import assemble_order_inventory
     oid = order_item_id
     targets = confirmed_command['target_locations']
     results = assemble_order_inventory(db, order_item_id=oid,
@@ -362,6 +371,13 @@ def assemble_graph_order_receipt(db, *, compiled, order_item_id, operation_key, 
                 snapshot_id=snapshots[result.output_product_id].id, lot=lot, operator_id=operator_id,
                 idempotency_key=f"bom-output-reserve:{result.id}",
                 reserve_quantity=lot.quantity_available, reservation_number_prefix="BARS")
+    if automatic and results:
+        from app.models.user import User
+        from app.services.audit_log import append_audit_event
+        append_audit_event(db, event_category='business', result='success', source='web', module_code='production',
+            action_code='bom.auto_assembly', resource='production', actor=db.get(User, operator_id) if operator_id else None,
+            entity_type='order_item', entity_id=order_item_id, object_ref=operation_key,
+            details=dict(assembly_ids=[r.id for r in results], mode='receipt_auto', physical_assembly_confirmed=False))
     return results
 
 

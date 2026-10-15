@@ -1219,7 +1219,7 @@ def execute_warehouse_stocktake_batch(
         results.append(result)
     from app.services.receipt_putaway import remember_stocktake
     for result in results:
-        if result["operation"] == "add" and result["inventory_type"] == "finished":
+        if result["operation"] == "add":
             # A multi-location stocktake may intentionally split one product.
             # The first valid position establishes the stable default; later
             # rows must not silently move that default to the last row.

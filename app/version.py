@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.640"
-APP_VERSION_NAME = "组套保存、BOM状态与补库实收标签修复"
+APP_VERSION = "v0.22.641"
+APP_VERSION_NAME = "自动组套、默认货位与待采购库存抵扣"
 APP_BUILD_DATE = "2026-10-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6225,3 +6225,17 @@ APP_VERIFICATION_STEPS = [
     "在近24小时实收或历史入库中勾选研光80010631，打开产品标签，核对5000只、每张30只、167张且末张20只；预览不登记实际打印。",
 ]
 APP_CHANGELOG = [*(f"v0.22.640：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "修复外购包材待确认阶段被前端误判为已报料、无法抵扣已有成品库存的问题；已采购和已实收的撤销保护不变。",
+    "订单收料按冻结BOM自动增量组套入库；分批缺件等待下一次收料，重复请求不重复消耗，撤销沿真实流水原子恢复。",
+    "单笔移货与归位成功后同步产品默认货位，明确保存的空货位仍可接收；盘点唯一产品及正式地面位置复用原默认位置机制。",
+    "生产默认显示待处理子件；正常收料自动加工，已入库和历史查询保留，旧待加工任务不批量补账。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新后在订单TM20261009004编辑82021188，查看可用成品并抵扣本单100只；核对库存余3600只、本单覆盖100只。",
+    "正常新收料核对自动加工、齐套入库与常用箱保存位置；不重复收取已完成的来料。",
+    "正常盘点子件组套或归位后，核对实际位置及常用箱默认位置一致；本轮既有组套和标签修复继续有效。",
+]
+APP_CHANGELOG = [*(f"v0.22.641：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -25,8 +25,20 @@ def seed_priced_graph(factory, **kwargs):
     return material_id, snapshots
 
 
-def test_receipts_wait_then_explicit_assembly_and_history(composite_requisition_app, _p181_published_map_identity, monkeypatch):
+def test_legacy_waiting_parts_explicit_assembly_and_history(composite_requisition_app, _p181_published_map_identity, monkeypatch):
     app, factory = composite_requisition_app
+    # Represent pre-v641 receipts that already waited for manual assembly.
+    # New automatic receipts are covered without this fixture in business_closure.
+    from app.services import multilevel_bom_receipts as receipts
+    original_assembly = receipts.assemble_graph_order_receipt
+    def legacy_wait(db, *, compiled, order_item_id, operation_key, operator_id, confirmed_command=None):
+        if confirmed_command is not None:
+            return original_assembly(db, compiled=compiled, order_item_id=order_item_id,
+                operation_key=operation_key, operator_id=operator_id, confirmed_command=confirmed_command)
+        from app.services.bom_pending_assembly import reserve_pending_parts
+        reserve_pending_parts(db, order_item_id=order_item_id, compiled=compiled, operator_id=operator_id)
+        return ()
+    monkeypatch.setattr(receipts, 'assemble_graph_order_receipt', legacy_wait)
     from app.api.deliveries import router as delivery_router
     app.include_router(delivery_router,prefix='/api/deliveries')
     mid, snapshots = seed_graph(factory)
@@ -102,7 +114,8 @@ def test_receipts_wait_then_explicit_assembly_and_history(composite_requisition_
             'items':[{'order_item_id':1,'delivered_quantity':4}]})
         assert delivered.status_code == 201, delivered.text
         delivery_id = delivered.json()['id']
-        sent = client.put(f'/api/deliveries/{delivery_id}/dispatch')
+        from tests.test_delivery_dispatch_commands import command as dispatch_command
+        sent = client.put(f'/api/deliveries/{delivery_id}/dispatch', json=dispatch_command(client,delivery_id,'legacy-assembly-dispatch'))
         assert sent.status_code == 200, sent.text
         from app.services.multilevel_bom_cost_lineage import graph_material_sources
         with factory() as db:

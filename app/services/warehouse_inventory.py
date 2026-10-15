@@ -2564,6 +2564,8 @@ def _transfer_finished_lot_location(
     from app.services.shared_finished_stock import inherit_lot
     inherit_lot(db, lot, target_lot)
     db.flush()
+    from app.services.receipt_putaway import remember_stocktake
+    remember_stocktake(db, target_lot, operator_id, follow_position=True)
     return FinishedLotLocationTransferResult(transfer, lot, target_lot, False)
 
 

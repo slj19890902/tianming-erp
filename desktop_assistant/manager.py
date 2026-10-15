@@ -1003,7 +1003,11 @@ class Manager:
             prepare_migration(migration_release, self.root / 'shared', candidate['revision'],
                 environment=migration_environment, release_manifest=migration_manifest)
         from desktop_assistant import local_backup_only as local_only
-        if local_only.enabled(self):
+        # This method runs from the already verified candidate runtime. Bind
+        # the capability check to that signed manifest: checking the old
+        # current package would compare its source hash with the candidate
+        # module and reject legitimate updates to the backup implementation.
+        if local_only.enabled(self, candidate):
             # Reuse the authenticated local-only backup transaction, but keep
             # the service stopped after a successful capture so migration can
             # rehearse and run against the same frozen source point.

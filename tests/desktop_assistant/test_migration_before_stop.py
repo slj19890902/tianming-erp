@@ -72,7 +72,8 @@ def test_migration_uses_existing_local_backup_policy_without_nas(tmp_path, monke
     monkeypatch.setattr(manager, '_execution_release', lambda identity, kind: release)
     monkeypatch.setattr(module, 'signed_release_manifest', lambda *a: manifest)
     monkeypatch.setattr(migration, 'prepare_migration', Mock())
-    monkeypatch.setattr(local_backup_only, 'enabled', lambda value: value is manager)
+    enabled = Mock(side_effect=lambda value, signed: value is manager and signed is candidate)
+    monkeypatch.setattr(local_backup_only, 'enabled', enabled)
     backup = tmp_path / 'local-only.tmbackup'
     proof = {'restored_verified': True}
     def capture(value, password, restart_allowed, publish):
@@ -97,6 +98,7 @@ def test_migration_uses_existing_local_backup_policy_without_nas(tmp_path, monke
         manager._update_locked(tmp_path / 'candidate.zip', 'synthetic', tmp_path / 'nas')
 
     local_capture.assert_called_once()
+    enabled.assert_called_once_with(manager, candidate)
     start.assert_called_once()
     finalize.assert_called_once_with(
         manager, proof, sourcepoint='before-schema-update'

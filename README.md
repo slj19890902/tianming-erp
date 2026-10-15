@@ -12,6 +12,8 @@
 
 ## 本地运行
 
+macOS 开发维护请使用 [普通用户工作流](docs/MAC_USER_DEV.md)。它在独立工作树中安装项目虚拟环境和官方 Node 22，使用隔离数据库与 loopback 端口，不调用 `sudo`、管理员 AppleScript 或正式服务控制器。
+
 ```powershell
 pip install -r requirements.txt
 python main.py

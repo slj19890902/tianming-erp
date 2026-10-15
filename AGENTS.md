@@ -1,5 +1,7 @@
 # 天明 ERP Codex 强制入口
 
+macOS 本地开发、依赖安装、构建、测试、预览和开发服务重启，先按 `docs/MAC_USER_DEV.md` 使用普通用户独立工作树。历史 `sudo`、`with administrator privileges` 和 `/Library/TianmingERP` 控制命令仅作正式系统历史证据，不用于开发维护；正式系统操作仍遵守原有单独授权门禁。
+
 本仓库的唯一有效业务总需求为：
 
 `docs/TIANMING_ERP_MASTER_REQUIREMENTS.md`

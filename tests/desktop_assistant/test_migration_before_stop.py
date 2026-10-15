@@ -5,7 +5,8 @@ from desktop_assistant import manager as module, migration
 
 
 @pytest.mark.parametrize('native', [True, False])
-def test_migration_prepared_before_backup_without_native_server_environment(tmp_path, monkeypatch, native):
+@pytest.mark.parametrize('failure', ['runtime', 'rehearsal_route'])
+def test_migration_prepared_before_backup_without_native_server_environment(tmp_path, monkeypatch, native, failure):
     manager = module.Manager(tmp_path / 'instance', b'synthetic-unused')
     old = {'current': 'a' * 64}
     module.write_json(manager.root / 'state.json', old)
@@ -24,8 +25,10 @@ def test_migration_prepared_before_backup_without_native_server_environment(tmp_
     monkeypatch.setattr(module, 'signed_release_manifest', lambda *a: manifest)
     environment = Mock(side_effect=AssertionError('native migration must not use server guard')) if native else Mock(return_value={'ERP_ENVIRONMENT': 'production'})
     monkeypatch.setattr(manager, '_environment', environment)
-    prepare = Mock(side_effect=ValueError('synthetic preflight rejection'))
+    prepare = Mock(side_effect=ValueError('synthetic preflight rejection') if failure == 'runtime' else None)
     monkeypatch.setattr(migration, 'prepare_migration', prepare, raising=False)
+    route = Mock(side_effect=ValueError('synthetic preflight rejection'))
+    monkeypatch.setattr(migration, 'prepare_rehearsal_owner', route)
     backup = Mock(side_effect=AssertionError('backup before migration preflight'))
     stop = Mock(side_effect=AssertionError('stop before migration preflight'))
     monkeypatch.setattr(manager, '_backup_preflight', backup)
@@ -35,6 +38,8 @@ def test_migration_prepared_before_backup_without_native_server_environment(tmp_
     prepare.assert_called_once_with(release, manager.root / 'shared', 'next',
         environment=None if native else {'ERP_ENVIRONMENT': 'production'}, release_manifest=manifest)
     backup.assert_not_called(); stop.assert_not_called()
+    if failure == 'runtime': route.assert_not_called()
+    else: route.assert_called_once_with(manager)
     if native: environment.assert_not_called()
     assert manager.state == old
 

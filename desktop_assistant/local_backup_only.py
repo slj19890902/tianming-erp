@@ -134,6 +134,8 @@ RELEASE_20261015_PRESERVED_CIPHERS = frozenset({
     'b18fb6fc02fa44f3f2ad51b4c124528f5169a8d86f3014158ae94e756ab3fc12',
     '578a72d44a4c51c6123590914f80ee5ac4633d190d005a0a6009ceb3d6ee3de1',
     'cc754062e2c006962b509af3c7693ef409108b40d99b80b81225981126110f3a',
+    # Independently restored capture from the 15:08 attempt, verified on takeover.
+    '093b8478db7ebe38b65407d22afa372f44e52fdf1f90025d6791e8104dad17e7',
 })
 
 

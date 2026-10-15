@@ -998,7 +998,7 @@ class Manager:
                     or contract.get('from_revision') != revision
                     or contract.get('rollback_package_sha256') != old['current']):
                 raise ValueError('此版本需要专项迁移或缺少上版程序兼容契约，未停止服务')
-            from desktop_assistant.migration import prepare_migration
+            from desktop_assistant.migration import prepare_migration, prepare_rehearsal_owner
             migration_release = self._execution_release(candidate['id'], kind='migration')
             migration_manifest = signed_release_manifest(
                 self.root / 'packages' / (candidate['id'] + '.zip'), self.public_key)
@@ -1006,6 +1006,7 @@ class Manager:
                                      else self._environment(migration_release))
             prepare_migration(migration_release, self.root / 'shared', candidate['revision'],
                 environment=migration_environment, release_manifest=migration_manifest)
+            prepare_rehearsal_owner(self)
         from desktop_assistant import local_backup_only as local_only
         local_backup_proof = None
         # This method runs from the already verified candidate runtime. Bind

@@ -212,8 +212,12 @@ def run_migration(release, shared, revision, log, environment=None, *, release_m
         raise ValueError('升级子进程失败，保留现场；不得启动未核验数据库，请查看迁移日志')
 
 
-def _rotation_rehearsal_owner(manager,job):
-    """Caller already owns manager.lock; optional fixed signed Mac rotation only."""
+def prepare_rehearsal_owner(manager):
+    """Validate the selected rehearsal route before stop, without registering a job."""
+    from desktop_assistant import local_backup_only
+    # Explicit protected local policy takes precedence over historical SMB
+    # metadata. Invalid policy must fail closed, never fall through to SMB.
+    if local_backup_only.selected(manager.root):return None
     from desktop_assistant import mac_smb_stream_target as stream
     if manager.root!=stream.cfg.BASE/'instance' or not stream.metadata_present():return None
     from desktop_assistant import mac_smb_stream_runtime as runtime
@@ -225,7 +229,15 @@ def _rotation_rehearsal_owner(manager,job):
         raise ValueError('enabled rotation binding changed during rehearsal admission')
     binding.check()
     from desktop_assistant import nas_backup_rotation_worker as worker
-    worker._binding(manager);adapter=worker._adapter(manager)
+    worker._binding(manager)
+    return worker._adapter(manager)
+
+
+def _rotation_rehearsal_owner(manager,job):
+    """Caller owns manager.lock; revalidate before durable owner registration."""
+    adapter=prepare_rehearsal_owner(manager)
+    if adapter is None:return None
+    from desktop_assistant import nas_backup_rotation_worker as worker
     if job.exists() or job.is_symlink():raise ValueError('migration rehearsal owner already exists')
     try:_,registry=worker._read(adapter,'retention-jobs.json')
     except FileNotFoundError:registry=None

@@ -106,6 +106,35 @@ def test_family_root_never_reads_mac_rotation_metadata(tmp_path,monkeypatch):
     assert migration._rotation_rehearsal_owner(SimpleNamespace(root=tmp_path/'family'),tmp_path/'job') is None
 
 
+def test_local_policy_rehearsal_ignores_stale_smb_binding(integrated,tmp_path,monkeypatch):
+    """Reproduce the production local-backup -> stale SMB rehearsal collision."""
+    from desktop_assistant import local_backup_only as local
+    scene=integrated
+    monkeypatch.setattr(published,'selected',lambda:False)
+    monkeypatch.setattr(local,'selected',lambda root:root==scene.manager.root)
+    scene.binding.tree=tmp_path/'older-published-package'/'migration'
+    state=scene.manager.state
+    def run(release,shared,revision,log,**kwargs):
+        with sqlite3.connect(shared/'data/carton_erp.sqlite3') as database:
+            database.execute('UPDATE alembic_version SET version_num=?',(revision,))
+        log.write_text('isolated child exited')
+    monkeypatch.setattr(migration,'run_migration',run)
+    report=scene.manager.preview_update(scene.release('local-migration-target','r2'))
+    assert report['status']=='passed' and report['source_unchanged']
+    assert scene.manager.state==state and scene.live['running']
+    assert scene.actions==[] and scene.events==[]
+
+
+def test_invalid_local_policy_cannot_fall_through_to_smb(integrated,monkeypatch):
+    from desktop_assistant import local_backup_only as local,mac_smb_stream_target as target
+    def invalid(root):raise ValueError('invalid fixed root policy')
+    monkeypatch.setattr(local,'selected',invalid)
+    monkeypatch.setattr(target,'metadata_present',lambda:pytest.fail('invalid policy fell through to SMB'))
+    with pytest.raises(ValueError,match='invalid fixed root policy'):
+        migration._rotation_rehearsal_owner(integrated.manager,integrated.manager.root/'staging/new')
+    assert integrated.live['running'] and integrated.events==[]
+
+
 @pytest.mark.parametrize('rotation_enabled',[False,True])
 def test_distinct_binding_tree_legacy_noop_but_enabled_rotation_rejects(integrated,tmp_path,rotation_enabled):
     scene=integrated;before=worker._read(scene.adapter,'retention-jobs.json')[0]

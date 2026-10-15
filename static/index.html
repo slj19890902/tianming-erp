@@ -43308,14 +43308,14 @@
         emits:["update:modelValue","change","search"],
         data() {
           return {
-            query:"", open:false, timer:null, pinyinRuntimeVersion:0,
+            query:"", open:false, timer:null, selectionLabel:null, pinyinRuntimeVersion:0,
             pinyinLoadRequested:false, componentMounted:false
           };
         },
         computed: {
           selectedLabel() {
             const row=this.options.find(item=>String(item[this.valueKey])===String(this.modelValue));
-            return row?.[this.labelKey] || "";
+            return row?.[this.labelKey] || (this.selectionLabel?.value===String(this.modelValue) ? this.selectionLabel.label : "");
           },
           filtered() {
             void this.pinyinRuntimeVersion;
@@ -43363,10 +43363,11 @@
           },
           onFocus() {
             if (this.disabled) return;
+            this.selectionLabel={value:String(this.modelValue),label:this.selectedLabel};
             clearTimeout(this.timer); this.query=""; this.open=true;
             this.$emit("search", "");
           },
-          onBlur() { this.open=false; this.query=this.selectedLabel; },
+          onBlur() { clearTimeout(this.timer); this.open=false; this.query=this.selectedLabel; },
           onInput() {
             if (this.disabled) return;
             this.open=true; clearTimeout(this.timer);

@@ -153,3 +153,15 @@ def test_order_material_change_is_order_only_unless_master_sync_explicit(requisi
         body['sync_product']=True
         response=client.put('/api/orders/items/1',json=body)
         assert response.status_code==400 and 'product_expected_version' in response.text
+
+
+def test_search_result_refresh_retains_selected_label_until_real_selection(tmp_path):
+    html=Path('static/index.html').read_text();source=html.split('app.component("search-select", {',1)[1].split('      window.ERPOrderContext',1)[0]
+    _run_node('let definition;const app={component:(name,body)=>definition=body};app.component("search-select",{'+source+"""
+    const vm={disabled:false,modelValue:7,options:[{value:7,label:'original code'}],valueKey:'value',labelKey:'label',query:'original code',timer:null,$emit(){}};
+    Object.defineProperty(vm,'selectedLabel',{get(){return definition.computed.selectedLabel.call(vm)}});
+    definition.methods.onFocus.call(vm);vm.options=[{value:8,label:'search result'}];
+    definition.methods.onBlur.call(vm);
+    if(vm.modelValue!==7||vm.query!=='original code')throw Error('refresh lost selected code label');
+    vm.modelValue=8;if(vm.selectedLabel!=='search result')throw Error('new choice kept old label');
+    """,tmp_path,'search-label-refresh.js')

@@ -5,6 +5,7 @@ No production instance or network transport is used.
 """
 import sqlite3
 from unittest.mock import Mock
+import pytest
 
 from desktop_assistant import local_backup_only as local, migration
 from desktop_assistant.storage import pack_tree, sha, write_json, read_json
@@ -12,7 +13,8 @@ from tests.desktop_assistant.test_local_backup_only import local_case, case
 from tests.desktop_assistant.test_stopped_update import PASSWORD
 
 
-def test_full_local_migration_update_keeps_originals_and_publishes_recovery(local_case, monkeypatch):
+@pytest.mark.parametrize('startup_failure',[False,True])
+def test_full_local_migration_update_keeps_originals_and_publishes_recovery(local_case, monkeypatch,startup_failure):
     scene=local_case
     manager=scene.manager
     state=manager.state
@@ -39,13 +41,37 @@ def test_full_local_migration_update_keeps_originals_and_publishes_recovery(loca
     database=manager.root/'shared/data/carton_erp.sqlite3'
     before=migration.facts(database)
     originals=migration.files(manager.root/'shared')
+    start=manager.start
+    def candidate_start():
+        if startup_failure and manager.state['current']==sha(package):
+            scene.events.append('candidate-failed')
+            raise ValueError('synthetic candidate start failure')
+        start()
+    monkeypatch.setattr(manager,'start',candidate_start)
     with manager.lock():
-        assert manager._update_locked(package,PASSWORD,scene.nas)=='local-migration'
-    assert scene.events==['stop','start'] and scene.live['running']
+        if startup_failure:
+            with pytest.raises(ValueError,match='已切回原程序'):
+                manager._update_locked(package,PASSWORD,scene.nas)
+        else:assert manager._update_locked(package,PASSWORD,scene.nas)=='local-migration'
+    assert scene.events==(['stop','candidate-failed','stop','start'] if startup_failure else ['stop','start'])
+    assert scene.live['running']
     assert len(child_targets)==2 and child_targets[0]!=child_targets[1]
     assert child_targets[1]==manager.root/'shared'
-    assert manager.state['current']==sha(package) and manager.state['previous']==old
-    assert manager.state['operation']=='update' and manager.state['manual_stop'] is False
+    if startup_failure:
+        assert manager.state['current']==old
+        assert manager.state['operation']=='update_recovered'
+        assert manager.state['last_update_result']['outcome']=='failed'
+        assert manager.state['last_update_result']['target']==sha(package)
+        assert manager.state['last_update_result']['recovery']=='healthy_previous'
+        from desktop_assistant import service_supervisor
+        scene.live['running']=False
+        monkeypatch.setattr(manager,'_process',lambda:('fixture',{'pid':1,'created':1,'exe':'fixture'}) if scene.live['running'] else None)
+        assert service_supervisor.tick(manager)=='running'
+        assert scene.live['running'] and scene.events[-1]=='start'
+    else:
+        assert manager.state['current']==sha(package) and manager.state['previous']==old
+        assert manager.state['operation']=='update'
+    assert manager.state['manual_stop'] is False
     assert migration.facts(database)==before
     assert migration.files(manager.root/'shared')==originals
     index=manager.state['last_backup_local']

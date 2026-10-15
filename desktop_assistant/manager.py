@@ -1093,15 +1093,28 @@ class Manager:
         write_json(self.root / 'state.json', new)
         try:
             self.start()
-        except Exception:
+        except Exception as startup_error:
             self.stop()
             if not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']):
                 new.update(operation='update_failed_reader_contract', previous=None)
                 write_json(self.root / 'state.json', new)
                 raise ValueError('新程序未启动且旧程序不支持新业务保护规则，服务保持停止；保留现场和备份，请向前修复，数据未回退') from None
             new.update(current=old['current'], previous=old.get('previous'), operation='update_failed')
+            new['last_update_result'] = {
+                'outcome': 'failed', 'target': candidate['id'], 'running_package': old['current'],
+                'failure_stage': 'candidate_start', 'error_type': type(startup_error).__name__,
+                'recovery': 'starting_previous', 'at': datetime.now(CN).isoformat(),
+            }
             write_json(self.root / 'state.json', new)
             self.start()
+            # start() has verified this process's readiness and all current DB
+            # reader contracts. Keep the failed release audit, but leave the
+            # recovered business eligible for the existing supervisor. If
+            # recovery start fails, update_failed remains fail-closed above.
+            new.update(operation='update_recovered', manual_stop=False)
+            new['last_update_result'].update(recovery='healthy_previous',
+                recovered_at=datetime.now(CN).isoformat())
+            write_json(self.root / 'state.json', new)
             if local_backup_proof is not None:
                 local_only.finalize_captured_locked(
                     self, local_backup_proof, sourcepoint='before-schema-update',

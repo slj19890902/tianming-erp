@@ -409,7 +409,9 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '已切回原程序'):
             self.manager.update(self.release('bad-start'), PASSWORD, self.nas)
         self.assertEqual(self.manager.state['current'], current)
-        self.assertEqual(self.manager.state['operation'], 'update_failed')
+        self.assertEqual(self.manager.state['operation'], 'update_recovered')
+        self.assertEqual(self.manager.state['last_update_result']['outcome'], 'failed')
+        self.assertEqual(self.manager.state['last_update_result']['recovery'], 'healthy_previous')
 
     def test_untrusted_publisher_is_rejected(self):
         another_key = Ed25519PrivateKey.generate()
@@ -417,6 +419,14 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(Exception):
             extract_verified(self.package, self.root / 'untrusted', other)
         self.assertFalse((self.root / 'untrusted').exists())
+
+    def test_failed_previous_start_keeps_failed_guard(self):
+        from unittest.mock import patch
+        with patch.object(self.manager, 'start', side_effect=ValueError('recovery start failed')):
+            with self.assertRaisesRegex(ValueError, 'recovery start failed'):
+                self.manager.update(self.release('bad-start'), PASSWORD, self.nas)
+        self.assertEqual(self.manager.state['operation'], 'update_failed')
+        self.assertEqual(self.manager.state['last_update_result']['recovery'], 'starting_previous')
 
     def test_path_escape_and_case_collision_are_rejected(self):
         for index, names in enumerate([['../escape'], ['A.txt', 'a.txt'], ['C:/bad'], ['a:stream'], ['CON.txt']]):

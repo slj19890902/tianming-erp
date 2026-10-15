@@ -57,6 +57,9 @@ def test_restart_after_exit_without_rehashing_running_release_every_tick(tmp_pat
     ({'current':None}, 'not-restored'),
     ({'current':'one','manual_stop':True}, 'manually-stopped'),
     ({'current':'one','operation':'migration_running'}, 'maintenance-attention'),
+    ({'current':'one','operation':'migration_failed'}, 'maintenance-attention'),
+    ({'current':'one','operation':'update_failed'}, 'maintenance-attention'),
+    ({'current':'one','operation':'update_recovered','manual_stop':True}, 'manually-stopped'),
     ({'current':'one','operation':'update_failed_reader_contract'}, 'maintenance-attention'),
     ({'current':'one','onboarding_pending':True}, 'maintenance-attention'),
 ])

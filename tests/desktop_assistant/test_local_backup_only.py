@@ -145,3 +145,31 @@ def test_real_cleanup_guard_failure_still_blocks_next_capture(local_case,monkeyp
         local.backup_locked(scene.manager,PASSWORD)
     assert {path.name for path in (root/'backups').glob('*.tmbackup')}==before
     assert (root/'backups'/proof['backup_filename']).exists() and stale.exists()
+
+
+def test_owner_pinned_existing_cipher_is_kept_with_complete_retention(local_case,monkeypatch):
+    scene=local_case;root=scene.manager.root
+    old=root/'backups'/'20260101-040404-eeeeeeee.tmbackup'
+    old.write_bytes(b'owner-preserved original encrypted recovery point');old.chmod(0o600)
+    monkeypatch.setattr(local,'RELEASE_20261015_PRESERVED_CIPHERS',frozenset({sha(old)}))
+    proof=cutover(scene)
+    result=local.finalize_local_update(scene.manager)
+    assert result['retention']['status']=='one_complete'
+    assert result['retention']['protected']==[{'name':old.name,'reasons':['owner_preserved_20261015']}]
+    assert old.exists() and (root/'backups'/proof['backup_filename']).exists()
+
+
+def test_verified_retained_plaintext_defers_cleanup_without_losing_backup(local_case):
+    scene=local_case;root=scene.manager.root
+    proof=cutover(scene)
+    recovery=root/'staging'/proof['job_id']/'independent-recovery'
+    recovery.mkdir(mode=0o700)
+    state=scene.manager.state;state['backup_work_retained']=[str(recovery)]
+    write_json(root/'state.json',state)
+    result=local.finalize_local_update(scene.manager)
+    assert result['retention']['status']=='one_complete'
+    assert local.verified_at(root,scene.manager.state)==proof['authenticated_recovery']['source_time']
+    assert scene.manager.state['backup_work_retained']==[str(recovery)]
+    with scene.manager.lock(),pytest.raises(ValueError,match='previous retained backup work'):
+        local.backup_locked(scene.manager,PASSWORD)
+    assert scene.events==[]

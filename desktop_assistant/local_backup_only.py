@@ -130,13 +130,32 @@ def _closed_update_reference(manager,path,cipher_sha,context):
         'previous update recovery lacks completed local verification')
 
 
-def _retention(manager,keep,context):
+RELEASE_20261015_PRESERVED_CIPHERS = frozenset({
+    'b18fb6fc02fa44f3f2ad51b4c124528f5169a8d86f3014158ae94e756ab3fc12',
+    '578a72d44a4c51c6123590914f80ee5ac4633d190d005a0a6009ceb3d6ee3de1',
+    'cc754062e2c006962b509af3c7693ef409108b40d99b80b81225981126110f3a',
+})
+
+
+def _retention(manager,keep,context,*,allow_retained_proof=None):
     """Delete ordinary predecessors while preserving explicitly referenced sources."""
     from .cleanup import assert_idle
     state=manager.state
-    require(not state.get('onboarding_pending') and not state.get('backup_work_retained')
+    require(not state.get('onboarding_pending')
         and state.get('operation')!='migration_running' and 'failed' not in (state.get('operation') or ''),
         'pending maintenance protects previous recovery points')
+    if state.get('backup_work_retained'):
+        # A verified cold capture remains a valid recovery point when cleanup
+        # of its disposable plaintext copy is deferred. Bind that exception to
+        # this exact capture; a prior unresolved job still blocks a new one.
+        require(allow_retained_proof is not None
+            and state['backup_work_retained'] == [str(manager.root/'staging'/
+                allow_retained_proof['job_id']/'independent-recovery')]
+            and _check_proof(manager,allow_retained_proof,context) == keep,
+            'retained plaintext does not belong to this verified capture')
+        recovery=Path(state['backup_work_retained'][0])
+        with Lease(recovery,uid=context['uid'],gid=context['gid'],mode=0o700,directory=True):
+            pass
     active_paths,active_hashes=_active_references(manager,context)
     from .nas_full_backup_retention import _comparison_key
     removed=[];retained=[];failures=[];protected=[]
@@ -152,6 +171,8 @@ def _retention(manager,keep,context):
                 reasons=[]
                 if old_sha==state.get('restored_backup_sha256'):reasons.append('restore_source')
                 if old_sha==state.get('migration_backup_sha256'):reasons.append('migration_source')
+                if old_sha in RELEASE_20261015_PRESERVED_CIPHERS:
+                    reasons.append('owner_preserved_20261015')
                 if (old_sha in active_hashes
                         or any(_comparison_key(str(path))==_comparison_key(name) for name in active_paths)):
                     reasons.append('active_task_source')
@@ -218,7 +239,7 @@ def _finalize_locked(manager,proof,sourcepoint,manifest=None):
         last_backup_local={'receipt':receipt.name,'sha256':value['sha256'],'source_time':value['verified_at']})
     require(manager.state==previous,'runtime state changed before local publication')
     write_json(manager.root/'state.json',state)
-    value['retention']=_retention(manager,path,context)
+    value['retention']=_retention(manager,path,context,allow_retained_proof=proof)
     write_json(receipt,value)
     if value['retention']['status']!='one_complete':
         state=manager.state;state['backup_error']=RETENTION_ATTENTION
@@ -254,6 +275,8 @@ def verified_at(root,state,*,now=None):
 def backup_locked(manager,password,*,restart_allowed=None,publish=True,manifest=None):
     """Original maintenance caller owns lock; one capture, resume then verify."""
     enabled(manager,manifest);_,context,policy_sha=_authority()
+    require(not manager.state.get('backup_work_retained'),
+        'previous retained backup work requires exact owner closure before another capture')
     old_index=manager.state.get('last_backup_local')
     if old_index:
         _reconcile_previous_retention_locked(manager,old_index,context,policy_sha)

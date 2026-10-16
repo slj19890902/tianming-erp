@@ -4383,7 +4383,7 @@
                 <table><thead><tr><th>主操作</th><th></th><th>客户订单号</th><th class="erp-order-no">ERP订单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
                   <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><order-reference :row="row" :secondary="false"></order-reference></td><td class="erp-order-no">{{ row.order_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ row.business_delivery_progress?.delivered_quantity || 0 }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><status-tag :value="orderDisplayStatusKey(row)"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
-                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="canViewSalesAmounts ? 14 : 13"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格mm</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">客户销售单价</th><th v-if="canViewCosts" class="cost-sensitive">预计成本</th><th v-if="canViewCosts" class="cost-sensitive">预计利润</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div v-if="orderBomDemandSaveState.outcomeUncertain && Number(orderBomDemandSaveState.itemId)===Number(item.id)" class="notice warning" style="margin:6px 0">上次组件数量保存结果暂不确定，请点击上方“刷新”核对后再操作。</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" @click="saveOrderBomComponentDemand(item,component)">{{ orderBomDemandSaveState.saving && Number(orderBomDemandSaveState.itemId)===Number(item.id) && Number(orderBomDemandSaveState.componentId)===Number(component.id) ? "保存中…" : "保存本订单需求" }}</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ orderSpecificationText(item.snapshot_spec) }}</td><td>{{ item.quantity }}<details v-if="item.replenishment_supply && item.replenishment_supply.sources && item.replenishment_supply.sources.length" class="order-replenishment-supply" style="margin-top:4px;white-space:normal;font-size:12px" @click.stop><summary>{{ orderReplenishmentSupplyText(item) }}</summary><div v-if="item.replenishment_supply.total_coverable_finished_quantity != null" class="muted">含补库可覆盖合计 {{ item.replenishment_supply.total_coverable_finished_quantity }}{{ item.replenishment_supply.unit_label }}</div><div v-for="(source,supplyIndex) in item.replenishment_supply.sources" :key="supplyIndex" class="muted">{{ source.product_name || source.product_code }}：覆盖用料 {{ source.covered_piece_quantity }}片 · {{ orderReplenishmentSupplyStage(source.stage) }}<div>{{ source.order_number }}</div></div></details><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="orderReplenishmentWaitingStatus(item)"></status-tag></td><td><status-tag :value="item.requisition_display_status || item.requisition_status" :title="item.requisition_display_hint"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.unit_price) }}</td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong><div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin-top:3px">{{ item.estimated_cost_health_label }}</div></td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit !== null && item.total_estimated_gross_profit !== undefined ? money(item.total_estimated_gross_profit) : "-" }}</strong><div v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined" class="muted">{{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</div></td><td class="toolbar-group"><template v-if="canWarehouseReserve" v-for="target in manualSheetTargetsForItem(item)" :key="target.key"><div class="muted">{{ target.label }}</div><manual-sheet-deduction :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" :order-item-id="target.order_item_id" :snapshot-id="target.bom_snapshot_id || 0" :component-type="target.component_type" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualSheetOrder(item,$event,row.id)"></manual-sheet-deduction></template><button v-if="hasBomComponents(item) && hasPermission('warehouse.view')" class="btn small" @click="openOrderBomStockReview(item)">BOM库存核对</button><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
+                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="canViewSalesAmounts ? 14 : 13"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格mm</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">客户销售单价</th><th v-if="canViewCosts" class="cost-sensitive">预计成本</th><th v-if="canViewCosts" class="cost-sensitive">预计利润</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div v-if="orderBomDemandSaveState.outcomeUncertain && Number(orderBomDemandSaveState.itemId)===Number(item.id)" class="notice warning" style="margin:6px 0">上次组件数量保存结果暂不确定，请点击上方“刷新”核对后再操作。</div><div class="bom-preview-list"><div v-for="component in visibleBomComponents(item)" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" @click="saveOrderBomComponentDemand(item,component)">{{ orderBomDemandSaveState.saving && Number(orderBomDemandSaveState.itemId)===Number(item.id) && Number(orderBomDemandSaveState.componentId)===Number(component.id) ? "保存中…" : "保存本订单需求" }}</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ orderSpecificationText(item.snapshot_spec) }}</td><td>{{ item.quantity }}<details v-if="item.replenishment_supply && item.replenishment_supply.sources && item.replenishment_supply.sources.length" class="order-replenishment-supply" style="margin-top:4px;white-space:normal;font-size:12px" @click.stop><summary>{{ orderReplenishmentSupplyText(item) }}</summary><div v-if="item.replenishment_supply.total_coverable_finished_quantity != null" class="muted">含补库可覆盖合计 {{ item.replenishment_supply.total_coverable_finished_quantity }}{{ item.replenishment_supply.unit_label }}</div><div v-for="(source,supplyIndex) in item.replenishment_supply.sources" :key="supplyIndex" class="muted">{{ source.product_name || source.product_code }}：覆盖用料 {{ source.covered_piece_quantity }}片 · {{ orderReplenishmentSupplyStage(source.stage) }}<div>{{ source.order_number }}</div></div></details><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="orderReplenishmentWaitingStatus(item)"></status-tag></td><td><status-tag :value="item.requisition_display_status || item.requisition_status" :title="item.requisition_display_hint"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.unit_price) }}</td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong><div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin-top:3px">{{ item.estimated_cost_health_label }}</div></td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit !== null && item.total_estimated_gross_profit !== undefined ? money(item.total_estimated_gross_profit) : "-" }}</strong><div v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined" class="muted">{{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</div></td><td class="toolbar-group"><template v-if="canWarehouseReserve" v-for="target in manualSheetTargetsForItem(item)" :key="target.key"><div class="muted">{{ target.label }}</div><manual-sheet-deduction :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" :order-item-id="target.order_item_id" :snapshot-id="target.bom_snapshot_id || 0" :component-type="target.component_type" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualSheetOrder(item,$event,row.id)"></manual-sheet-deduction></template><button v-if="hasBomComponents(item) && hasPermission('warehouse.view')" class="btn small" @click="openOrderBomStockReview(item)">BOM库存核对</button><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
                   <tr>
@@ -7363,13 +7363,13 @@
                   <div v-else-if="receiptStorage.error" class="notice error">{{ receiptStorage.error }} <button class="btn small" type="button" @click.prevent="loadReceiptStorage()">重新读取</button></div>
                   <template v-else-if="receiptStorage.product_id===productForm.id">
                     <div style="display:flex;gap:6px;flex-wrap:wrap">
-                      <select class="select" style="flex:1;min-width:100px" v-model.number="receiptStorage.floor" @change="receiptStorage.area_id=null;receiptStorage.location_id=null" aria-label="默认楼层"><option :value="null">待入库区</option><option v-for="floor in [...new Set(receiptStorage.locations.map(x=>x.floor))].sort((a,b)=>a-b)" :value="floor">{{ floor }}F</option></select>
-                      <select class="select" style="flex:2;min-width:140px" v-model.number="receiptStorage.area_id" @change="receiptStorage.location_id=null" aria-label="默认区域"><option :value="null">选择区域</option><option v-for="area in receiptStorageAreas()" :value="area.area_id">{{ area.area_name }}</option></select>
-                      <select class="select" style="flex:3;min-width:200px" v-model.number="receiptStorage.location_id" aria-label="默认货架层格"><option :value="null">区域内自动分配</option><option v-for="loc in receiptStorage.locations.filter(x=>x.area_id===receiptStorage.area_id)" :value="loc.location_id">{{ loc.name }}</option></select>
+                      <select class="select" style="flex:1;min-width:100px" v-model.number="receiptStorage.floor" :disabled="!['admin','boss'].includes(user?.role)" @change="receiptStorage.area_id=null;receiptStorage.location_id=null" aria-label="默认楼层"><option :value="null">待入库区</option><option v-for="floor in [...new Set(receiptStorage.locations.map(x=>x.floor))].sort((a,b)=>a-b)" :value="floor">{{ floor }}F</option></select>
+                      <select class="select" style="flex:2;min-width:140px" v-model.number="receiptStorage.area_id" :disabled="!['admin','boss'].includes(user?.role)" @change="receiptStorage.location_id=null" aria-label="默认区域"><option :value="null">选择区域</option><option v-for="area in receiptStorageAreas()" :value="area.area_id">{{ area.area_name }}</option></select>
+                      <select class="select" style="flex:3;min-width:200px" v-model.number="receiptStorage.location_id" :disabled="!['admin','boss'].includes(user?.role)" aria-label="默认货架层格"><option :value="null">区域内自动分配</option><option v-for="loc in receiptStorage.locations.filter(x=>x.area_id===receiptStorage.area_id)" :value="loc.location_id">{{ loc.name }}</option></select>
                       <button v-if="['admin','boss'].includes(user?.role)" class="btn small primary" :disabled="receiptStorage.saving || (!!receiptStorage.floor && !receiptStorage.area_id)" @click.prevent="saveReceiptStorage(false)">保存默认位置</button>
                       <button v-if="['admin','boss'].includes(user?.role)" class="btn small" :disabled="receiptStorage.saving" @click.prevent="saveReceiptStorage(true)">取消固定位置</button>
                     </div>
-                    <info-note>第一次在货架添加该成品后会记住这里；已有固定货架配置时沿用原配置。以后仍用此位置，除非管理员手动修改。取消后，后续添加不会再次自动记住。此设置只影响以后收料和成品自动入位，不移动现有库存。</info-note>
+                    <info-note>第一次在货架添加该成品后会记住这里；已有固定货架配置时沿用原配置。修改后可点“保存默认位置”，也可点常用箱底部“保存”，两处都会保存新位置。此设置只影响以后收料和成品自动入位，不移动现有库存。</info-note>
                   </template>
                   <div v-if="!receiptStorage.error && receiptStorage.message" role="status">{{ receiptStorage.message }}</div>
                 </div>
@@ -8724,7 +8724,7 @@
                       <div v-if="hasBomComponents(item)" class="bom-preview-box">
                         <div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div>
                         <div class="bom-preview-list">
-                          <div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div>
+                          <div v-for="component in visibleBomComponents(item)" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div>
                         </div>
                       </div>
                     </td>
@@ -8952,7 +8952,7 @@
                   <span v-else class="muted">-</span>
                 </td>
               </tr><tr v-if="canViewCosts || hasBomComponents(item) || canWarehouseReserve" class="order-read-basis-row" :class="{'cost-review-focus':Number(item.id)===costReviewFocusItemId}"><td :colspan="canViewSalesAmounts ? 14 : 12"><div class="order-read-basis" :aria-label="'明细 '+(item.snapshot_product_code || item.item_order_number)+' 的依据'">
-                  <div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div>
+                  <div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in visibleBomComponents(item)" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div>
                   <section v-if="canWarehouseReserve" class="order-manual-sheet-entry"><strong>本订单片料安排</strong><div class="muted">采用只预占填写张数；内部未合并需求同次修订。</div><template v-if="canWarehouseReserve" v-for="target in manualSheetTargetsForItem(item)" :key="target.key"><div class="muted">{{ target.label }}</div><manual-sheet-deduction :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" :order-item-id="target.order_item_id" :snapshot-id="target.bom_snapshot_id || 0" :component-type="target.component_type" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualSheetOrder(item,$event,orderDetail.id)"></manual-sheet-deduction></template></section><div v-if="canViewCosts" class="material-cost-compact cost-sensitive">
                     <strong>{{ item.estimated_total_cost_status === 'calculated' ? `预计总成本 ¥ ${money(item.estimated_order_total_cost)}` : (item.estimated_total_cost_status_label || '预计总成本待完善') }}</strong>
                     <div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin:3px 0">{{ item.estimated_cost_health_label }}<span v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined"> · 预计毛利率 {{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</span></div>
@@ -11071,7 +11071,7 @@
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"", record_type:"", operator_name:"" },
             productionPlacementFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"" },
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {}, productionActualAdjustmentAttempts: {}, productionLabelRefreshAttempts: {},
-            receiptStorage: {product_id:null,locations:[],loading:false,saving:false,message:'',error:'',saved_label:'',floor:null,area_id:null,location_id:null,version:0},
+            receiptStorage: {product_id:null,locations:[],loading:false,saving:false,message:'',error:'',saved_label:'',floor:null,area_id:null,location_id:null,saved_floor:null,saved_area_id:null,saved_location_id:null,version:0},
             productionDrawingAdoption: {taskId:null,loading:false,busy:false,error:'',data:null,releaseId:null,confirmed:false,pending:null}, productionDrawingAdoptionAttempts: {},
             productFormSnapshot: null, productBomSnapshot: null,
             productEditReturnContext: null,
@@ -12769,21 +12769,28 @@
           },
           async loadReceiptStorage() {
             const id=this.productForm.id;
-            this.receiptStorage={product_id:id,locations:[],loading:true,saving:false,message:'',error:'',saved_label:'',floor:null,area_id:null,location_id:null,version:0};
+            this.receiptStorage={product_id:id,locations:[],loading:true,saving:false,message:'',error:'',saved_label:'',floor:null,area_id:null,location_id:null,saved_floor:null,saved_area_id:null,saved_location_id:null,version:0};
             try {
               const {data}=await axios.get(`/api/warehouse/fixed-shelf/receipt-storage/${id}`);
               if(this.productForm.id!==id)return;
               const loc=data.locations.find(x=>x.area_id===data.area_id);
               const savedLabel=data.location?.name||(data.area_id?'区域内自动分配':(data.configured?'已取消自动记忆':'首次添加后自动记住'));
-              this.receiptStorage={...data,loading:false,saving:false,error:'',saved_label:savedLabel,floor:loc?.floor||null,message:data.issue||''};
+              this.receiptStorage={...data,loading:false,saving:false,error:'',saved_label:savedLabel,floor:loc?.floor||null,message:data.issue||'',saved_floor:loc?.floor||null,saved_area_id:data.area_id||null,saved_location_id:data.location_id||null};
             } catch(e) {if(this.productForm.id===id){this.receiptStorage.loading=false;this.receiptStorage.error=e.response?.data?.detail||'默认位置读取失败';}}
           },
           receiptStorageAreas() {
             return [...new Map(this.receiptStorage.locations.filter(x=>x.floor===this.receiptStorage.floor).map(x=>[x.area_id,x])).values()];
           },
+          receiptStorageDirty() {
+            const state=this.receiptStorage;
+            return Number(state?.product_id)===Number(this.productForm?.id) && !state.loading && !state.error
+              && (Number(state.floor||0)!==Number(state.saved_floor||0)
+                || Number(state.area_id||0)!==Number(state.saved_area_id||0)
+                || Number(state.location_id||0)!==Number(state.saved_location_id||0));
+          },
           async saveReceiptStorage(clear) {
             const state=this.receiptStorage,id=this.productForm.id;
-            if(state.product_id!==id || state.loading || state.error || state.saving)return;
+            if(state.product_id!==id || state.loading || state.error || state.saving)return false;
             const loc=clear?null:state.locations.find(x=>x.location_id===state.location_id);
             state.saving=true;state.message='';
             try {
@@ -12791,11 +12798,15 @@
                 expected_version:state.version,area_id:clear?null:state.area_id,location_id:clear?null:state.location_id,
                 address_version:loc?.address_version||null,layout_version:loc?.layout_version||null,
                 idempotency_key:`receipt-storage:${id}:${createIdempotencyKey()}`});
-              if(this.productForm.id!==id)return;
+              if(this.productForm.id!==id)return false;
               const savedLabel=data.location?.name||(data.area_id?'区域内自动分配':(data.configured?'已取消自动记忆':'首次添加后自动记住'));
-              Object.assign(state,data,{floor:clear?null:state.floor,saved_label:savedLabel,message:clear?'已取消，后续添加不会再次自动记住':'默认位置已保存'});
-              if(this.activePage==='incoming' && this.incomingTab==='pending') await this.loadIncomingPendingPage({page:this.incomingPendingAppliedPage,clearSelection:false});
-            } catch(e){state.message=e.response?.data?.detail||'保存失败，请重试';} finally {state.saving=false;}
+              Object.assign(state,data,{floor:clear?null:state.floor,saved_label:savedLabel,message:clear?'已取消，后续添加不会再次自动记住':'默认位置已保存',saved_floor:clear?null:state.floor,saved_area_id:data.area_id||null,saved_location_id:data.location_id||null});
+              if(this.activePage==='incoming' && this.incomingTab==='pending') {
+                try { await this.loadIncomingPendingPage({page:this.incomingPendingAppliedPage,clearSelection:false}); }
+                catch (_error) { state.message='默认位置已保存；收料列表刷新失败，请手动刷新'; }
+              }
+              return true;
+            } catch(e){state.message=e.response?.data?.detail||'保存失败，请重试';return false;} finally {state.saving=false;}
           },
           customerPhoneAnalysis(value) {
             return TmPhone.analyze(value);
@@ -28572,8 +28583,18 @@
               return false;
             } finally { if (this.orderBomReviewIsCurrent(state)) state.busy=false; }
           },
+          visibleBomComponents(item) {
+            const rows = Array.isArray(item?.bom_components) ? item.bom_components : [];
+            const productId = Number(item?.product_id || 0);
+            const realComponents = rows.filter(row => {
+              const code = String(row?.internal_component_code || row?.internal_code || "");
+              return !(productId > 0 && Number(row?.component_product_id) === productId
+                && code === `GRAPH-${productId}` && !row?.product_bom_component_id);
+            });
+            return realComponents.length ? rows : [];
+          },
           hasBomComponents(item) {
-            return Array.isArray(item?.bom_components) && item.bom_components.length > 0;
+            return this.visibleBomComponents(item).length > 0;
           },
           hasExternalPackagingRequirements(item) {
             return Array.isArray(item?.external_packaging_requirements) && item.external_packaging_requirements.length > 0;
@@ -40785,17 +40806,32 @@
             }
             if (masterSaveEntity) this.masterSavePending = true;
             try {
+            let storageSaved = false;
+            if (masterSaveEntity === "product" && this.receiptStorageDirty?.()) {
+              if (this.receiptStorage.floor && !this.receiptStorage.area_id) {
+                this.showToast("请先选默认区域，再保存常用箱", true);
+                return false;
+              }
+              storageSaved = await this.saveReceiptStorage(!this.receiptStorage.floor);
+              if (!storageSaved) {
+                this.showToast(this.receiptStorage.message || "默认位置未保存，常用箱编辑仍保留", true);
+                return false;
+              }
+            }
             let masterOptions = this.masterPendingSaveOptions;
             this.masterPendingSaveOptions = null;
             const masterEntity = ["customer","product","material"].includes(this.modal?.type) ? this.modal.type : null;
             const masterForm = masterEntity ? this.masterCurrentForm(masterEntity) : null;
             if (masterEntity && masterForm?.id && !masterOptions) {
               const changes = this.masterLocalChanges(masterEntity);
-              if (changes.length) {
+              if (changes.length || (masterEntity === "product" && this._productFormDirty())) {
                 if (masterEntity === "product") {
                   const preflight = await this.prepareProductOneClickSave();
                   if (!preflight) return false;
-                  if (preflight.completed) return true;
+                  if (preflight.completed) {
+                    if (storageSaved) this.showToast("默认位置已保存；其他常用箱字段没有新的变化");
+                    return true;
+                  }
                   masterOptions = preflight.options;
                 }
                 else if (masterEntity === "customer") {
@@ -40809,7 +40845,7 @@
               if (!changes.length) {
                 if (!(masterEntity === "product" && this._productBomDirty())) {
                   this.closeModal();
-                  this.showToast("未检测到可保存的变化");
+                  this.showToast(storageSaved ? "默认位置已保存" : "未检测到可保存的变化");
                   return true;
                 }
                 const bomError = this.validateProductBom();

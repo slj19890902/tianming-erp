@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.651"
-APP_VERSION_NAME = "补库跨批次自动完工撤销修复"
+APP_VERSION = "v0.22.652"
+APP_VERSION_NAME = "单品 BOM 展示与常用箱保存修复"
 APP_BUILD_DATE = "2026-10-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6378,3 +6378,18 @@ APP_VERIFICATION_STEPS = [
     "核对正式版本 v0.22.651、数据库 revision 仍为 eq1015sa；复查 80012632、80012410、80012411 及 80010631 原有结果。",
 ]
 APP_CHANGELOG = [*(f"v0.22.651：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.652：单品订单展示与常用箱几模、默认位置保存修复，无结构迁移。
+APP_CHANGES = [
+    "普通单品订单的内部自指生产节点不再显示为 BOM 组合；真实冻结子件仍按原订单展示。",
+    "常用箱几模等字段修改进入保存预检，不再因变更清单遗漏而提示无变化并丢弃编辑。",
+    "常用箱底部保存同时采用已更改的默认位置；位置保存失败时保留编辑，既有库存位置不自动搬动。",
+    "保留 v651 的跨批次完工撤销修复，以及 v650 的自动成品与默认货位规则。",
+]
+APP_VERIFICATION_STEPS = [
+    "查看驿力 Z.001.000204 新订单，应按独立产品显示；有真实冻结子件的旧订单仍显示 BOM。",
+    "在隔离产品上修改几模并点常用箱底部保存，重开后确认新数值；修改默认位置同样重开核对。",
+    "核对正式版本 v0.22.652、数据库 revision 仍为 eq1015sa；历史订单、库存和已有货位不因本次升级改写。",
+]
+APP_CHANGELOG = [*(f"v0.22.652：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

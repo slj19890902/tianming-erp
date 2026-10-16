@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.653"
-APP_VERSION_NAME = "包材订单库存抵扣与送货闭环修复"
+APP_VERSION = "v0.22.654"
+APP_VERSION_NAME = "普通产品送货单组件误列修复"
 APP_BUILD_DATE = "2026-10-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6409,3 +6409,15 @@ APP_VERIFICATION_STEPS = [
     "核对正式版本 v0.22.653 与数据库 revision er1016pa，既有送货价格与出库流水不变。",
 ]
 APP_CHANGELOG = [*(f"v0.22.653：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.654：普通产品送货单不显示内部自指生产节点，无结构迁移。
+APP_CHANGES = [
+    "普通产品的单节点生产图不再作为送货单 BOM 配套组件；驿力 Z.001.000204 只打印实际送货的一行与冻结单位。",
+    "真实含子件的冻结 BOM 仍按原交付方式显示；订单、库存、数量、价格和历史送货事实不改写。",
+]
+APP_VERIFICATION_STEPS = [
+    "重新打开驿力送货单 YL-20261014-001，Z.001.000204 应仅一行 50 只，不再出现同编码的配套组件附行。",
+    "抽查真实 BOM 送货单的父件和子件仍按冻结交付方式显示；核对正式版本 v0.22.654，数据库 revision 仍为 er1016pa。",
+]
+APP_CHANGELOG = [*(f"v0.22.654：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

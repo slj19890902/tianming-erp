@@ -135,6 +135,7 @@ from app.services.delivery_goods_projection import (
     actual_goods_lines as project_actual_goods_lines,
     customer_document_fulfillment_mode as resolve_customer_document_fulfillment_mode,
     delivery_component_lines as project_delivery_component_lines,
+    is_standalone_graph_root,
 )
 from app.services.production_packaging_label import (
     ProductionPackagingLabelError,
@@ -2902,6 +2903,7 @@ def _actual_goods_lines(
     parent_quantity: int,
     component_lines: list[dict],
     fulfillment_mode: str = "component_delivery",
+    parent_unit: str | None = None,
 ) -> list[dict]:
     return project_actual_goods_lines(
         order_item_id=order_item_id,
@@ -2911,6 +2913,7 @@ def _actual_goods_lines(
         parent_quantity=parent_quantity,
         component_lines=component_lines,
         fulfillment_mode=fulfillment_mode,
+        parent_unit=parent_unit,
     )
 
 
@@ -2944,6 +2947,7 @@ def _delivery_document_goods_lines(
     specification: str | None,
     parent_quantity: int,
     kit_metadata: dict,
+    parent_unit: str | None = None,
 ) -> list[dict]:
     """Project one saved delivery item into customer-visible goods lines."""
 
@@ -2962,6 +2966,7 @@ def _delivery_document_goods_lines(
         parent_quantity=parent_quantity,
         component_lines=kit_metadata.get("component_lines") or [],
         fulfillment_mode=fulfillment_mode,
+        parent_unit=parent_unit,
     )
 
 
@@ -2974,7 +2979,8 @@ def _delivery_kit_metadata(
     dispatched: bool = False,
     current_product_fulfillment_mode: str | None = None,
 ) -> dict:
-    if order_item is None or not is_composite_order_item(db, order_item.id):
+    demands = delivery_component_demands(db, order_item.id) if order_item is not None else []
+    if not demands or is_standalone_graph_root(demands, order_item.product_id):
         return {
             "is_composite_bom": False,
             "composite_fulfillment_mode": None,
@@ -3811,7 +3817,7 @@ def _delivery_list_kit_metadata(
     current_product_fulfillment_mode: str | None = None,
 ) -> dict:
     demands = context["component_demands_by_order_item"].get(order_item.id, [])
-    if not demands:
+    if not demands or is_standalone_graph_root(demands, order_item.product_id):
         return _empty_delivery_kit_metadata()
 
     delivered_sets = int(order_item.delivered_quantity or 0)
@@ -5646,6 +5652,7 @@ def _delivery_response(
                 specification=mapping["specification"],
                 parent_quantity=mapping["delivered_quantity"],
                 kit_metadata=kit_metadata,
+                parent_unit=mapping.get("unit_snapshot"),
             )
         )
         actual_goods_quantity = sum(
@@ -11666,6 +11673,7 @@ def get_delivery_print_data(
                 specification=specification,
                 parent_quantity=row.quantity,
                 kit_metadata=kit_metadata,
+                parent_unit=row.unit_snapshot,
             )
         )
         document_goods_lines = [

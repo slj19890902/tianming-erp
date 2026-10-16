@@ -4,11 +4,25 @@ from sqlalchemy.orm import Session
 
 from app.models.order import OrderItem
 from app.services.composite_bom_workflow import (
+    ComponentDemand,
     delivered_component_quantities,
     delivery_component_required_quantities,
     delivery_item_component_quantities,
     delivery_component_demands,
 )
+
+
+def is_standalone_graph_root(
+    demands: list[ComponentDemand], parent_product_id: int | None
+) -> bool:
+    """A production graph's lone self root is not a customer BOM component."""
+
+    return (
+        len(demands) == 1
+        and demands[0].is_graph_root
+        and parent_product_id is not None
+        and demands[0].component_product_id == parent_product_id
+    )
 
 
 def customer_document_fulfillment_mode(
@@ -99,6 +113,7 @@ def actual_goods_lines(
     parent_quantity: int,
     component_lines: list[dict],
     fulfillment_mode: str = "component_delivery",
+    parent_unit: str | None = None,
     source_delivery_item_id: int | None = None,
     parent_product_id: int | None = None,
     include_internal_ids: bool = False,
@@ -149,7 +164,7 @@ def actual_goods_lines(
         "product_name": product_name,
         "specification": specification,
         "unit": next((component["unit"] for component in component_lines
-                      if component.get("is_graph_root")), "PCS"),
+                      if component.get("is_graph_root")), parent_unit or "PCS"),
         "quantity": max(int(parent_quantity or 0), 0),
         "pricing_included": True,
         "independent_return_receipt": True,

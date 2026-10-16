@@ -59,6 +59,21 @@ class CrossRevisionTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT note FROM new_feature').fetchone()[0],'new version fact')
             self.assertEqual(db.execute('SELECT version_num FROM alembic_version').fetchone()[0],'r2')
 
+    def test_order_delivery_attribution_blocks_older_writer(self):
+        old=self.manager.state['current'];package=self.package('attribution')
+        with patch('desktop_assistant.migration.run_migration',side_effect=self.migrate):
+            self.manager.update(package,recovery.PASSWORD,self.fixture.nas)
+        current=self.manager.state['current']
+        with closing(sqlite3.connect(self.database)) as db:
+            db.execute('CREATE TABLE unordered_delivery_order_attributions(id INTEGER PRIMARY KEY)')
+            db.commit()
+        self.assertTrue(self.manager.compatible(old,'r2'))
+        with closing(sqlite3.connect(self.database)) as db:
+            db.execute('INSERT INTO unordered_delivery_order_attributions(id) VALUES(1)')
+            db.commit()
+        self.assertFalse(self.manager.compatible(old,'r2'))
+        self.assertTrue(self.manager.compatible(current,'r2'))
+
     def test_cross_revision_restore_uses_authority_schema_contract(self):
         old=self.manager.state['current'];package=self.package()
         with patch('desktop_assistant.migration.run_migration',side_effect=self.migrate):

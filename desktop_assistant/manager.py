@@ -102,6 +102,12 @@ class Manager:
                 shared_bom_contract = db.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='shared_bom_members'"
                 ).fetchone()
+                attribution_table = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='unordered_delivery_order_attributions'"
+                ).fetchone()
+                attribution_facts = bool(attribution_table and db.execute(
+                    "SELECT 1 FROM unordered_delivery_order_attributions LIMIT 1"
+                ).fetchone())
                 purchase_identity_contract = any(row[1] == 'production_snapshot_json' for row in
                     db.execute('PRAGMA table_info(stock_replenishment_order_items)'))
                 mold_deletion_contract = any(row[1] == 'deleted_at' for row in
@@ -124,6 +130,8 @@ class Manager:
             if shared_bom_contract and not self._shared_finished_reader(release, "shared_bom_v1"):
                 return False
             if purchase_identity_contract and not self._shared_finished_reader(release, "stock_purchase_identity_v1"):
+                return False
+            if attribution_facts and self.manifest(release)['revision'] != revision:
                 return False
         # Additive JSON business facts can change semantics without an Alembic
         # revision change. Check the signed reader contract before that shortcut.

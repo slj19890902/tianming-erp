@@ -130,10 +130,12 @@ V11_ELEMENT_CATALOG = (
     {"id": "report_specification", "label": "片料尺寸", "kind": "text"},
 )
 _V11_CATALOG_BY_ID = {item["id"]: item for item in V11_ELEMENT_CATALOG}
-CATALOG_VERSION = V11_CATALOG_VERSION
+V12_CATALOG_VERSION = "mold-side-code-12mm-v1"
+V12_ELEMENT_CATALOG = V11_ELEMENT_CATALOG
+CATALOG_VERSION = V12_CATALOG_VERSION
 PAPER_WIDTH_MM = V7_PAPER_WIDTH_MM
 PAPER_HEIGHT_MM = V7_PAPER_HEIGHT_MM
-ELEMENT_CATALOG = V11_ELEMENT_CATALOG
+ELEMENT_CATALOG = V12_ELEMENT_CATALOG
 
 
 class MoldLabelLayoutError(ValueError):
@@ -303,7 +305,9 @@ def _default_layout_v9() -> dict[str, Any]:
                 paper=dict(width_mm=80., height_mm=40.), elements=elements)
 
 
-def default_layout() -> dict[str, Any]:
+def _default_layout_v11() -> dict[str, Any]:
+    """Frozen V11 geometry for existing print jobs."""
+
     geometry = {
         "inventory_code_top": (1.2, .6, 42.6, 8.8, 6.1, 400),
         "drawing_number": (45, .6, 33.6, 8.8, 6.1, 400),
@@ -334,6 +338,18 @@ def default_layout() -> dict[str, Any]:
         elements.append(element)
     return dict(catalog_version=V11_CATALOG_VERSION,
                 paper=dict(width_mm=80., height_mm=40.), elements=elements)
+
+
+def default_layout() -> dict[str, Any]:
+    layout = _default_layout_v11()
+    layout["catalog_version"] = V12_CATALOG_VERSION
+    elements = {element["id"]: element for element in layout["elements"]}
+    elements["customer_name"].update(x_mm=1.2, y_mm=16.2, width_mm=61.2,
+                                     height_mm=4.6)
+    elements["inventory_code_side"].update(x_mm=1.2, y_mm=20.8,
+                                            width_mm=61.2, height_mm=12.0,
+                                            font_size_mm=12.0)
+    return layout
 
 
 def _default_layout_v6() -> dict[str, Any]:
@@ -952,11 +968,11 @@ def _normalize_layout_v6(payload: object) -> dict[str, Any]:
 _SNAPSHOT_NORMALIZERS[V6_CATALOG_VERSION] = _normalize_layout_v6
 
 
-def _normalize_element_v7(raw: object, *, v8: bool = False, v9: bool = False, v11: bool = False) -> dict[str, Any]:
+def _normalize_element_v7(raw: object, *, v8: bool = False, v9: bool = False, v11: bool = False, v12: bool = False) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise MoldLabelLayoutError("布局中存在无效元素")
     element_id = str(raw.get("id") or "").strip()
-    metadata = (_V11_CATALOG_BY_ID if v11 else _V9_CATALOG_BY_ID if v9 else _V7_CATALOG_BY_ID).get(element_id)
+    metadata = (_V11_CATALOG_BY_ID if v11 or v12 else _V9_CATALOG_BY_ID if v9 else _V7_CATALOG_BY_ID).get(element_id)
     if metadata is None:
         raise MoldLabelLayoutError("布局中存在未登记元素")
     if raw.get("kind") != metadata["kind"]:
@@ -986,10 +1002,10 @@ def _normalize_element_v7(raw: object, *, v8: bool = False, v9: bool = False, v1
     ):
         raise MoldLabelLayoutError(f"{metadata['label']}的位置或尺寸超出80×40内容区")
     if metadata["kind"] == "qr":
-        qr_size = 15.0 if v8 or v9 or v11 else 14.2
+        qr_size = 15.0 if v8 or v9 or v11 or v12 else 14.2
         if normalized["width_mm"] != qr_size or normalized["height_mm"] != qr_size:
             raise MoldLabelLayoutError(f"模具二维码必须保持{qr_size}毫米正方形")
-        if normalized["x_mm"] != (63.6 if v8 or v9 or v11 else 64.4) or normalized["y_mm"] != (17.0 if v9 or v11 else 18.2 if v8 else 18.7):
+        if normalized["x_mm"] != (63.6 if v8 or v9 or v11 or v12 else 64.4) or normalized["y_mm"] != (17.0 if v9 or v11 or v12 else 18.2 if v8 else 18.7):
             raise MoldLabelLayoutError("模具二维码必须保持既定位置")
         return normalized
     if metadata["kind"] == "rule":
@@ -1008,7 +1024,8 @@ def _normalize_element_v7(raw: object, *, v8: bool = False, v9: bool = False, v1
     font_size = _finite_number(
         raw.get("font_size_mm"), name=f"{metadata['label']}字号"
     )
-    if not 1.2 <= font_size <= (9.2 if v9 or v11 else 8.0):
+    max_font_size = 12.0 if v12 and element_id == "inventory_code_side" else 9.2 if v9 or v11 or v12 else 8.0
+    if not 1.2 <= font_size <= max_font_size:
         raise MoldLabelLayoutError(f"{metadata['label']}字号超出允许范围")
     font_weight = int(
         _finite_number(raw.get("font_weight"), name=f"{metadata['label']}字重")
@@ -1145,7 +1162,7 @@ _SNAPSHOT_NORMALIZERS[V9_CATALOG_VERSION] = _normalize_layout_v9
 def normalize_layout(payload: object) -> dict[str, Any]:
     """Validate a layout submitted for the currently published catalog."""
 
-    return _normalize_layout_v11(payload)
+    return _normalize_layout_v12(payload)
 
 
 def _normalize_layout_v10(payload: object) -> dict[str, Any]:
@@ -1204,19 +1221,68 @@ def _normalize_layout_v11(payload: object) -> dict[str, Any]:
 _SNAPSHOT_NORMALIZERS[V11_CATALOG_VERSION] = _normalize_layout_v11
 
 
+def _normalize_layout_v12(payload: object) -> dict[str, Any]:
+    if not isinstance(payload, dict) or payload.get("catalog_version") != V12_CATALOG_VERSION:
+        raise MoldLabelLayoutError("标签元素目录版本已变化，请重新加载默认布局")
+    if payload.get("paper") != {"width_mm": 80, "height_mm": 40}:
+        raise MoldLabelLayoutError("本布局只允许80×40毫米内容区")
+    raw = payload.get("elements")
+    if not isinstance(raw, list):
+        raise MoldLabelLayoutError("标签元素必须是列表")
+    elements = [_normalize_element_v7(item, v12=True) for item in raw]
+    if len(elements) != len(V12_ELEMENT_CATALOG) or {e["id"] for e in elements} != set(_V11_CATALOG_BY_ID):
+        raise MoldLabelLayoutError("标签元素不完整或重复")
+    by_id = {item["id"]: item for item in elements}
+    bands = {
+        "inventory_code_top": (.6, 9.4), "drawing_number": (.6, 9.4),
+        "rack_location": (9.8, 15.6), "cutting_mode": (9.8, 15.6),
+        "report_specification": (33, 39.4),
+    }
+    for element_id, (low, high) in bands.items():
+        element = by_id[element_id]
+        if element["y_mm"] < low or element["y_mm"] + element["height_mm"] > high + .001:
+            raise MoldLabelLayoutError("文字超出指定行")
+    for element_id, expected_y in (("section_rule_top", 16), ("section_rule_bottom", 32.8)):
+        rule = by_id[element_id]
+        if (rule["x_mm"], rule["y_mm"], rule["width_mm"], rule["height_mm"]) != (1.2, expected_y, 77.6, .2):
+            raise MoldLabelLayoutError("侧面虚线必须保持17毫米间距")
+    customer = by_id["customer_name"]
+    code = by_id["inventory_code_side"]
+    if code["font_size_mm"] != 12.0 or code["font_weight"] != 900:
+        raise MoldLabelLayoutError("侧面存货编码必须保持12毫米加粗字")
+    for item in (customer, code):
+        if item["y_mm"] < 16.2 or item["y_mm"] + item["height_mm"] > 32.8 + .001:
+            raise MoldLabelLayoutError("文字超出17毫米侧面识别区")
+        if item["x_mm"] + item["width_mm"] > by_id["mold_qr"]["x_mm"]:
+            raise MoldLabelLayoutError("侧面文字不得与二维码重叠")
+    if customer["y_mm"] + customer["height_mm"] > code["y_mm"] + .001:
+        raise MoldLabelLayoutError("客户简称必须位于存货编码上方")
+    for index, left in enumerate(elements):
+        for right in elements[index + 1:]:
+            if _rectangles_overlap(left, right):
+                raise MoldLabelLayoutError("标签元素发生重叠")
+    order = {item["id"]: index for index, item in enumerate(V12_ELEMENT_CATALOG)}
+    elements.sort(key=lambda element: order[element["id"]])
+    return dict(catalog_version=V12_CATALOG_VERSION,
+                paper=dict(width_mm=80., height_mm=40.), elements=elements)
+
+
+_SNAPSHOT_NORMALIZERS[V12_CATALOG_VERSION] = _normalize_layout_v12
+
+
 def _upgrade_to_current_catalog(layout: dict[str, Any]) -> dict[str, Any]:
     """Project an active legacy release without changing frozen snapshots."""
 
     catalog_version = layout.get("catalog_version")
-    if catalog_version == V11_CATALOG_VERSION:
-        return _normalize_layout_v11(layout)
+    if catalog_version == V12_CATALOG_VERSION:
+        return _normalize_layout_v12(layout)
     normalizer = _SNAPSHOT_NORMALIZERS.get(catalog_version)
     if normalizer is None:
         raise MoldLabelLayoutError("保存的模具标签目录版本不受支持")
     normalizer(layout)
     # Projection for new jobs only. Persisted revisions and frozen print jobs
     # remain byte-for-byte intact and are decoded by their original catalog.
-    return _normalize_layout_v11(default_layout())
+    return _normalize_layout_v12(default_layout())
 
 
 def _normalize_snapshot_layout(payload: object) -> dict[str, Any]:

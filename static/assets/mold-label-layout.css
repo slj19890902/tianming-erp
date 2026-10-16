@@ -359,7 +359,8 @@
 /* Stable mold cell aliases retain the existing print layout and QR path. */
 .mold-layout-text[data-mold-cell-label="true"]{gap:1mm;line-height:1;white-space:nowrap}.mold-layout-text[data-mold-cell-label="true"]::before{content:"模具位";font-size:1.6mm;font-weight:500;flex:none}
 
-.mold-label-page[data-layout-catalog="mold-drawing-orientation-v1"] .mold-layout-text {
+.mold-label-page[data-layout-catalog="mold-drawing-orientation-v1"] .mold-layout-text,
+.mold-label-page[data-layout-catalog="mold-side-code-12mm-v1"] .mold-layout-text {
   box-sizing: border-box;
   padding: 0 .1mm;
   line-height: 1;
@@ -368,13 +369,19 @@
   word-break: normal;
   font-family: Arial, "Microsoft YaHei", sans-serif;
 }
-.mold-label-page[data-layout-catalog="mold-drawing-orientation-v1"] [data-layout-id="report_specification"] {
+.mold-label-page[data-layout-catalog="mold-drawing-orientation-v1"] [data-layout-id="report_specification"],
+.mold-label-page[data-layout-catalog="mold-side-code-12mm-v1"] [data-layout-id="report_specification"] {
   white-space: normal;
   overflow-wrap: anywhere;
 }
 .mold-drawing-key { flex: none; font-size: 55%; margin-right: .5mm; }
 .mold-drawing-value { min-width: 0; font-size: 100%; }
-.mold-label-page[data-layout-catalog="mold-drawing-orientation-v1"] .mold-layout-rule {
+.mold-label-page[data-layout-catalog="mold-side-code-12mm-v1"] [data-layout-id="inventory_code_side"] {
+  font-family: "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  letter-spacing: -.05mm;
+}
+.mold-label-page[data-layout-catalog="mold-drawing-orientation-v1"] .mold-layout-rule,
+.mold-label-page[data-layout-catalog="mold-side-code-12mm-v1"] .mold-layout-rule {
   background: none !important;
   border-top: .2mm dashed #111;
 }

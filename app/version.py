@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.645"
-APP_VERSION_NAME = "送货类别与受管维护收口"
+APP_VERSION = "v0.22.646"
+APP_VERSION_NAME = "模具标签图号与双出纸方向"
 APP_BUILD_DATE = "2026-10-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6296,3 +6296,15 @@ APP_VERIFICATION_STEPS = [
     "系统版本核对v0.22.645；原库存、订单和送货金额保持，打印/实机页面结果仍由管理员验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.645：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.646：模具标签图号与双出纸方向，无结构迁移。
+APP_CHANGES = [
+    "新模具标签首行显示实际存货编码及产品图号，侧面17毫米区域以虚线标出客户简称、加粗编码和15毫米二维码；片料尺寸保持原位置。",
+    "同一横向阅读标签可选择40×80毫米竖向出纸或80×40毫米横向出纸；历史冻结打印任务保持原版式。",
+]
+APP_VERIFICATION_STEPS = [
+    "打开80×40模具标签预览，核对实际编码、图号、位置、几模、客户简称、侧面虚线、二维码和片料尺寸。",
+    "两种出纸方向各按100%打印一张，测量纸张及17毫米侧面区域，并实机扫码。",
+]
+APP_CHANGELOG = [*(f"v0.22.646：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

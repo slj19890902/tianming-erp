@@ -42,15 +42,39 @@ def completed_groups(db, scope=None):
         if scope is not None and item.customer_id not in scope:
             continue
         snapshot = json.loads(job.product_snapshot)
+        if snapshot.get('automatic_completion'):
+            command = db.get(Command, 'auto-stock-complete:' + str(job.receipt_item_id))
+            if command:
+                result = json.loads(command.result_json)
+                if (result.get('action') == 'automatic_complete'
+                        and result.get('output_lot_id') == job.output_lot_id
+                        and job.id in result.get('job_ids', [])):
+                    members = [db.get(Job, job_id) for job_id in result['job_ids']]
+                    if (all(members) and len(members) == len(set(result['job_ids']))
+                            and all(json.loads(member.product_snapshot).get('automatic_completion')
+                                    for member in members)):
+                        groups[f'auto:{job.receipt_item_id}'] = members
+                        continue
         group = snapshot.get('preparation_group')
         groups[group['key'] if group else f'job:{job.id}'].append(job)
     return groups
 
 
 def reverse_block(db, jobs):
+    automatic = any(json.loads(job.product_snapshot).get('automatic_completion') for job in jobs)
+    if automatic:
+        anchors = [job for job in jobs if job.actual_output > 0 and job.output_lot_id]
+        if len(anchors) != 1 or any(job.actual_output or job.output_lot_id for job in jobs if job is not anchors[0]):
+            return '自动完工批次来源不完整，请核对原始完工记录'
+        command = db.get(Command, 'auto-stock-complete:' + str(anchors[0].receipt_item_id))
+        result = json.loads(command.result_json) if command else {}
+        if (result.get('output_lot_id') != anchors[0].output_lot_id
+                or set(result.get('job_ids', [])) != {job.id for job in jobs}
+                or len(result.get('job_ids', [])) != len(jobs)):
+            return '自动完工批次来源不完整，请核对原始完工记录'
     for job in jobs:
         receipt, item, source = prep.source(db, job.receipt_item_id)
-        output = db.get(InventoryLot, job.output_lot_id)
+        output = db.get(InventoryLot, anchors[0].output_lot_id if automatic else job.output_lot_id)
         reservation = db.get(InventoryReservation, job.reservation_id)
         if job.status != 'completed':
             return '该完工已撤销或状态已变化'
@@ -63,9 +87,9 @@ def reverse_block(db, jobs):
         source_block = _source_restore_block(db, source)
         if source_block:
             return source_block
-        if (not output or output.source_ref_type != 'stock_preparation' or output.source_ref_id != job.id
+        if (not output or output.source_ref_type != 'stock_preparation' or output.source_ref_id != (anchors[0].id if automatic else job.id)
                 or output.status != 'active' or output.inventory_type not in {'finished','semi_finished'}
-                or output.quantity_available != job.actual_output
+                or output.quantity_available != (anchors[0].actual_output if automatic else job.actual_output)
                 or any((output.quantity_reserved, output.quantity_consumed, output.quantity_damaged, output.quantity_scrapped))):
             return '产出已被使用、占用或调整，请先处理后续业务'
         movements = list(db.scalars(select(InventoryMovement).where(InventoryMovement.inventory_lot_id == output.id)))
@@ -106,7 +130,8 @@ def rows(db, scope=None, **filters):
         amounts = defaultdict(int)
         for j in jobs:
             amounts[j.product_id] += j.actual_output
-        quantity = min((amounts[c['product_id']]//c['per_set'] for c in recipe['children']), default=0) if group else jobs[0].actual_output
+        quantity = (min((amounts[c['product_id']]//c['per_set'] for c in recipe['children']), default=0)
+                    if group else sum(job.actual_output for job in jobs))
         if filters.get('customer_id') and filters['customer_id'] != item.customer_id:
             continue
         if filters.get('status') and filters['status'] != state:
@@ -119,9 +144,10 @@ def rows(db, scope=None, **filters):
             continue
         block = reverse_block(db, jobs)
         versions = []
+        automatic_anchor = next((job for job in jobs if job.actual_output > 0 and json.loads(job.product_snapshot).get('automatic_completion')), None)
         for job in jobs:
             _,_,source = prep.source(db, job.receipt_item_id)
-            output = db.get(InventoryLot, job.output_lot_id)
+            output = db.get(InventoryLot, automatic_anchor.output_lot_id if automatic_anchor else job.output_lot_id)
             versions.append(dict(job_id=job.id, job_version=job.version, source_version=source.version if source else 0, output_version=output.version if output else 0))
         locations = list(dict.fromkeys(d['output_location'] for d in details if d['output_location']))
         result.append(dict(id='prep:'+key, origin='stock_preparation', preparation_key=key, jobs=details,
@@ -230,20 +256,22 @@ def reverse(db, *, key, payload, actor):
     if block:
         prep.fail(block)
     pallets = {}
-    for job in jobs:
+    automatic_anchor = next((job for job in jobs if job.actual_output > 0 and json.loads(job.product_snapshot).get('automatic_completion')), None)
+    for job in (sorted(jobs,key=lambda row: row.id == automatic_anchor.id) if automatic_anchor else jobs):
         _,_,source = prep.source(db,job.receipt_item_id)
-        output = db.get(InventoryLot,job.output_lot_id)
+        output = db.get(InventoryLot,automatic_anchor.output_lot_id if automatic_anchor else job.output_lot_id)
         expected = versions[job.id]
         if (job.version,source.version,output.version) != (expected['job_version'],expected['source_version'],expected['output_version']):
             prep.fail('库存或完工版本已变化，请刷新')
         if output.pallet_item:
             pallets[output.pallet_item.pallet.id] = output.pallet_item.pallet
-        before = prep._balances(output)
-        changed = db.execute(update(InventoryLot).where(InventoryLot.id==output.id,InventoryLot.version==expected['output_version']).values(quantity_available=0,status='closed',version=InventoryLot.version+1,last_movement_at=utc_now_naive()))
-        if changed.rowcount != 1:
-            prep.fail('产出库存已变化')
-        db.refresh(output)
-        prep._movement(db,lot=output,movement_type='adjust',quantity=job.actual_output,before=before,operator_id=actor.id,reason='撤销备库完工产出',idempotency_key=f"prep-reverse-out:{payload['operation_key']}:{job.id}")
+        if not automatic_anchor or job.id == automatic_anchor.id:
+            before = prep._balances(output)
+            changed = db.execute(update(InventoryLot).where(InventoryLot.id==output.id,InventoryLot.version==expected['output_version']).values(quantity_available=0,status='closed',version=InventoryLot.version+1,last_movement_at=utc_now_naive()))
+            if changed.rowcount != 1:
+                prep.fail('产出库存已变化')
+            db.refresh(output)
+            prep._movement(db,lot=output,movement_type='adjust',quantity=job.actual_output,before=before,operator_id=actor.id,reason='撤销备库完工产出',idempotency_key=f"prep-reverse-out:{payload['operation_key']}:{job.id}")
         before = prep._balances(source)
         changed = db.execute(update(InventoryLot).where(InventoryLot.id==source.id,InventoryLot.version==expected['source_version'],InventoryLot.quantity_consumed>=job.input_quantity).values(quantity_available=InventoryLot.quantity_available+job.input_quantity,quantity_consumed=InventoryLot.quantity_consumed-job.input_quantity,version=InventoryLot.version+1,last_movement_at=utc_now_naive()))
         if changed.rowcount != 1:

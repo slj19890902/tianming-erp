@@ -105,6 +105,48 @@ def test_auto_receipt_uses_cumulative_rounding_across_split_lots(stock_replenish
         assert sum(row.quantity_consumed for row in sources)==3
 
 
+def test_split_auto_completion_reverses_all_sources_before_receipt_reversal(stock_replenishment_app):
+    from app.services.stock_preparation_history import rows
+    app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
+    configure_finished_location(factory)
+    payload=_customer_replenishment_payload(3)
+    payload['items'][0]['stock_yield_per_sheet']=1
+    payload['items'][0]['pieces_per_box']=3
+    with TestClient(app) as client:
+        item,_=receive(client,payload=payload,quantity=2)
+        second=client.put(f"/api/incoming/receive/sr{item['id']}",json={
+            'received_quantity':1,'idempotency_key':'processing-receive-second'})
+        assert second.status_code==200,second.text
+        with factory() as db:
+            history=next(r for r in rows(db) if r['origin']=='stock_preparation')
+            assert len(history['jobs'])==2 and history['can_revert']
+            assert history['actual_output_quantity']==1
+            assert {v['job_id'] for v in history['reverse_versions']}=={
+                job['id'] for job in history['jobs']}
+            assert all(v['output_version']>0 for v in history['reverse_versions'])
+            key=history['preparation_key']
+            versions=history['reverse_versions']
+        reversed_=client.post(f'/api/production/stock-preparation/completions/{key}/revert',json={
+            'operation_key':'reverse-split-auto-complete','confirm_unused':True,'jobs':versions})
+        assert reversed_.status_code==200,reversed_.text
+        with factory() as db:
+            jobs=list(db.scalars(select(Job).order_by(Job.id)))
+            assert len(jobs)==2 and all(job.status=='cancelled' for job in jobs)
+            output=db.get(InventoryLot,next(job.output_lot_id for job in jobs if job.output_lot_id))
+            assert output.status=='closed' and output.quantity_available==0
+            sources=[db.get(InventoryLot,db.get(IncomingReceiptItem,job.receipt_item_id).received_inventory_lot_id)
+                     for job in jobs]
+            assert sorted(source.quantity_available for source in sources)==[1,2]
+            assert all(source.quantity_consumed==0 for source in sources)
+            assert all(db.get(InventoryReservation,job.reservation_id).status=='released' for job in jobs)
+            receipt_ids=[job.receipt_item_id for job in jobs]
+        for receipt_id in reversed(receipt_ids):
+            reverted=client.put(f'/api/incoming/receipt-items/{receipt_id}/revert',json={})
+            assert reverted.status_code==200,reverted.text
+        with factory() as db:
+            assert all(db.get(IncomingReceiptItem,receipt_id).status=='reversed' for receipt_id in receipt_ids)
+
+
 def test_explicit_product_without_saved_destination_rolls_back_receipt(stock_replenishment_app):
     app,factory=stock_replenishment_app
     from app.models.receipt_putaway import ProductStoragePreference

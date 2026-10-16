@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.650"
-APP_VERSION_NAME = "收料自动成品与默认入位修复"
+APP_VERSION = "v0.22.651"
+APP_VERSION_NAME = "补库跨批次自动完工撤销修复"
 APP_BUILD_DATE = "2026-10-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6364,3 +6364,17 @@ APP_VERIFICATION_STEPS = [
     "未设产品或客户成品区域的产品试算应提示先设置位置，不应自动放到原纸暂存区；正式版本v0.22.650、数据库eq1015sa。",
 ]
 APP_CHANGELOG = [*(f"v0.22.650：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.651：跨批次自动完工按全部原料来源成组撤销，无结构迁移。
+APP_CHANGES = [
+    "同一自动完工跨多个原料实收批次时，完工历史显示全部投入来源及正确产出数量。",
+    "撤销前逐批核对库存与版本；未被使用的成品仅反冲一次，所有投入原料和预占同步恢复，然后可按先后顺序撤销收料。",
+    "保留 v650 的自动成品、冻结 BOM 齐套组装、成品默认货位优先级及历史入位修复。",
+]
+APP_VERIFICATION_STEPS = [
+    "用分批实收、跨两批次累计形成一件成品的隔离案例，确认完工历史显示两笔原料投入及一件产出。",
+    "先撤销完工，再依次撤销两笔收料；核对成品仅反冲一次、两个原料批次的投入与预占均恢复，重复请求不重复入账。",
+    "核对正式版本 v0.22.651、数据库 revision 仍为 eq1015sa；复查 80012632、80012410、80012411 及 80010631 原有结果。",
+]
+APP_CHANGELOG = [*(f"v0.22.651：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

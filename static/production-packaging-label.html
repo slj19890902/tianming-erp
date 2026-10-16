@@ -1196,7 +1196,8 @@
         const isDelivery = Number.isInteger(deliveryId) && deliveryId > 0;
         const isStock = Number.isInteger(stockReceiptId) && stockReceiptId > 0;
         const isSupplierBatch = supplierOrderIds.length > 0;
-        const items = (plannedPackage?.plans || []).map((plan) => (isDelivery || isStock) ? ({
+        const hasReplenishmentSource = (plannedPackage?.plans || []).some((plan) => String(plan.selection_key || "").startsWith("stock-item:"));
+        const items = (plannedPackage?.plans || []).map((plan) => (isDelivery || isStock || hasReplenishmentSource) ? ({
           selection_key:planSelectionKey(plan),
           print_label_count:parsePrintCount(printCounts.get(planSelectionKey(plan)), Number(plan.label_count)),
         }) : ({

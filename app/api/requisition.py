@@ -290,8 +290,19 @@ _MERGE_GROUP_WRITE_LOCK = Lock()
 
 
 class ProductionPackagingLabelJobItemRequest(BaseModel):
-    production_task_id: int = Field(gt=0)
+    production_task_id: int | None = Field(default=None, gt=0)
+    selection_key: str | None = Field(default=None, pattern=r"^(task|stock-item):[1-9][0-9]*$")
     print_label_count: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def require_one_source(self):
+        if (self.production_task_id is None) == (self.selection_key is None):
+            raise ValueError("产品标签必须提供唯一的任务或报料来源")
+        return self
+
+    @property
+    def source_identity(self) -> str:
+        return self.selection_key or f"task:{self.production_task_id}"
 
     @field_validator("production_task_id", "print_label_count", mode="before")
     @classmethod
@@ -845,7 +856,7 @@ class ProductionPackagingLabelJobRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_unique_label_tasks(self):
-        task_ids = [item.production_task_id for item in (self.items or [])]
+        task_ids = [item.source_identity for item in (self.items or [])]
         if len(task_ids) != len(set(task_ids)):
             raise ValueError("本次打印任务不能重复")
         return self
@@ -869,6 +880,12 @@ class CompositeProductionPackagingLabelJobRequest(
     ProductionPackagingLabelJobRequest
 ):
     selected_item_ids: list[int] = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def require_composite_tasks(self):
+        if any(item.selection_key is not None for item in self.items or []):
+            raise ValueError("组合报料标签请使用对应的生产任务")
+        return self
 
     @field_validator("selected_item_ids")
     @classmethod
@@ -23134,14 +23151,24 @@ def _supplier_label_batch_package(
     orders: list[SupplierRequisitionOrder],
     selected_supplier_item_ids: set[int] | None = None,
     selected_task_ids: set[int] | None = None,
+    selected_source_keys: set[str] | None = None,
 ) -> dict:
-    if selected_supplier_item_ids is not None and selected_task_ids is not None:
+    if sum(v is not None for v in (selected_supplier_item_ids, selected_task_ids, selected_source_keys)) > 1:
         raise HTTPException(status_code=422, detail="标签明细与任务不能同时筛选")
     try:
         packages: list[dict] = []
         matched_item_ids: set[int] = set()
         matched_task_ids: set[int] = set()
+        matched_source_keys: set[str] = set()
         for order in orders:
+            if selected_source_keys is not None:
+                from app.services.supplier_stock_labels import available_selection_keys
+                order_selection = selected_source_keys & available_selection_keys(db, order)
+                if order_selection:
+                    packages.append(build_supplier_requisition_packaging_label_package(
+                        db, order, selected_source_keys=order_selection))
+                    matched_source_keys.update(order_selection)
+                continue
             if selected_supplier_item_ids is not None:
                 order_item_ids = {int(item.id) for item in order.items}
                 order_selection = selected_supplier_item_ids & order_item_ids
@@ -23157,14 +23184,10 @@ def _supplier_label_batch_package(
                 matched_item_ids.update(order_selection)
                 continue
             if selected_task_ids is not None:
-                full_package = build_supplier_requisition_packaging_label_package(
-                    db, order
-                )
+                from app.services.supplier_stock_labels import available_selection_keys
                 order_task_ids = {
-                    int(row["production_task_id"])
-                    for key in ("plans", "excluded_items")
-                    for row in full_package.get(key) or []
-                    if row.get("production_task_id") is not None
+                    int(key.split(":")[1]) for key in available_selection_keys(db, order)
+                    if key.startswith("task:")
                 }
                 order_selection = selected_task_ids & order_task_ids
                 if not order_selection:
@@ -23193,6 +23216,8 @@ def _supplier_label_batch_package(
             raise ProductionPackagingLabelError(
                 "所选生产任务不属于当前报料单或已变化，请刷新后重试"
             )
+        if selected_source_keys is not None and matched_source_keys != selected_source_keys:
+            raise ProductionPackagingLabelError("所选标签来源不属于当前报料单或已变化，请刷新后重试")
         package = combine_supplier_requisition_packaging_label_packages(
             packages
         )
@@ -23563,31 +23588,35 @@ def post_supplier_order_packaging_label_batch_job(
         order_ids=payload.order_ids,
         user=user,
     )
+    typed_sources = any(item.selection_key is not None for item in payload.items or [])
     selected_task_ids = (
         {int(item.production_task_id) for item in payload.items}
-        if payload.items is not None
+        if payload.items is not None and not typed_sources
         else None
     )
     current_package = _supplier_label_batch_package(
         db,
         orders=orders,
         selected_task_ids=selected_task_ids,
+        selected_source_keys={item.source_identity for item in payload.items} if typed_sources else None,
     )
     if current_package.get("plan_fingerprint") != payload.plan_fingerprint:
         raise HTTPException(status_code=409, detail="跨报料单标签计划已变化，请刷新预览后重试")
+    if payload.items is None:
+        typed_sources = any(str(p.get("selection_key", "")).startswith("stock-item:") for p in current_package.get("plans") or [])
     requested_counts = (
         {
-            item.production_task_id: item.print_label_count
+            (item.source_identity if typed_sources else item.production_task_id): item.print_label_count
             for item in payload.items
         }
         if payload.items is not None
         else {
-            int(plan["production_task_id"]): int(plan["label_count"])
+            (plan["selection_key"] if typed_sources else int(plan["production_task_id"])): int(plan["label_count"])
             for plan in current_package.get("plans") or []
         }
     )
     expected_task_ids = {
-        int(plan["production_task_id"])
+        (plan["selection_key"] if typed_sources else int(plan["production_task_id"]))
         for plan in current_package.get("plans") or []
     }
     if set(requested_counts) != expected_task_ids:
@@ -23628,8 +23657,8 @@ def post_supplier_order_packaging_label_batch_job(
         for order in orders:
             order_plans = plans_by_order.get(int(order.id), [])
             order_counts = {
-                int(plan["production_task_id"]): requested_counts[
-                    int(plan["production_task_id"])
+                (plan["selection_key"] if typed_sources else int(plan["production_task_id"])): requested_counts[
+                    plan["selection_key"] if typed_sources else int(plan["production_task_id"])
                 ]
                 for plan in order_plans
             }
@@ -23648,7 +23677,8 @@ def post_supplier_order_packaging_label_batch_job(
                 order=order,
                 idempotency_key=child_key,
                 expected_plan_fingerprint=source_fingerprint,
-                requested_print_counts=order_counts,
+                requested_print_counts=order_counts if not typed_sources else None,
+                requested_source_counts=order_counts if typed_sources else None,
                 operator_id=user.id,
             )
             results.append(result)
@@ -23728,6 +23758,7 @@ def post_supplier_order_production_packaging_label_job(
     _require_supplier_order_customer_access(order, user, db)
     if order.status != "confirmed":
         raise HTTPException(status_code=409, detail="只有正式有效的报料单可创建标签打印作业")
+    typed_sources = any(item.selection_key is not None for item in payload.items or [])
     try:
         result = prepare_packaging_label_job(
             db,
@@ -23739,9 +23770,10 @@ def post_supplier_order_production_packaging_label_job(
                     item.production_task_id: item.print_label_count
                     for item in payload.items
                 }
-                if payload.items is not None
+                if payload.items is not None and not typed_sources
                 else None
             ),
+            requested_source_counts={item.source_identity: item.print_label_count for item in payload.items} if typed_sources else None,
             operator_id=user.id,
         )
         # Persist the job and its exact task links atomically.  A prepared job
@@ -23781,6 +23813,9 @@ def post_supplier_order_production_packaging_label_job(
             result.package,
             replayed=result.replayed,
         )
+    except ProductionPackagingLabelError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except ProductionPackagingLabelLayoutError as error:
         db.rollback()
         raise HTTPException(

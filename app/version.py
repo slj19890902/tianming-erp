@@ -12,7 +12,7 @@ from typing import Any
 
 
 APP_VERSION = "v0.22.646"
-APP_VERSION_NAME = "模具标签图号与双出纸方向"
+APP_VERSION_NAME = "模具标签排版与补库产品标签"
 APP_BUILD_DATE = "2026-10-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6298,13 +6298,15 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.645：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 
-# v0.22.646：模具标签图号与双出纸方向，无结构迁移。
+# v0.22.646：模具标签排版与补库产品标签，无结构迁移。
 APP_CHANGES = [
     "新模具标签首行显示实际存货编码及产品图号，侧面17毫米区域以虚线标出客户简称、加粗编码和15毫米二维码；片料尺寸保持原位置。",
     "同一横向阅读标签可选择40×80毫米竖向出纸或80×40毫米横向出纸；历史冻结打印任务保持原版式。",
+    "无订单补库产品可在正式报料后按冻结产品身份和数量换算打印包装标签，不再误要求销售订单生产任务；支持订单与补库混选、张数选择和历史补打。",
 ]
 APP_VERIFICATION_STEPS = [
     "打开80×40模具标签预览，核对实际编码、图号、位置、几模、客户简称、侧面虚线、二维码和片料尺寸。",
     "两种出纸方向各按100%打印一张，测量纸张及17毫米侧面区域，并实机扫码。",
+    "在已报料中选择补库明细625，核对80012500补强板总量2340只、每捆50只、默认47张；少量试打后核对订单与库存数量保持。",
 ]
 APP_CHANGELOG = [*(f"v0.22.646：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -615,12 +615,14 @@ def build_supplier_requisition_packaging_label_package(
     *,
     selected_supplier_item_ids: set[int] | None = None,
     selected_task_ids: set[int] | None = None,
+    selected_source_keys: set[str] | None = None,
 ) -> dict:
     """Project a read-only package using the current common-box label policy.
 
     A supplier order can contain cover/base rows or repeated requisition sources
-    that point to the same production task.  The task id is therefore the only
-    deduplication key; procurement sheet quantities are deliberately ignored.
+    that point to the same production task. Sales rows deduplicate by task id;
+    independent replenishment rows use their own supplier/source identity and
+    frozen sheet-to-product conversion, without inventing a sales task.
     Every selected requisition item is projected independently.  The enabled
     flag, units-per-label and template come from the current Product master, and
     the quantity comes from current outstanding demand for unfinished tasks;
@@ -629,8 +631,13 @@ def build_supplier_requisition_packaging_label_package(
     immutable.
     """
 
-    if selected_supplier_item_ids is not None and selected_task_ids is not None:
+    if sum(value is not None for value in (selected_supplier_item_ids, selected_task_ids, selected_source_keys)) > 1:
         raise ProductionPackagingLabelError("产品标签明细与任务不能同时筛选")
+    if selected_source_keys is not None:
+        from app.services.supplier_stock_labels import parse_selection_keys
+        selected_task_ids, selected_stock_item_ids = parse_selection_keys(selected_source_keys)
+    else:
+        selected_stock_item_ids = None
     normalized_item_ids = (
         {int(value) for value in selected_supplier_item_ids}
         if selected_supplier_item_ids is not None
@@ -643,7 +650,7 @@ def build_supplier_requisition_packaging_label_package(
     )
     if normalized_item_ids is not None and not normalized_item_ids:
         raise ProductionPackagingLabelError("请选择需要打印标签的报料明细")
-    if normalized_task_ids is not None and not normalized_task_ids:
+    if normalized_task_ids is not None and not normalized_task_ids and selected_source_keys is None:
         raise ProductionPackagingLabelError("请选择需要打印标签的生产任务")
 
     production_package = build_supplier_requisition_production_package(db, order)
@@ -668,6 +675,7 @@ def build_supplier_requisition_packaging_label_package(
     item_filtered_task_sources: dict[int, tuple[dict, dict]] = {}
     available_item_ids: set[int] = set()
     item_ids_with_tasks: set[int] = set()
+    stock_cards: dict[int, dict] = {}
     for card in production_package["cards"]:
         for component in card.get("components", []):
             supplier_item_id = component.get("supplier_order_item_id")
@@ -675,6 +683,8 @@ def build_supplier_requisition_packaging_label_package(
                 available_item_ids.add(int(supplier_item_id))
             task_id = component.get("production_task_id")
             if task_id is None:
+                if card.get("stock_replenishment_item_id") and supplier_item_id is not None:
+                    stock_cards[int(supplier_item_id)] = card
                 continue
             if supplier_item_id is not None:
                 item_ids_with_tasks.add(int(supplier_item_id))
@@ -693,8 +703,10 @@ def build_supplier_requisition_packaging_label_package(
             raise ProductionPackagingLabelError(
                 "所选报料明细不存在、已作废或已变化，请刷新后重试"
             )
-        missing_task_item_ids = sorted(normalized_item_ids - item_ids_with_tasks)
+        missing_task_item_ids = sorted(normalized_item_ids - item_ids_with_tasks - set(stock_cards))
         if missing_task_item_ids:
+            if any(row.id in missing_task_item_ids and str(row.source_key or "").startswith("stock_replenishment:") for row in order.items):
+                raise ProductionPackagingLabelError("所选补库报料缺少有效补库来源，请核对原补库单后刷新")
             raise ProductionPackagingLabelError(
                 "所选报料明细缺少有效生产任务，整批已停止；"
                 f"请核对生产任务链后刷新重试：{missing_task_item_ids}"
@@ -705,6 +717,14 @@ def build_supplier_requisition_packaging_label_package(
             raise ProductionPackagingLabelError(
                 "所选生产任务不属于当前报料单或已变化，请刷新后重试"
             )
+    if selected_stock_item_ids is not None and not selected_stock_item_ids.issubset(stock_cards):
+        raise ProductionPackagingLabelError("所选补库明细不属于当前报料单或已变化，请刷新后重试")
+    stock_cards = {
+        item_id: card for item_id, card in stock_cards.items()
+        if (normalized_item_ids is None or item_id in normalized_item_ids)
+        and (selected_task_ids is None or selected_source_keys is not None)
+        and (selected_stock_item_ids is None or item_id in selected_stock_item_ids)
+    }
 
     task_sources = {
         task_id: source
@@ -871,6 +891,7 @@ def build_supplier_requisition_packaging_label_package(
             continue
         plans.append(
             {
+                "selection_key": f"task:{task_id}",
                 "production_task_id": task_id,
                 "production_task_version": int(task.version or 1),
                 "product_id": product_id,
@@ -898,6 +919,15 @@ def build_supplier_requisition_packaging_label_package(
             }
         )
 
+    if stock_cards:
+        from app.services.supplier_stock_labels import build_stock_plan
+        for card in stock_cards.values():
+            plan = build_stock_plan(db, order, card)
+            plans.append(plan)
+            template_versions.add(plan["template_version"])
+        # A mixed selection must not silently omit a disabled order product.
+        package_review_messages.extend(row["reason"] for row in excluded_items)
+
     if len(template_versions) > 1:
         package_review_messages.append(
             "同一报料单包含不同尺寸的包装标签模板，请分别创建打印作业"
@@ -910,6 +940,7 @@ def build_supplier_requisition_packaging_label_package(
     for plan in plans:
         for index, quantity in enumerate(plan["label_quantities"], start=1):
             label = {
+                "selection_key": plan["selection_key"],
                 "production_task_id": plan["production_task_id"],
                 "production_task_version": plan["production_task_version"],
                 "template_version": plan["template_version"],
@@ -976,6 +1007,10 @@ def build_supplier_requisition_packaging_label_package(
     }
     if label_layout is not None:
         result["label_layout"] = label_layout
+    if stock_cards:
+        result["source_type"] = "supplier_sources"
+        result["source_selection_keys"] = [plan["selection_key"] for plan in plans]
+        result["quantity_basis"] = "reported_product_plan"
     return result
 
 

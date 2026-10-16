@@ -604,6 +604,10 @@ def _validate_job_task_links(
         from app.services.stock_receipt_labels import validate_frozen_source
         validate_frozen_source(job, package, links)
         return []
+    if package.get("source_type") == "supplier_sources":
+        from app.services.supplier_stock_labels import validate_frozen_source
+        validate_frozen_source(job, package, links)
+        return links
     if job.delivery_id is not None:
         plans = package.get("plans") or []
         keys = [
@@ -734,6 +738,10 @@ def _assert_prepared_job_is_current(
         from app.services.stock_receipt_labels import assert_current
         assert_current(db, job, package)
         return
+    if package.get("source_type") == "supplier_sources":
+        from app.services.supplier_stock_labels import assert_current
+        assert_current(db, job, package)
+        return
     if job.delivery_id is not None:
         delivery = db.get(Delivery, job.delivery_id)
         if delivery is None:
@@ -821,8 +829,18 @@ def prepare_packaging_label_job(
     idempotency_key: str,
     expected_plan_fingerprint: str,
     requested_print_counts: dict[int, int] | None = None,
+    requested_source_counts: dict[str, int] | None = None,
     operator_id: int,
 ) -> PackagingLabelJobResult:
+    if requested_source_counts is not None:
+        if requested_print_counts is not None:
+            raise ProductionLabelOperationError("标签来源与任务选择不能同时提交")
+        from app.services.supplier_stock_labels import parse_selection_keys, prepare_job
+        task_ids, stock_ids = parse_selection_keys(set(requested_source_counts))
+        if stock_ids:
+            return prepare_job(db, order=order, key=idempotency_key.strip(),
+                fingerprint=expected_plan_fingerprint, counts=requested_source_counts, operator_id=operator_id)
+        requested_print_counts = {task_id: requested_source_counts[f"task:{task_id}"] for task_id in task_ids}
     key = idempotency_key.strip()
     request_hash = _canonical_hash(
         {
@@ -861,6 +879,8 @@ def prepare_packaging_label_job(
         order,
         selected_task_ids=selected_task_ids,
     )
+    if package.get("source_type") == "supplier_sources":
+        raise ProductionLabelOperationError("补库标签请刷新标签页，按真实报料来源提交本次打印张数")
     if package.get("review_required"):
         raise ProductionLabelOperationError("标签计划需要人工核对，不能创建打印作业")
     if not package.get("label_count"):
@@ -1240,6 +1260,9 @@ def confirm_packaging_label_job_printed(
     links = _validate_job_task_links(db, job, package)
     if package.get("source_type") == "stock_receipt":
         from app.services.stock_receipt_labels import assert_current
+        assert_current(db, job, package, claim=True)
+    elif package.get("source_type") == "supplier_sources":
+        from app.services.supplier_stock_labels import assert_current
         assert_current(db, job, package, claim=True)
     elif job.delivery_id is not None:
         delivery = _claim_delivery_label_source(

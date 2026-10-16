@@ -132,6 +132,27 @@ def freeze_order_document(_mapper, connection, target):
         target.customer_document_snapshot_json = encode_snapshot(document_snapshot(dict(row)))
 
 
+def supplement_delivery_category(snapshot: dict, product) -> dict:
+    """Resolve an unknown category for a NEW document from maintained master data.
+
+    Existing values (including deliberately blank strings) remain frozen. Legacy
+    source candidates are not enough to resolve a previously ambiguous category.
+    """
+    category = _get(product, 'customer_category')
+    if (snapshot.get('customer_category') is not None
+            or snapshot.get('product_id') != _get(product, 'id')
+            or not isinstance(category, str) or not category.strip()):
+        return snapshot
+    return {
+        **snapshot, 'customer_category': category,
+        'conflicts': [key for key in snapshot.get('conflicts', []) if key != 'customer_category'],
+        'missing_labels': [label for label in snapshot.get('missing_labels', []) if label != '客户类别'],
+        'category_source': {'basis': 'maintained_product_at_delivery_creation',
+                            'product_id': _get(product, 'id'),
+                            'product_version': _get(product, 'version')},
+    }
+
+
 def freeze_delivery_document(_mapper, connection, target):
     from app.models.order import OrderItem
     from app.models.product import Product
@@ -154,8 +175,13 @@ def freeze_delivery_document(_mapper, connection, target):
         order_row = connection.execute(OrderItem.__table__.select().where(
             OrderItem.id == target.order_item_id)).mappings().first()
     if order_row and order_row['customer_document_snapshot_json'] is not None:
-        decode_snapshot(order_row['customer_document_snapshot_json'])
-        target.customer_document_snapshot_json = order_row['customer_document_snapshot_json']
+        value = decode_snapshot(order_row['customer_document_snapshot_json'])
+        row = connection.execute(Product.__table__.select().where(
+            Product.id == order_row['product_id'])).mappings().first()
+        supplemented = supplement_delivery_category(value, dict(row)) if row is not None else value
+        target.customer_document_snapshot_json = (
+            encode_snapshot(supplemented) if supplemented is not value
+            else order_row['customer_document_snapshot_json'])
         return
     product_id = target.product_id or (order_row['product_id'] if order_row else None)
     if product_id:

@@ -617,6 +617,8 @@ interface MoldAreaResponse {
 }
 
 interface ProductCandidate {
+  entry_hint?: string;
+  entry_block_reason?: string;
   customer_short_name?: string | null;
   match_score?: number | null;
   product_id: number;
@@ -1521,7 +1523,7 @@ function StocktakeProductChoices({ items, selectedId, onSelect }: { items: Produ
   const [page, setPage] = useState(0);
   const activePage = Math.min(page, Math.max(0, Math.ceil(items.length / 3) - 1));
   return <div className="twin-stocktake-product-choices">
-    {items.slice(activePage * 3, activePage * 3 + 3).map((item) => <button type="button" key={item.product_id} aria-pressed={selectedId === String(item.product_id)} onClick={() => onSelect(String(item.product_id))}><b>{item.product_code || item.customer_material_code} · {item.product_name}</b><small>{item.customer_short_name || item.customer_name} · {item.specification || "规格未填写"}{item.match_score != null ? ` · 接近度 ${item.match_score}%` : ""}</small></button>)}
+    {items.slice(activePage * 3, activePage * 3 + 3).map((item) => <button type="button" key={item.product_id} disabled={Boolean(item.entry_block_reason)} aria-pressed={selectedId === String(item.product_id)} onClick={() => onSelect(String(item.product_id))}><b>{item.product_code || item.customer_material_code} · {item.product_name}</b><small>{item.customer_short_name || item.customer_name} · {item.entry_block_reason || item.entry_hint || item.specification || "规格未填写"}{item.match_score != null ? ` · 接近度 ${item.match_score}%` : ""}</small></button>)}
     {items.length > 3 && <div className="twin-stocktake-pages"><button type="button" disabled={activePage === 0} onClick={() => setPage(activePage - 1)}>上一页</button><span>{activePage + 1}/{Math.ceil(items.length / 3)}</span><button type="button" disabled={(activePage + 1) * 3 >= items.length} onClick={() => setPage(activePage + 1)}>下一页</button></div>}
   </div>;
 }
@@ -3499,7 +3501,7 @@ export function WarehouseTwinApp() {
     }
     let active = true;
     const timer = window.setTimeout(() => {
-      const params = new URLSearchParams({ q: keyword, limit: "50" });
+      const params = new URLSearchParams({ q: keyword, limit: "50", stocktake: "true" });
       if (stocktakeCustomerId !== "all") params.set("customer_id", stocktakeCustomerId);
       requestJson<ProductCandidatesResponse>(`/api/warehouse/floor3/product-candidates?${params.toString()}`)
         .then((value) => {

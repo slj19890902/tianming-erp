@@ -108,12 +108,12 @@ async function findErpProducts() {
   if (!customer) { showMessage("请先选择客户"); return; }
   const generation = inbound.generation;
   try {
-    const params = new URLSearchParams({q: $("inboundProductQuery").value.trim(), limit: "10"});
+    const params = new URLSearchParams({q: $("inboundProductQuery").value.trim(), limit: "10", stocktake: "true"});
     if (customer !== "all") params.set("customer_id", customer);
     else if (!params.get("q")) { showMessage("全部客户请输入规格、编码或名称"); return; }
     const data = await api(`/api/warehouse/floor3/product-candidates?${params}`);
     if (generation !== inbound.generation || customer !== $("inboundCustomer").value) return;
-    $("inboundProduct").innerHTML += (data.items || []).map(row => `<option data-customer-id="${Number(row.customer_id)}" data-customer-name="${h(row.customer_short_name || row.customer_name)}" value="${Number(row.product_id)}">${h(row.customer_short_name || row.customer_name)} · ${row.match_score != null ? `接近度${row.match_score}% · ` : ""}${h(row.product_code || row.customer_material_code)} · ${h(row.product_name)} · ${h(row.specification||"")}</option>`).join("");
+    $("inboundProduct").innerHTML += (data.items || []).map(row => `<option ${row.entry_block_reason ? 'disabled' : ''} data-customer-id="${Number(row.customer_id)}" data-customer-name="${h(row.customer_short_name || row.customer_name)}" value="${Number(row.product_id)}">${h(row.customer_short_name || row.customer_name)} · ${row.match_score != null ? `接近度${row.match_score}% · ` : ""}${h(row.product_code || row.customer_material_code)} · ${h(row.product_name)} · ${h(row.entry_block_reason || row.entry_hint || row.specification||"")}</option>`).join("");
     $("inboundCandidates").replaceChildren();
     $("inboundContext").textContent = data.items?.length ? "请选择ERP产品（前10条）" : "未找到匹配的ERP产品，请调整关键词";
   } catch (error) { if (generation === inbound.generation) showMessage(error.message); }

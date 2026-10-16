@@ -16,7 +16,7 @@ const state = {user:{id:1,role:'admin'}, selectedLocation:{id:2,layout_version:1
 let mode='race', calls=[], deferred=[];
 const context = {console, URLSearchParams, Intl, Date, JSON, Number, $, state, h: x => String(x),
   document: {querySelectorAll(){return []}},
-  window: {location: {search: ''}},
+  window: {location: {search: ''},addEventListener(){}},
   pick:(row,keys)=>keys.map(k=>row?.[k]).find(x=>x!==undefined),
   idempotencyKey:()=> 'stable-key', updateSubmitState(){}, showMessage(){},
   sessionStorage:{getItem(){return null},setItem(){},removeItem(){}},

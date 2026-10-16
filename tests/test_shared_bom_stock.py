@@ -201,14 +201,16 @@ def test_additive_migration_and_immutable_proof(composite_requisition_app,_p181_
 from stock_preparation_legacy_fixture import stock_replenishment_app,base_stock_replenishment_app
 
 
-def test_real_preparation_auto_enrollment_cross_customer_stock(stock_replenishment_app):
+def test_real_preparation_auto_enrollment_cross_customer_stock(base_stock_replenishment_app):
     from tests.test_stock_preparation_groups import prepare
     from app.api.stock_preparation import router
     from app.models.product_bom import ProductBomComponent
     from app.models.stock_preparation import StockPreparationJob as Job
     from app.models.shared_finished_stock import SharedFinishedPolicy,SharedFinishedLot
     from app.services.composite_bom import replace_product_bom
-    app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
+    # This is the current automatic receipt path, not the legacy fixture which
+    # deliberately disables both automatic planning and completion.
+    app,factory=base_stock_replenishment_app;app.include_router(router,prefix='/api/production')
     setup={}
     def configure_before_receipts(parent, _second):
         with factory() as db:

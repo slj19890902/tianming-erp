@@ -20,6 +20,7 @@ def startup(monkeypatch, tmp_path, *, ready_after=None, exit_after=None):
     monkeypatch.setattr(manager, '_dispatch_reader', lambda _: False)
     monkeypatch.setattr(manager, '_check_dispatch_reader', lambda *a, **k: None)
     monkeypatch.setattr(manager, '_check_provenance_reader', lambda _: None)
+    monkeypatch.setattr(manager, '_check_physical_kit_reader', lambda _: None)
     monkeypatch.setattr(manager, '_process', lambda: None)
     monkeypatch.setattr(manager, '_execution_release', lambda _: release)
     monkeypatch.setattr(manager, '_link_data', lambda _: None)
@@ -73,3 +74,41 @@ def test_early_exit_reports_failure_without_waiting_for_deadline(monkeypatch, tm
         manager.start()
     assert clock['seconds'] == 2
     stop.assert_not_called()
+
+
+def system_startup(monkeypatch, tmp_path):
+    manager, clock, stop = startup(monkeypatch, tmp_path, ready_after=.5)
+    from desktop_assistant import mac_published_runtime, mac_system_service, mac_factory_runtime
+    monkeypatch.setattr(mac_published_runtime, 'selected', lambda: True)
+    gate = Mock()
+    monkeypatch.setattr(mac_system_service, 'check_start', gate)
+    monkeypatch.setattr(mac_factory_runtime, 'configuration', lambda *args: False)
+    tree = tmp_path / 'release'; manifest = {'synthetic': 'already-authenticated-by-resolver'}
+    resolver = Mock(return_value=(tree, manifest))
+    monkeypatch.setattr(manager, '_published_release', resolver)
+    runtime = Mock(return_value=tree / 'python')
+    monkeypatch.setattr(module, 'runtime_python', runtime)
+    redundant = Mock(side_effect=AssertionError('cold start must not verify the same tree twice'))
+    monkeypatch.setattr(manager, '_runtime_python', redundant)
+    return manager, resolver, runtime, redundant, gate
+
+
+def test_system_cold_start_authenticates_complete_tree_once_at_execution_boundary(monkeypatch, tmp_path):
+    manager, resolver, runtime, redundant, gate = system_startup(monkeypatch, tmp_path)
+    manager.start()
+    gate.assert_called_once()
+    redundant.assert_not_called()
+    resolver.assert_called_once_with('synthetic-current')
+    runtime.assert_called_once_with(tmp_path / 'release', resolver.return_value[1], runnable=True)
+
+
+@pytest.mark.parametrize('failure', ['system_gate', 'signed_tree', 'migration'])
+def test_system_dedup_preserves_startup_rejections(monkeypatch, tmp_path, failure):
+    manager, resolver, _, redundant, gate = system_startup(monkeypatch, tmp_path)
+    launch = Mock(side_effect=AssertionError('rejected startup must not spawn'))
+    monkeypatch.setattr(module.subprocess, 'Popen', launch)
+    if failure == 'system_gate': gate.side_effect = ValueError('gate refused')
+    elif failure == 'signed_tree': resolver.side_effect = ValueError('tree refused')
+    else: write_json(manager.root / 'state.json', {'current': 'synthetic-current', 'operation': 'migration_failed'})
+    with pytest.raises(ValueError): manager.start()
+    launch.assert_not_called(); redundant.assert_not_called()

@@ -193,6 +193,6 @@
     $('stocktakeResolve').onclick=()=>runStocktakeRecovery('resolve');$('stocktakeRetry').onclick=()=>runStocktakeRecovery('retry');$('stocktakeReloadCache').onclick=()=>{if(stocktakeRecovery)stocktakeRecovery.reload();else if(state.user)mountStocktakeRecovery()};$('stocktakeChangeLocation').onclick=()=>{if(stocktakeRecoveryState.busy||stocktakeRecoveryState.accountChanged||stocktakeRecoveryState.issue)return;state.selectedLocation=null;state.skipRequestedLocation=true;renderedStocktakeRequest=stocktakeRecoveryState.pending?.body.idempotency_key||null;stocktakeRecoveryState.blocked=false;resetToLocations('原盘点请求已保留，可选择其他货位。');loadLocations()};$('stocktakeRefreshReceipt').onclick=refreshConfirmedStocktake;
     $('loginForm').onsubmit=login;$('floorFilter').onchange=()=>{renderAreas();renderLocations()};$('areaFilter').onchange=renderLocations;$('locationSearch').oninput=renderLocations;$('retryLocations').onclick=loadLocations;$('openCurrentMap').onclick=()=>openWarehouseMap();$('backToLocations').onclick=()=>resetToLocations('');$('fillAllButton').onclick=fillAll;$('submitButton').onclick=submitStocktake;init();
   </script>
-  <script src="/mobile/initial-stocktake.js"></script>
+  <script src="/mobile/initial-stocktake.js?ui=6"></script>
 </body>
 </html>

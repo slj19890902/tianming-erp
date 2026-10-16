@@ -34,6 +34,16 @@ def main():
     # The web app reads the assistant's non-secret backup status from this root.
     # Keep the path available while consuming the process-control nonce here.
     control = Path(os.environ['TM_ERP_CONTROL'])
+    from desktop_assistant.mac_published_runtime import selected
+    if selected():
+        from desktop_assistant.runtime_log import capture_console
+        with capture_console(control):
+            serve(control, rehearsal)
+    else:
+        serve(control, rehearsal)
+
+
+def serve(control, rehearsal):
     configure_managed_drawing_storage(control)
     from desktop_assistant.delivery_dispatch_contract import require_managed_dispatch_activation
     require_managed_dispatch_activation(os.environ.get('ERP_DATABASE_PATH'), control)

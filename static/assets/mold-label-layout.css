@@ -358,3 +358,35 @@
 
 /* Stable mold cell aliases retain the existing print layout and QR path. */
 .mold-layout-text[data-mold-cell-label="true"]{gap:1mm;line-height:1;white-space:nowrap}.mold-layout-text[data-mold-cell-label="true"]::before{content:"模具位";font-size:1.6mm;font-weight:500;flex:none}
+
+.mold-label-page[data-layout-catalog="mold-drawing-orientation-v1"] .mold-layout-text {
+  box-sizing: border-box;
+  padding: 0 .1mm;
+  line-height: 1;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+}
+.mold-label-page[data-layout-catalog="mold-drawing-orientation-v1"] [data-layout-id="report_specification"] {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.mold-drawing-key { flex: none; font-size: 55%; margin-right: .5mm; }
+.mold-drawing-value { min-width: 0; font-size: 100%; }
+.mold-label-page[data-layout-catalog="mold-drawing-orientation-v1"] .mold-layout-rule {
+  background: none !important;
+  border-top: .2mm dashed #111;
+}
+
+@media print {
+  body.paper-landscape { width:80mm !important; }
+  body.paper-landscape #previewContent,
+  body.paper-landscape #labels { width:80mm !important; }
+  body.paper-landscape .mold-label-page { width:80mm !important; height:40mm !important; }
+  body.paper-landscape .label.template-80x40.layout-driven {
+    left:0 !important;
+    top:0 !important;
+    transform:none !important;
+  }
+}

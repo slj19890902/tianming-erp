@@ -1716,7 +1716,7 @@ class MoldLabelLayoutElementPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1, max_length=50)
-    kind: Literal["text", "qr"]
+    kind: Literal["text", "qr", "rule"]
     x_mm: float
     y_mm: float
     width_mm: float
@@ -1724,6 +1724,8 @@ class MoldLabelLayoutElementPayload(BaseModel):
     font_size_mm: float | None = None
     font_weight: int | None = None
     text_align: Literal["left", "center", "right"] | None = None
+    line_width_mm: float | None = None
+    color: str | None = None
     visible: bool
 
 
@@ -21978,6 +21980,7 @@ def _mold_label_dict(
             {
                 "product_code": str(product.product_code or "").strip(),
                 "product_name": str(product.product_name or "").strip(),
+                "drawing_number": str(product.customer_drawing_number or "").strip(),
             }
             for product in products
         ]
@@ -21993,6 +21996,9 @@ def _mold_label_dict(
                 "label_product_specifications": product_specifications,
                 "label_inventory_codes": [
                     product["product_code"] for product in label_products
+                ],
+                "label_drawing_numbers": [
+                    product["drawing_number"] for product in label_products
                 ],
                 "label_report_specifications": report_specifications,
                 "label_flute_types": flute_types,

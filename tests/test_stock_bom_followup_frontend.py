@@ -91,14 +91,14 @@ def test_mold_layout_freezes_old_catalog_and_new_uses_count():
     old=layout._default_layout_v9()
     before=json.dumps(old)
     assert layout._normalize_snapshot_layout(old)["catalog_version"] == "mold-edge-v1"
-    assert layout._upgrade_to_current_catalog(old)["catalog_version"] == "mold-count-v1"
+    assert layout._upgrade_to_current_catalog(old)["catalog_version"] == "mold-drawing-orientation-v1"
     assert json.dumps(old)==before
     node(r'''const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const source=fs.readFileSync('static/assets/mold-label-layout.js','utf8');
 const start=source.indexOf('  function valueForElement(');
 assert(start>=0);
 const end=source.indexOf('\n  function ',start+5);
-const f=vm.runInNewContext('(()=>{'+source.slice(start,end)+';return valueForElement})()',{isEdgeCatalog:v=>['mold-edge-v1','mold-count-v1'].includes(v),V10_CATALOG_VERSION:'mold-count-v1',V9_CATALOG_VERSION:'mold-edge-v1'});
+const f=vm.runInNewContext('(()=>{'+source.slice(start,end)+';return valueForElement})()',{isEdgeCatalog:v=>['mold-edge-v1','mold-count-v1','mold-drawing-orientation-v1'].includes(v),V11_CATALOG_VERSION:'mold-drawing-orientation-v1',V10_CATALOG_VERSION:'mold-count-v1',V9_CATALOG_VERSION:'mold-edge-v1'});
 const row={label_mold_count:'4模',label_display_cutting_mode:'一开二',label_inventory_codes:['P1'],label_customer_name:'联测'};
 assert.equal(f(row,'cutting_mode','mold-count-v1'),'4模');
 assert.equal(f(row,'cutting_mode','mold-edge-v1'),'一开二');
@@ -127,7 +127,7 @@ def test_new_label_projection_ignores_old_manual_cutting_override(mold_app):
         row=response.json()
         assert row["label_mold_count"]=="4模"
         assert row["label_overrides"]["cutting_mode"]=="一开二"
-        assert row["label_layout"]["layout"]["catalog_version"]=="mold-count-v1"
+        assert row["label_layout"]["layout"]["catalog_version"]=="mold-drawing-orientation-v1"
 
 
 from tests.test_mold_tool_workflow import mold_app

@@ -6,7 +6,7 @@ from app.services import mold_label_layout as layouts
 def test_edge_second_row_and_qr_are_readable_without_overlap():
     layout = layouts.normalize_layout(layouts.default_layout())
     elements = {e['id']: e for e in layout['elements']}
-    assert layout['catalog_version'] == 'mold-edge-v1'
+    assert layout['catalog_version'] == 'mold-drawing-orientation-v1'
     location, cutting = elements['rack_location'], elements['cutting_mode']
     assert location['y_mm'] == cutting['y_mm']
     assert location['x_mm'] + location['width_mm'] < cutting['x_mm']

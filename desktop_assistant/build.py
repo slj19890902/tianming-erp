@@ -18,41 +18,63 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from desktop_assistant.storage import archive_path, pack_tree, sha, write_json
 from desktop_assistant.schema_contract import schema_contract_from_sources
 
+PUBLISHED_ROOT = Path('/Library/TianmingERP/published')
 
-def remove_identical_signing_duplicates(output: Path) -> dict:
-    """Keep final packages; remove only byte-identical, idle signing copies."""
+
+def remove_identical_signing_duplicates(
+        output: Path, *, completion_receipt: Path | None = None,
+        published_package: Path | None = None) -> dict:
+    """Retire one closed build's identical signing scratch copy."""
     from desktop_assistant.cleanup import assert_idle, local_path
 
+    if Path(output).is_symlink():
+        return {'removed': [], 'retained': [{'path': str(output), 'reason': '构建目录不得为链接'}]}
     output = archive_path(output)
     report = {'removed': [], 'retained': []}
-    # Only a direct build directory is inspected. Never recurse into tasks,
-    # formal programs, backups, or another checkout. A subsequent build can
-    # collect a signing copy created after the preceding build finished.
-    folders = [output]
-    if output.parent.name == 'builds':
-        folders += sorted(p for p in output.parent.glob('mac-arm64-*') if p != output)
-    for folder in folders:
-        pending = folder / 'release.signed.zip.pending'
-        final = folder / 'release.signed.zip'
-        if not pending.exists() and not pending.is_symlink():
-            continue
-        try:
-            if local_path(folder) != folder or not folder.is_dir():
-                raise ValueError('签名副本目录身份不符')
-            before, kept = pending.lstat(), final.lstat()
-            owner = os.getuid() if hasattr(os, 'getuid') else before.st_uid
-            if any(not stat.S_ISREG(s.st_mode) or s.st_nlink != 1 or s.st_uid != owner
-                   for s in (before, kept)):
-                raise ValueError('签名副本不是当前用户的独立普通文件')
-            if before.st_size != kept.st_size or sha(pending) != sha(final):
-                raise ValueError('签名副本与最终包不一致')
-            assert_idle(pending, allow_unrelated_inaccessible_file=True)
-            if pending.lstat() != before or final.lstat() != kept:
-                raise ValueError('签名副本在核验期间变化')
-            pending.unlink()
-            report['removed'].append({'path': str(pending), 'bytes': before.st_size})
-        except (OSError, ValueError) as error:
-            report['retained'].append({'path': str(pending), 'reason': str(error)})
+    pending = output / 'release.signed.zip.pending'
+    final = output / 'release.signed.zip'
+    if not pending.exists() and not pending.is_symlink():
+        return report
+    try:
+        if output.parent.name != 'builds' or local_path(output) != output or not output.is_dir():
+            raise ValueError('仅允许直接构建目录')
+        if completion_receipt is None or published_package is None:
+            raise ValueError('缺少已交付且依赖检查完成的凭据')
+        receipt_path = Path(completion_receipt)
+        receipt_stat = receipt_path.lstat()
+        if not stat.S_ISREG(receipt_stat.st_mode) or receipt_stat.st_uid != os.getuid():
+            raise ValueError('交付凭据身份不符')
+        receipt = json.loads(receipt_path.read_bytes())
+        if (receipt.get('type') != 'tianming.build-completion.v1'
+                or receipt.get('status') != 'accepted'
+                or receipt.get('output') != str(output)
+                or receipt.get('dependencies_checked') is not True):
+            raise ValueError('交付或依赖检查未完成')
+        formal = Path(published_package)
+        if (formal.name != 'package.zip' or formal.parent.parent != PUBLISHED_ROOT
+                or formal.parent.is_symlink()
+                or formal.parent.name != receipt.get('package_sha256')):
+            raise ValueError('正式原包路径与交付凭据不符')
+        formal_stat = formal.lstat()
+        if not stat.S_ISREG(formal_stat.st_mode):
+            raise ValueError('正式原包不是普通文件')
+        before, kept = pending.lstat(), final.lstat()
+        owner = os.getuid() if hasattr(os, 'getuid') else before.st_uid
+        if any(not stat.S_ISREG(s.st_mode) or s.st_nlink != 1 or s.st_uid != owner
+               for s in (before, kept)):
+            raise ValueError('签名副本不是当前用户的独立普通文件')
+        if before.st_size != kept.st_size or sha(pending) != sha(final):
+            raise ValueError('签名副本与最终包不一致')
+        if sha(formal) != receipt['package_sha256'] or sha(final) != receipt['package_sha256']:
+            raise ValueError('最终包与正式原包不一致')
+        assert_idle(pending, allow_unrelated_inaccessible_file=True)
+        if (pending.lstat() != before or final.lstat() != kept
+                or formal.lstat() != formal_stat or receipt_path.lstat() != receipt_stat):
+            raise ValueError('核验期间文件变化')
+        pending.unlink()
+        report['removed'].append({'path': str(pending), 'bytes': before.st_size})
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+        report['retained'].append({'path': str(pending), 'reason': str(error)})
     return report
 
 
@@ -65,12 +87,11 @@ def remove_transient_build_trees(output: Path) -> None:
             raise ValueError(f"构建临时目录不得为链接: {path}")
         if path.exists():
             shutil.rmtree(path)
-    try:
-        duplicates = remove_identical_signing_duplicates(output)
-    except (OSError, ValueError, ImportError) as error:
-        duplicates = {'removed': [], 'retained': [{'reason': str(error)}]}
-    # Final signed/unsigned candidates and verification records remain. Only
-    # exact duplicate signing scratch files can be collected without closure.
+    # Signing happens after packaging. A build finishing cannot prove that an
+    # older task has been accepted, so this entry never scans sibling builds.
+    duplicates = {'removed': [], 'retained': [{'reason': '待交付验收及依赖核查后显式收尾'}]}
+    # Final signed/unsigned candidates and verification records remain. A
+    # separate post-delivery command checks the closure receipt before unlink.
     try:
         free = shutil.disk_usage(output).free
         write_json(output / 'build-retention.json', {

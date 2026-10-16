@@ -608,6 +608,10 @@ def _validate_job_task_links(
         from app.services.supplier_stock_labels import validate_frozen_source
         validate_frozen_source(job, package, links)
         return links
+    if package.get("source_type") == "stock_bom_parent":
+        from app.services.stock_bom_parent_labels import validate_frozen_source
+        validate_frozen_source(job, package, links)
+        return []
     if job.delivery_id is not None:
         plans = package.get("plans") or []
         keys = [
@@ -740,6 +744,10 @@ def _assert_prepared_job_is_current(
         return
     if package.get("source_type") == "supplier_sources":
         from app.services.supplier_stock_labels import assert_current
+        assert_current(db, job, package)
+        return
+    if package.get("source_type") == "stock_bom_parent":
+        from app.services.stock_bom_parent_labels import assert_current
         assert_current(db, job, package)
         return
     if job.delivery_id is not None:
@@ -1263,6 +1271,9 @@ def confirm_packaging_label_job_printed(
         assert_current(db, job, package, claim=True)
     elif package.get("source_type") == "supplier_sources":
         from app.services.supplier_stock_labels import assert_current
+        assert_current(db, job, package, claim=True)
+    elif package.get("source_type") == "stock_bom_parent":
+        from app.services.stock_bom_parent_labels import assert_current
         assert_current(db, job, package, claim=True)
     elif job.delivery_id is not None:
         delivery = _claim_delivery_label_source(

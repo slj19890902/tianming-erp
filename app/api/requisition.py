@@ -291,7 +291,7 @@ _MERGE_GROUP_WRITE_LOCK = Lock()
 
 class ProductionPackagingLabelJobItemRequest(BaseModel):
     production_task_id: int | None = Field(default=None, gt=0)
-    selection_key: str | None = Field(default=None, pattern=r"^(task|stock-item):[1-9][0-9]*$")
+    selection_key: str | None = Field(default=None, pattern=r"^(?:(?:task|stock-item):[1-9][0-9]*|bom-parent(?:-tail)?:[1-9][0-9]*:[1-9][0-9]*(?::[1-9][0-9]*)?)$")
     print_label_count: int = Field(ge=0)
 
     @model_validator(mode="after")
@@ -23382,6 +23382,75 @@ def get_supplier_order_production_packaging_label_package(
         )
     package["latest_printed_job"] = latest_printed_job_metadata(db, order.id)
     return package
+
+
+@router.get("/stock-replenishment-orders/{order_id}/parent-product-label-package")
+def get_stock_bom_parent_label_package(
+    order_id: int,
+    assembly_lot_id: int | None = Query(default=None, gt=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_production_labels),
+) -> dict:
+    """Preview one parent label plan for the whole frozen replenishment demand."""
+    from app.services.stock_bom_parent_labels import build_package
+    order = db.get(StockReplenishmentOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="补库需求不存在")
+    require_customer_access(order.customer_id, user, db)
+    try:
+        return build_package(db, order_id, assembly_lot_id=assembly_lot_id)
+    except (ProductionPackagingLabelError, ProductionPackagingLabelLayoutError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/stock-replenishment-orders/{order_id}/parent-product-label-jobs")
+def post_stock_bom_parent_label_job(
+    order_id: int,
+    payload: ProductionPackagingLabelJobRequest,
+    assembly_lot_id: int | None = Query(default=None, gt=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_production_labels),
+    _write_guard: None = Depends(production_label_write_guard),
+) -> dict:
+    from app.services.stock_bom_parent_labels import prepare_job
+    order = db.get(StockReplenishmentOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="补库需求不存在")
+    require_customer_access(order.customer_id, user, db)
+    if not payload.items or len(payload.items) != 1 or payload.items[0].selection_key is None:
+        raise HTTPException(status_code=422, detail="请选择一项父件整套标签及本次打印张数")
+    expected_key = f"bom-parent{'-tail' if assembly_lot_id else ''}:{order_id}:"
+    if not payload.items[0].selection_key.startswith(expected_key):
+        raise HTTPException(status_code=422, detail="父件标签来源与补库需求不一致")
+    try:
+        result = prepare_job(db, stock_order_id=order_id, assembly_lot_id=assembly_lot_id,
+            key=payload.idempotency_key, fingerprint=payload.plan_fingerprint,
+            count=payload.items[0].print_label_count, operator_id=user.id)
+        if result.package["plans"][0]["selection_key"] != payload.items[0].selection_key:
+            raise ProductionLabelOperationError("父件标签来源已变化，请刷新")
+        if not result.replayed:
+            append_audit_event(db, event_category="business", result="success", source="web",
+                module_code="production", action_code="production.stock_bom_parent_label_job.prepared",
+                legacy_action="PREPARE_STOCK_BOM_PARENT_LABEL_JOB", resource="ProductionPackagingLabelPrintJob",
+                actor=user, entity_type="production_packaging_label_print_job", entity_id=result.job.id,
+                object_ref=f"production_packaging_label_print_job:{result.job.id}",
+                batch_id=result.job.idempotency_key, description="冻结补库 BOM 父件整套预印标签",
+                details={"stock_order_id": order_id, "plan_fingerprint": result.job.plan_fingerprint,
+                    "label_count": result.package["label_count"]})
+        db.commit()
+        return packaging_label_job_response(result.job, result.package, replayed=result.replayed)
+    except (ProductionPackagingLabelError, ProductionPackagingLabelLayoutError) as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ProductionLabelOperationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="父件标签作业已被并发创建，请刷新") from error
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _composite_label_item_ids(raw_value: str) -> set[int]:

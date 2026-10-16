@@ -153,10 +153,12 @@
     <button id="layoutButton" type="button" hidden>编辑标签布局</button>
     <button id="confirmPrintedButton" class="confirm" type="button" hidden>确认已实际打印</button>
     <a id="latestJobLink" class="button-link" href="#" hidden>补打最近已登记作业</a>
+    <a id="bomParentLink" class="button-link" href="#" hidden>打印同批 BOM 父件整套标签</a>
     <button id="closeButton" type="button">关闭</button>
     <span id="toolbarNote" class="toolbar-note">40 × 30 mm｜缩放选 100%“实际大小”｜关闭“适合页面”、自动旋转和页眉页脚</span>
   </nav>
   <div id="message" class="message">正在读取冻结的生产包装标签计划……</div>
+  <div id="bomTailLinks" class="message" hidden></div>
   <section id="printPlanPanel" class="print-plan-panel" hidden aria-label="本次打印标签张数">
     <div class="print-plan-actions">
       <button id="allPlannedButton" type="button">全部按计划</button>
@@ -279,6 +281,8 @@
       const compositeBatchId = Number(params.get("batch_id"));
       const deliveryId = Number(params.get("delivery_id"));
       const stockReceiptId = Number(params.get("stock_receipt_id"));
+      const bomStockOrderId = Number(params.get("bom_stock_order_id"));
+      const bomAssemblyLotId = Number(params.get("assembly_lot_id"));
       const compositeItemIds = [...new Set(
         String(params.get("item_ids") || "")
           .split(",")
@@ -286,6 +290,12 @@
           .filter((value) => Number.isInteger(value) && value > 0)
       )].sort((a, b) => a - b);
       const requestedJobId = Number(params.get("job_id"));
+      const bomParentLink = document.getElementById("bomParentLink");
+      const bomTailLinks = document.getElementById("bomTailLinks");
+      if (bomStockOrderId > 0) {
+        totalQuantityHeading.textContent = "冻结计划组套数";
+        unitsPerLabelHeading.textContent = "每张标签套数";
+      }
       const deliverySource = Number.isInteger(deliveryId) && deliveryId > 0;
       if (stockReceiptId > 0) totalQuantityHeading.textContent = "本次实收加工成品数";
       if (deliverySource) {
@@ -798,6 +808,8 @@
         }
         if (Number.isInteger(deliveryId) && deliveryId > 0) linkParams.set("delivery_id", String(deliveryId));
         if (Number.isInteger(stockReceiptId) && stockReceiptId > 0) linkParams.set("stock_receipt_id", String(stockReceiptId));
+        if (Number.isInteger(bomStockOrderId) && bomStockOrderId > 0) linkParams.set("bom_stock_order_id", String(bomStockOrderId));
+        if (Number.isInteger(bomAssemblyLotId) && bomAssemblyLotId > 0) linkParams.set("assembly_lot_id", String(bomAssemblyLotId));
         latestJobLink.href = `${window.location.pathname}?${linkParams.toString()}`;
         latestJobLink.textContent = latest.template_version === LEGACY_TEMPLATE_VERSION
           ? "补打最近 65 × 45 mm 历史作业"
@@ -1074,6 +1086,11 @@
         const packageData = normalized.packageData;
         validatePackage(packageData);
         applyTemplate(packageData.template_version);
+        if (packageData.source_type === "stock_bom_parent") {
+          toolbarNote.textContent += packageData.assembly_lot_id
+            ? `｜实际成套批次 ${packageData.assembly_lot_id} 的尾捆标签`
+            : `｜整套预印 ${packageData.label_count} 张；预计尾捆 ${packageData.planned_tail_quantity} 套，实际成套后核量补印`;
+        }
         if (isPrepared) {
           printPlanPanel.hidden = true;
           plannedPackage = null;
@@ -1086,6 +1103,16 @@
         await new Promise((resolve) => requestAnimationFrame(resolve));
         validateRenderedLabels();
         loadedPackage = packageData;
+        const actualTails = packageData.source_type === "stock_bom_parent" ? packageData.actual_tail_candidates || [] : [];
+        bomTailLinks.hidden = actualTails.length === 0;
+        bomTailLinks.innerHTML = actualTails.length
+          ? `实际成套后的尾捆：${actualTails.map((row) => `<a class="button-link" href="?bom_stock_order_id=${encodeURIComponent(bomStockOrderId)}&assembly_lot_id=${encodeURIComponent(row.assembly_lot_id)}">批次 ${escapeHtml(row.assembly_lot_id)}：${escapeHtml(row.tail_quantity)} 套</a>`).join(" ")}`
+          : "";
+        const relatedStockOrders = [...new Set((packageData.plans || [])
+          .map((plan) => Number(plan?.source_evidence?.stock_order_id || 0))
+          .filter((id) => Number.isInteger(id) && id > 0))];
+        bomParentLink.hidden = !!bomStockOrderId || relatedStockOrders.length !== 1;
+        if (!bomParentLink.hidden) bomParentLink.href = `${window.location.pathname}?bom_stock_order_id=${relatedStockOrders[0]}`;
         loadedJob = normalized.job || null;
         loadedJobs = normalized.jobs?.length ? normalized.jobs : (loadedJob ? [loadedJob] : []);
         updateLatestJobLink(normalized);
@@ -1105,6 +1132,8 @@
 
       function resetView() {
         loadedPackage = null;
+        bomTailLinks.hidden = true;
+        bomTailLinks.innerHTML = "";
         loadedJob = null;
         loadedJobs = [];
         plannedPackage = null;
@@ -1136,7 +1165,8 @@
         const loadingComposite = Number.isInteger(compositeBatchId) && compositeBatchId > 0 && compositeItemIds.length > 0;
         const loadingDelivery = Number.isInteger(deliveryId) && deliveryId > 0;
         const loadingStock = Number.isInteger(stockReceiptId) && stockReceiptId > 0;
-        const liveSourceCount = [loadingSupplier, loadingSupplierBatch, loadingComposite, loadingDelivery, loadingStock].filter(Boolean).length;
+        const loadingBomParent = Number.isInteger(bomStockOrderId) && bomStockOrderId > 0;
+        const liveSourceCount = [loadingSupplier, loadingSupplierBatch, loadingComposite, loadingDelivery, loadingStock, loadingBomParent].filter(Boolean).length;
         if (!loadingJob && liveSourceCount !== 1) {
           showMessage(liveSourceCount > 1 ? "标签实时来源冲突，已停止加载" : "报料单或送货单编号无效", "message error");
           return;
@@ -1144,6 +1174,8 @@
         try {
           const url = loadingJob
             ? `/api/requisition/production-packaging-label-jobs/${requestedJobId}`
+            : loadingBomParent
+              ? `/api/requisition/stock-replenishment-orders/${bomStockOrderId}/parent-product-label-package${bomAssemblyLotId > 0 ? `?assembly_lot_id=${bomAssemblyLotId}` : ""}`
             : loadingStock
               ? `/api/incoming/receipt-items/${stockReceiptId}/product-label-package`
             : loadingDelivery
@@ -1195,9 +1227,10 @@
         if (!fingerprint) throw new Error("标签计划缺少校验指纹，已停止创建打印作业；请重新加载");
         const isDelivery = Number.isInteger(deliveryId) && deliveryId > 0;
         const isStock = Number.isInteger(stockReceiptId) && stockReceiptId > 0;
+        const isBomParent = typeof bomStockOrderId !== "undefined" && Number.isInteger(bomStockOrderId) && bomStockOrderId > 0;
         const isSupplierBatch = supplierOrderIds.length > 0;
         const hasReplenishmentSource = (plannedPackage?.plans || []).some((plan) => String(plan.selection_key || "").startsWith("stock-item:"));
-        const items = (plannedPackage?.plans || []).map((plan) => (isDelivery || isStock || hasReplenishmentSource) ? ({
+        const items = (plannedPackage?.plans || []).map((plan) => (isDelivery || isStock || isBomParent || hasReplenishmentSource) ? ({
           selection_key:planSelectionKey(plan),
           print_label_count:parsePrintCount(printCounts.get(planSelectionKey(plan)), Number(plan.label_count)),
         }) : ({
@@ -1207,6 +1240,8 @@
         if (!items.some((item) => item.print_label_count > 0)) throw new Error("本次未选择需要打印的标签");
         const sourceSignature = isStock
           ? `stock-receipt:${stockReceiptId}`
+          : isBomParent
+          ? `bom-parent:${bomStockOrderId}:${bomAssemblyLotId || 0}`
           : isDelivery
           ? `delivery:${deliveryId}`
           : isSupplierBatch
@@ -1221,6 +1256,8 @@
         const isComposite = Number.isInteger(compositeBatchId) && compositeBatchId > 0;
         const url = isStock
           ? `/api/incoming/receipt-items/${stockReceiptId}/product-label-jobs`
+          : isBomParent
+          ? `/api/requisition/stock-replenishment-orders/${bomStockOrderId}/parent-product-label-jobs${bomAssemblyLotId > 0 ? `?assembly_lot_id=${bomAssemblyLotId}` : ""}`
           : isDelivery
           ? `/api/deliveries/${deliveryId}/production-packaging-label-jobs`
           : isSupplierBatch

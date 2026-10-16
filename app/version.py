@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.646"
-APP_VERSION_NAME = "模具标签排版与补库产品标签"
+APP_VERSION = "v0.22.647"
+APP_VERSION_NAME = "模具标签侧面编码放大"
 APP_BUILD_DATE = "2026-10-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6313,8 +6313,6 @@ APP_CHANGELOG = [*(f"v0.22.646：本次更新｜{item}" for item in APP_CHANGES)
 
 
 # v0.22.647：模具标签侧面存货编码12毫米，无结构迁移。
-APP_VERSION = "v0.22.647"
-APP_VERSION_NAME = "模具标签侧面编码放大"
 APP_CHANGES = [
     "模具标签二维码左侧加粗存货编码改为12毫米字号，按字形原比例显示，Z.001.000001可完整排入侧面区域。",
     "客户简称位于编码上方；二维码、17毫米侧面虚线、其他字段、出纸方向及历史冻结标签保持原状。",

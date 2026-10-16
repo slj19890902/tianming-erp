@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.647"
-APP_VERSION_NAME = "模具标签侧面编码放大"
+APP_VERSION = "v0.22.648"
+APP_VERSION_NAME = "客户标签与图号搜索优化"
 APP_BUILD_DATE = "2026-10-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6323,3 +6323,18 @@ APP_VERIFICATION_STEPS = [
     "系统版本核对v0.22.647，数据库revision仍为eq1015sa。",
 ]
 APP_CHANGELOG = [*(f"v0.22.647：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.648：客户标签、预览编辑、出纸设置与图号查询，无结构迁移。
+APP_CHANGES = [
+    "模具标签默认80×40横向出纸并记忆选择；研光、光洋右上角显示图号，其余客户显示产品标签简称，支持预览选择绑定产品、修改和保存简称。",
+    "新模具打印任务冻结本次实际编码、客户、标题、模数、位置和片料尺寸，历史任务继续原版式；过长文字保留预览并指向修改入口。",
+    "研光、光洋产品标签按客户简称、存货编码、图号、实际每捆数量排列，突出编码和数量；图号及客户规则随新打印任务冻结。",
+    "模具与位置使用统一搜索框，客户、位置、绑定图号及编码均可查询；常用箱编码/款号栏支持图号，精确编码或图号优先。",
+]
+APP_VERIFICATION_STEPS = [
+    "在80×40模具标签预览核对出纸方向、按客户显示内容及绑定产品选择，修改产品简称后打印并核对补打保持本次内容。",
+    "研光或光洋产品标签核对客户、突出编码、图号前缀和每捆实际数量；尾捆保持真实余数。",
+    "用同一个产品图号分别查询模具与常用箱，确认找到对应产品及模具位置；正式版本v0.22.648，数据库eq1015sa。",
+]
+APP_CHANGELOG = [*(f"v0.22.648：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

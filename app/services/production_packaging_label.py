@@ -25,6 +25,7 @@ from app.services.production_label_strategy import (
     CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION,
 )
 from app.services.production_packaging_label_layout import effective_layout
+from app.services.customer_label_profile import freeze_product_label_profiles
 from app.services.product_specification import (
     embedded_dimension_specification,
     resolved_product_specification,
@@ -555,6 +556,7 @@ def build_delivery_packaging_label_package(
                 }
             )
 
+    freeze_product_label_profiles(db, plans, labels)
     label_layout = effective_layout(db)
     fingerprint_payload = {
         "delivery_id": int(delivery.id),
@@ -963,6 +965,7 @@ def build_supplier_requisition_packaging_label_package(
                 label["customer_short_name"] = plan["customer_short_name"]
             labels.append(label)
 
+    freeze_product_label_profiles(db, plans, labels)
     label_layout = (
         effective_layout(db)
         if template_version == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION

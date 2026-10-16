@@ -118,6 +118,8 @@ def build_package(db, receipt_id):
                     template_version=template)
         plans.append(plan)
         labels.extend(dict(plan, quantity=q, label_number=i) for i, q in enumerate(quantities, 1))
+    from app.services.customer_label_profile import freeze_product_label_profiles
+    freeze_product_label_profiles(db, plans, labels)
     package = dict(source_type=SOURCE, receipt_item_id=receipt.id, receipt_number=receipt.receipt.receipt_number,
                    stock_replenishment_item_id=item.id, supplier_order_id=source.supplier_order_id,
                    supplier_order_item_id=source.id, supplier_item_version=source.version,

@@ -105,6 +105,14 @@
     .layout-editor-header { position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid #cbd5e1; background:#fff; }
     .layout-editor-header h2 { margin:0; font-size:18px; }
     .layout-editor-header .version-note { margin-left:auto; color:#475569; font-size:12px; }
+    html[data-template="current_40x30_v2"] .label-card.drawing-customer-label { grid-template-rows:4.5mm 9mm 5.5mm 10mm; }
+    html[data-template="current_40x30_v2"] .drawing-customer-label .compact-customer .fit-value { font-size:3.3mm; }
+    html[data-template="current_40x30_v2"] .drawing-customer-label .compact-code .fit-value { font-size:6.2mm; }
+    html[data-template="current_40x30_v2"] .drawing-customer-label .quantity-number { font-size:7mm; }
+    .drawing-detail { gap:.7mm; }
+    .drawing-detail .drawing-prefix { flex:none;font-size:2.4mm; }
+    .drawing-detail .fit-cell { min-width:0; }
+    .drawing-detail .fit-value { font-size:3.2mm; }
     .layout-editor-body { display:grid; grid-template-columns:minmax(510px,1fr) 330px; gap:18px; padding:18px; }
     .layout-preview-wrap { min-width:0; }
     .layout-preview-title { margin:0 0 8px; color:#334155; font-size:13px; }
@@ -703,7 +711,17 @@
         </article>`;
       }
 
+      function drawingCustomerLabelHtml(label) {
+        return `<article class="label-card drawing-customer-label" aria-label="产品标签 ${escapeHtml(label.label_number)}/${escapeHtml(label.label_count)}">
+          <div class="compact-row compact-customer"><span class="fit-cell"><strong class="fit-value">${escapeHtml(label.customer_short_name)}</strong></span></div>
+          <div class="compact-row compact-code"><span class="fit-cell"><strong class="fit-value">${escapeHtml(label.product_code)}</strong></span></div>
+          <div class="compact-row drawing-detail"><span class="drawing-prefix">图号</span><span class="fit-cell"><strong class="fit-value">${escapeHtml(label.drawing_number || "待完善")}</strong></span></div>
+          <div class="quantity-row"><strong class="quantity-number">${escapeHtml(label.quantity)}</strong><span class="quantity-unit">${escapeHtml(label.unit_label || "只")}/捆</span></div>
+        </article>`;
+      }
+
       function labelHtml(label, packageData) {
+        if (label.label_profile === "customer-drawing-code-quantity-v1") return drawingCustomerLabelHtml(label);
         const editableLayout = packageData.template_version === CURRENT_TEMPLATE_VERSION && packageData.label_layout
           ? validateLayoutEnvelope(packageData.label_layout)
           : null;

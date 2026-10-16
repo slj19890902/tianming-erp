@@ -1678,7 +1678,24 @@ class MoldRepairStatusPayload(BaseModel):
         return value.strip()
 
 
+class MoldLabelPreviewOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mold_id: int = Field(gt=0)
+    expected_mold_version: int | None = Field(default=None, gt=0)
+    expected_product_version: int | None = Field(default=None, gt=0)
+    product_id: int | None = Field(default=None, gt=0)
+    title_text: str | None = Field(default=None, min_length=1, max_length=250)
+
+
+class MoldLabelTitlePayload(BaseModel):
+    product_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+    title_text: str = Field(min_length=1, max_length=250)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+
 class MoldLabelPrintRegisterPayload(BaseModel):
+    content_options: list[MoldLabelPreviewOption] = Field(default_factory=list, max_length=100)
     mold_ids: list[int] = Field(min_length=1, max_length=100)
     source: Literal["single", "batch"]
     template_version: Literal["mold_40x30_v1", "mold_80x40_v1"] = (
@@ -1696,6 +1713,11 @@ class MoldLabelPrintRegisterPayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_mold_label_print_selection(self) -> "MoldLabelPrintRegisterPayload":
+        option_ids = [option.mold_id for option in self.content_options]
+        if len(option_ids) != len(set(option_ids)) or set(option_ids) - set(self.mold_ids):
+            raise ValueError('预览修改必须对应所选模具且不能重复')
+        if self.content_options and self.template_version != MOLD_LABEL_TEMPLATE_80X40:
+            raise ValueError('当前纸型不支持预览内容修改')
         if any(mold_id <= 0 for mold_id in self.mold_ids):
             raise ValueError("模具选择无效")
         if len(self.mold_ids) != len(set(self.mold_ids)):
@@ -20657,6 +20679,18 @@ def list_mold_tools(
             MoldTool.mold_code,
             MoldTool.id,
         )
+    if str(q or '').strip():
+        keyword = str(q).strip()
+        scope = [Product.deleted_at.is_(None)]
+        if allowed_customer_ids is not None:
+            scope.append(Product.customer_id.in_(allowed_customer_ids))
+        exact = select(Product.id).where(Product.mold_tool_id == MoldTool.id, *scope,
+            or_(func.lower(Product.product_code) == keyword.lower(),
+                func.lower(Product.customer_material_code) == keyword.lower(),
+                func.lower(Product.customer_drawing_number) == keyword.lower())).exists()
+        prefix = select(Product.id).where(Product.mold_tool_id == MoldTool.id, *scope,
+            or_(Product.product_code.ilike(keyword + '%'), Product.customer_drawing_number.ilike(keyword + '%'))).exists()
+        ordered_query = ordered_query.order_by(None).order_by(case((exact, 0), (prefix, 1), else_=2), *ordered_query._order_by_clauses)
     if page is not None:
         ordered_query = ordered_query.offset((page - 1) * page_size).limit(
             page_size
@@ -21892,6 +21926,7 @@ def _mold_label_dict(
     template_version: str = MOLD_LABEL_TEMPLATE_40X30,
     *,
     preview_only: bool = False,
+    selected_product_id: int | None = None,
 ) -> dict:
     products = _visible_mold_products(row, allowed_customer_ids)
     if not products and row.identity_status == "frozen":
@@ -21905,6 +21940,17 @@ def _mold_label_dict(
             if product.deleted_at is None
             and product.customer_id in associated_customer_ids
         ]
+    choices = [{"id": p.id, "customer_id": p.customer_id,
+                "customer_code": p.customer.customer_code if p.customer else "",
+                "customer_short_name": p.customer.chinese_short_name if p.customer else "",
+                "product_code": p.product_code, "product_name": p.product_name,
+                "drawing_number": p.customer_drawing_number or "", "version": p.version,
+                "report_specification": _label_dimension([p], "report_specification"),
+                "mold_count": mold_count_projection([p])["label_mold_count"]} for p in products]
+    if selected_product_id is not None:
+        products = [p for p in products if p.id == selected_product_id]
+        if not products:
+            raise HTTPException(status_code=409, detail="所选产品已不属于该模具，请刷新预览")
     lookup_url = _mold_live_url(row.id)
     qr = qrcode.QRCode(
         version=2,
@@ -21938,6 +21984,10 @@ def _mold_label_dict(
         raise HTTPException(status_code=409, detail=printability_error)
     result = {
         "mold_code": row.mold_code,
+        "mold_id": row.id,
+        "mold_version": row.version,
+        "label_product_choices": choices,
+        "selected_product_id": selected_product_id,
         "rack_location": row.rack_location,
         "location_guide": basics["location_guide"],
         "label_location_alias": basics["location_guide"].get("alias"),
@@ -22026,6 +22076,20 @@ def _mold_label_dict(
             }
         )
         result.update(_mold_label_content_projection(row, products))
+        from app.services.customer_label_profile import uses_drawing_label
+        from app.services.mold_label_content import product_label_titles
+        titles = product_label_titles(row.label_overrides_json)
+        drawing = bool(products) and all(uses_drawing_label(p.customer) for p in products)
+        if selected_product_id is not None:
+            result['label_customer_name'] = str(products[0].customer.chinese_short_name or products[0].customer.name)
+        result['label_title_kind'] = 'drawing' if drawing else 'name'
+        result['label_title_text'] = ' / '.join(dict.fromkeys(
+            str(p.customer_drawing_number or '待完善') if drawing else
+            titles.get(str(p.id)) or result['label_overrides'].get('product_name') or p.product_name
+            for p in products)) or '待完善'
+        for choice in choices:
+            choice['label_title_kind'] = 'drawing' if choice['customer_code'].upper() in ('YG', 'GY') else 'name'
+            choice['label_title_text'] = (choice['drawing_number'] or '待完善') if choice['label_title_kind'] == 'drawing' else titles.get(str(choice['id'])) or result['label_overrides'].get('product_name') or choice['product_name']
     return result
 
 
@@ -23575,9 +23639,10 @@ def get_mold_labels(
     ordered_rows = [rows_by_id[mold_id] for mold_id in ordered_ids]
     for row in ordered_rows:
         _require_mold_customer_scope(row, allowed_customer_ids)
+    from app.services.mold_label_preview import apply_frozen_content
     return {
         "items": [
-            _mold_label_dict(row, allowed_customer_ids, template_version)
+            apply_frozen_content(_mold_label_dict(row, allowed_customer_ids, template_version), frozen_layout)
             for row in ordered_rows
         ],
         "count": len(ordered_rows),
@@ -23611,6 +23676,19 @@ def _mold_label_print_job_dict(
     }
 
 
+def _mold_content_request_hash(payload) -> str:
+    import hashlib
+    return hashlib.sha256(json.dumps([x.model_dump() for x in payload.content_options],
+        ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def _check_mold_content_replay(job, payload):
+    layout = _mold_label_print_job_layout(job)
+    expected = (layout or {}).get('layout', {}).get('content_request_hash')
+    if expected is not None and expected != _mold_content_request_hash(payload) or expected is None and payload.content_options:
+        raise HTTPException(status_code=409, detail='打印凭证已用于不同的预览内容，请重新登记')
+
+
 @router.post("/molds/label-prints")
 def register_mold_label_print(
     payload: MoldLabelPrintRegisterPayload,
@@ -23640,6 +23718,7 @@ def register_mold_label_print(
                 status_code=409,
                 detail="该打印凭证已用于另一组模具，请刷新列表后重新操作",
             )
+        _check_mold_content_replay(existing, payload)
         return _mold_label_print_job_dict(existing, replayed=True)
 
     rows = db.scalars(
@@ -23670,6 +23749,28 @@ def register_mold_label_print(
             layout_envelope = effective_mold_label_layout(db)
         except MoldLabelLayoutError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+    if layout_envelope is not None:
+        from app.services.mold_label_preview import freeze_content
+        from app.services.mold_label_layout import layout_hash
+        options = {option.mold_id: option.model_dump() for option in payload.content_options}
+        contents = []
+        for row in ordered_rows:
+            option = options.get(row.id, {})
+            if option.get('expected_mold_version') is not None and row.version != option['expected_mold_version']:
+                raise HTTPException(status_code=409, detail='模具资料版本已变化，请重新读取预览')
+            if option.get('product_id') and option.get('expected_product_version') is not None:
+                product = next((p for p in row.products if p.id == option['product_id']), None)
+                if product is None or product.version != option['expected_product_version']:
+                    raise HTTPException(status_code=409, detail='产品资料版本已变化，请重新读取预览')
+            content = _mold_label_dict(row, allowed_customer_ids, payload.template_version,
+                                       selected_product_id=option.get('product_id'))
+            try:
+                contents.append(freeze_content(content, option))
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+        layout_envelope['layout']['content_snapshots'] = contents
+        layout_envelope['layout']['content_request_hash'] = _mold_content_request_hash(payload)
+        layout_envelope['layout_hash'] = layout_hash(layout_envelope['layout'])
     job = MoldLabelPrintJob(
         idempotency_key=payload.idempotency_key,
         source=payload.source,
@@ -23771,9 +23872,61 @@ def register_mold_label_print(
                 status_code=409,
                 detail="该打印凭证已用于另一组模具，请刷新列表后重新操作",
             )
+        _check_mold_content_replay(replay, payload)
         return _mold_label_print_job_dict(replay, replayed=True)
     db.refresh(job)
     return _mold_label_print_job_dict(job, replayed=False)
+
+
+@router.post('/molds/{mold_id}/label-title')
+def save_mold_label_title(mold_id: int, payload: MoldLabelTitlePayload, request: Request,
+                          db: Session = Depends(get_db), user: User = Depends(can_operate)):
+    from app.services.mold_label_content import with_product_label_title
+    from app.services.customer_label_profile import uses_drawing_label
+    import hashlib
+    fingerprint = hashlib.sha256(json.dumps({'mold_id': mold_id, 'label_title': payload.model_dump()},
+        ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    replay = _mold_master_replay(db, action='update', idempotency_key=payload.idempotency_key,
+                                request_hash=fingerprint, actor_id=user.id)
+    if replay is not None:
+        return replay
+    if _mold_customer_scope(user, db) is not None:
+        raise HTTPException(status_code=403, detail='模具标签简称仅允许全客户仓库账号维护')
+    row = db.get(MoldTool, mold_id)
+    product = db.get(Product, payload.product_id)
+    if row is None or product is None or product.mold_tool_id != mold_id or product.deleted_at is not None:
+        raise HTTPException(status_code=409, detail='模具绑定产品已变化，请刷新预览')
+    if uses_drawing_label(product.customer):
+        raise HTTPException(status_code=422, detail='该客户使用正式产品图号，无需保存标签名称简称')
+    try:
+        updated = with_product_label_title(row.label_overrides_json, product.id, payload.title_text)
+    except MoldLabelContentError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    claimed = db.execute(update(MoldTool).where(MoldTool.id == mold_id, MoldTool.version == payload.expected_version,
+        MoldTool.is_active.is_(True), MoldTool.archive_status == 'active').values(
+            version=MoldTool.version + 1, label_overrides_json=updated, updated_by=user.id))
+    if claimed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail='模具资料版本已变化，请刷新后重新保存简称')
+    db.refresh(row)
+    result = dict(id=row.id, version=row.version, product_id=product.id, title_text=json.loads(updated)['product_titles'][str(product.id)])
+    db.add(MoldMasterMutation(mold_tool_id=row.id, action='update', idempotency_key=payload.idempotency_key,
+        request_hash=fingerprint, actor_id=user.id, result_version=row.version,
+        result_snapshot_json=json.dumps(result, ensure_ascii=False, sort_keys=True)))
+    append_audit_event(db, request=request, actor=user, event_category='business', result='success', source='web',
+        module_code='warehouse', action_code='mold.label.title.update', legacy_action='UPDATE',
+        resource=f'warehouse/molds/{row.id}/label-title', entity_type='mold_tool', entity_id=row.id,
+        object_ref=row.mold_code, description='保存模具绑定产品标签简称', details=result)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        replay = _mold_master_replay(db, action='update', idempotency_key=payload.idempotency_key,
+                                    request_hash=fingerprint, actor_id=user.id)
+        if replay is not None:
+            return replay
+        raise
+    return result
 
 
 @router.get("/molds/{mold_id}/label")
@@ -23836,7 +23989,8 @@ def get_mold_label(
             print_job,
             replayed=True,
         )
-    return result
+    from app.services.mold_label_preview import apply_frozen_content
+    return apply_frozen_content(result, frozen_layout)
 
 
 @router.get("/molds/{mold_id}/label-preview")
@@ -23948,6 +24102,8 @@ def search_mold_binding_products(
                 Product.product_code.like(pattern),
                 Product.customer_material_code.like(pattern),
                 Product.product_name.like(pattern),
+                Product.customer_drawing_number.like(pattern),
+                Product.customer_drawing_display.like(pattern),
             )
         )
     rows = db.execute(
@@ -24344,7 +24500,7 @@ def update_mold_tool(
         row.chinese_short_name = formal_chinese_short_name
         if payload.label_overrides is not None:
             row.label_overrides_json = canonical_label_overrides(
-                payload.label_overrides.as_dict()
+                payload.label_overrides.as_dict(), preserve_json=row.label_overrides_json
             )
         row.mold_name = formal_display_name or row.mold_name
         row.identity_status = "frozen"

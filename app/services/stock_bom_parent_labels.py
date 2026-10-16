@@ -156,6 +156,8 @@ def build_package(db, stock_order_id, *, assembly_lot_id=None):
         quantity=label_plan["label_quantities"][i-1], total_quantity=label_plan["total_quantity"],
         unit_label="套", units_per_label=units,
         label_number=i, label_count=label_plan["label_count"]) for i in range(1, label_plan["label_count"] + 1)]
+    from app.services.customer_label_profile import freeze_product_label_profiles
+    freeze_product_label_profiles(db, [label_plan], labels)
     layout = effective_layout(db)
     fingerprint = _hash(dict(stock_order_id=order.id, plan=label_plan, label_layout=layout))
     latest = None

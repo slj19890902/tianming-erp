@@ -24,7 +24,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import String, and_, cast, delete, func, or_, select
+from sqlalchemy import String, and_, case, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
@@ -2127,7 +2127,14 @@ def list_products(
             )
         )
     if product_code.strip():
-        query = query.where(Product.product_code.like(f"%{product_code.strip()}%"))
+        pattern = f"%{product_code.strip()}%"
+        query = query.where(or_(Product.product_code.like(pattern), Product.customer_material_code.like(pattern),
+                                Product.customer_model.like(pattern), Product.customer_drawing_number.like(pattern),
+                                Product.customer_drawing_display.like(pattern)))
+        query = query.order_by(None).order_by(case((or_(func.lower(Product.product_code) == product_code.strip().lower(),
+            func.lower(Product.customer_material_code) == product_code.strip().lower(),
+            func.lower(Product.customer_drawing_number) == product_code.strip().lower()), 0), else_=1),
+            Product.customer_id, Product.product_code, Product.id)
     if product_name.strip():
         query = query.where(Product.product_name.like(f"%{product_name.strip()}%"))
     if spec.strip():

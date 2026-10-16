@@ -52,12 +52,13 @@ def normalize_label_overrides(
     }
 
 
-def canonical_label_overrides(raw: Mapping[str, object] | None) -> str | None:
+def canonical_label_overrides(raw: Mapping[str, object] | None, *, preserve_json: str | None = None) -> str | None:
     normalized = normalize_label_overrides(raw)
-    if not any(normalized.values()):
+    titles = product_label_titles(preserve_json) if preserve_json else {}
+    if not any(normalized.values()) and not titles:
         return None
     return json.dumps(
-        {"v": LABEL_OVERRIDE_SCHEMA_VERSION, **normalized},
+        {"v": 2 if titles else LABEL_OVERRIDE_SCHEMA_VERSION, **normalized, **({"product_titles": titles} if titles else {})},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -71,10 +72,11 @@ def parse_label_overrides(value: str | None) -> dict[str, str | None]:
         parsed = json.loads(value)
     except (TypeError, ValueError, json.JSONDecodeError) as error:
         raise MoldLabelContentError("模具标签覆写记录损坏，请联系管理员核对") from error
-    if not isinstance(parsed, dict) or parsed.get("v") != LABEL_OVERRIDE_SCHEMA_VERSION:
+    if not isinstance(parsed, dict) or parsed.get("v") not in (1, 2):
         raise MoldLabelContentError("模具标签覆写版本不受支持，请联系管理员核对")
-    if set(parsed) - {"v", *LABEL_OVERRIDE_FIELDS}:
+    if set(parsed) - {"v", "product_titles", *LABEL_OVERRIDE_FIELDS}:
         raise MoldLabelContentError("模具标签覆写记录包含未登记字段，请联系管理员核对")
+    product_label_titles(value)
     return normalize_label_overrides(
         {field: parsed.get(field) for field in LABEL_OVERRIDE_FIELDS}
     )
@@ -113,3 +115,31 @@ def mold_count_projection(products) -> dict:
     display = f"{next(iter(counts))}模" if len(counts) == 1 and None not in counts else "几模待核"
     return {"label_mold_count": display, "label_mold_count_facts": facts,
             "label_mold_count_consistent": bool(facts) and len(counts) == 1 and None not in counts}
+
+
+def product_label_titles(value: str | None) -> dict[str, str]:
+    if not value:
+        return {}
+    raw = json.loads(value)
+    titles = raw.get('product_titles', {})
+    if not isinstance(titles, dict) or len(titles) > 200:
+        raise MoldLabelContentError('模具产品标签简称记录无效')
+    result = {}
+    for key, text in titles.items():
+        if not str(key).isdigit() or int(key) <= 0:
+            raise MoldLabelContentError('标签简称产品身份无效')
+        normalized = normalize_label_override_text(text, field='product_name')
+        if normalized:
+            result[str(key)] = normalized
+    return result
+
+
+def with_product_label_title(value: str | None, product_id: int, title: str) -> str:
+    base = parse_label_overrides(value)
+    titles = product_label_titles(value)
+    normalized = normalize_label_override_text(title, field='product_name')
+    if not normalized:
+        raise MoldLabelContentError('标签简称不能为空')
+    titles[str(product_id)] = normalized
+    return json.dumps({'v': 2, **base, 'product_titles': titles}, ensure_ascii=False,
+                      sort_keys=True, separators=(',', ':'))

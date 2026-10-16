@@ -132,7 +132,8 @@ V11_ELEMENT_CATALOG = (
 _V11_CATALOG_BY_ID = {item["id"]: item for item in V11_ELEMENT_CATALOG}
 V12_CATALOG_VERSION = "mold-side-code-12mm-v1"
 V12_ELEMENT_CATALOG = V11_ELEMENT_CATALOG
-CATALOG_VERSION = V12_CATALOG_VERSION
+V13_CATALOG_VERSION = "mold-customer-title-v1"
+CATALOG_VERSION = V13_CATALOG_VERSION
 PAPER_WIDTH_MM = V7_PAPER_WIDTH_MM
 PAPER_HEIGHT_MM = V7_PAPER_HEIGHT_MM
 ELEMENT_CATALOG = V12_ELEMENT_CATALOG
@@ -342,7 +343,7 @@ def _default_layout_v11() -> dict[str, Any]:
 
 def default_layout() -> dict[str, Any]:
     layout = _default_layout_v11()
-    layout["catalog_version"] = V12_CATALOG_VERSION
+    layout["catalog_version"] = V13_CATALOG_VERSION
     elements = {element["id"]: element for element in layout["elements"]}
     elements["customer_name"].update(x_mm=1.2, y_mm=16.2, width_mm=61.2,
                                      height_mm=4.6)
@@ -1162,7 +1163,7 @@ _SNAPSHOT_NORMALIZERS[V9_CATALOG_VERSION] = _normalize_layout_v9
 def normalize_layout(payload: object) -> dict[str, Any]:
     """Validate a layout submitted for the currently published catalog."""
 
-    return _normalize_layout_v12(payload)
+    return _normalize_layout_v13(payload)
 
 
 def _normalize_layout_v10(payload: object) -> dict[str, Any]:
@@ -1270,19 +1271,41 @@ def _normalize_layout_v12(payload: object) -> dict[str, Any]:
 _SNAPSHOT_NORMALIZERS[V12_CATALOG_VERSION] = _normalize_layout_v12
 
 
+def _normalize_layout_v13(payload: object) -> dict[str, Any]:
+    if not isinstance(payload, dict) or payload.get('catalog_version') != V13_CATALOG_VERSION:
+        raise MoldLabelLayoutError('标签元素目录版本已变化，请重新加载默认布局')
+    normalized = _normalize_layout_v12({**payload, 'catalog_version': V12_CATALOG_VERSION})
+    normalized['catalog_version'] = V13_CATALOG_VERSION
+    if 'content_request_hash' in payload:
+        value = payload['content_request_hash']
+        if not isinstance(value, str) or len(value) != 64 or any(c not in '0123456789abcdef' for c in value):
+            raise MoldLabelLayoutError('打印内容请求校验无效')
+        normalized['content_request_hash'] = value
+    if 'content_snapshots' in payload:
+        from app.services.mold_label_preview import normalize_content_snapshots
+        try:
+            normalized['content_snapshots'] = normalize_content_snapshots(payload['content_snapshots'])
+        except ValueError as error:
+            raise MoldLabelLayoutError(str(error)) from error
+    return normalized
+
+
+_SNAPSHOT_NORMALIZERS[V13_CATALOG_VERSION] = _normalize_layout_v13
+
+
 def _upgrade_to_current_catalog(layout: dict[str, Any]) -> dict[str, Any]:
     """Project an active legacy release without changing frozen snapshots."""
 
     catalog_version = layout.get("catalog_version")
-    if catalog_version == V12_CATALOG_VERSION:
-        return _normalize_layout_v12(layout)
+    if catalog_version == V13_CATALOG_VERSION:
+        return _normalize_layout_v13(layout)
     normalizer = _SNAPSHOT_NORMALIZERS.get(catalog_version)
     if normalizer is None:
         raise MoldLabelLayoutError("保存的模具标签目录版本不受支持")
     normalizer(layout)
     # Projection for new jobs only. Persisted revisions and frozen print jobs
     # remain byte-for-byte intact and are decoded by their original catalog.
-    return _normalize_layout_v12(default_layout())
+    return _normalize_layout_v13(default_layout())
 
 
 def _normalize_snapshot_layout(payload: object) -> dict[str, Any]:

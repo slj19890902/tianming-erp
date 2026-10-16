@@ -3622,7 +3622,7 @@
                   <button v-if="canAdmin && productTab === 'products'" class="btn primary" :disabled="mixedSampleImport.loading" @click="mixedSampleImport.visible=!mixedSampleImport.visible">混合样品整理</button>
                 </div>
                 <div v-if="productTab === 'products' && selectedProductCustomer" class="toolbar-group">
-                  <input class="input" style="min-width:180px" placeholder="存货编码 / 款号" v-model.trim="filters.productCode" @input="queuePageSearch('products')" @keyup.enter="runExplicitPageListLoad('products',{resetPage:true})" />
+                  <input class="input" style="min-width:180px" placeholder="存货编码 / 款号 / 图号" v-model.trim="filters.productCode" @input="queuePageSearch('products')" @keyup.enter="runExplicitPageListLoad('products',{resetPage:true})" />
                   <button class="btn" @click="showProductMoreFilters=!showProductMoreFilters">{{ showProductMoreFilters ? "收起筛选" : "更多筛选" }}</button>
                   <template v-if="showProductMoreFilters">
                     <label><input type="checkbox" v-model="filters.showInactiveProducts" @change="runExplicitPageListLoad('products',{resetPage:true})" /> 显示已停用纸箱</label>

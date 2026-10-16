@@ -83,6 +83,7 @@ def _p181_published_map_identity(monkeypatch) -> None:
 
 
 def _seed_material_and_staging(session_factory, *, finished_slot_count=8) -> int:
+    from app.models.customer_finished_storage_preference import CustomerFinishedStoragePreference
     from app.models.material import Material
     from app.models.order import OrderItem
     from app.models.product import Product
@@ -170,6 +171,7 @@ def _seed_material_and_staging(session_factory, *, finished_slot_count=8) -> int
             published_map_revision="p181-anonymous-map-v1",
             version=1,
         )
+        session.add(CustomerFinishedStoragePreference(customer_id=1,warehouse_area=fin_area,priority=1))
         raw_area = WarehouseArea(
             floor_id=floor3.id,
             area_code="RAW-001",
@@ -1194,9 +1196,9 @@ def test_pending_frozen_preview_reports_capacity_warning_without_blocking(
             if str(item["item_id"]) == source.route_key
         )
         assert row["receipt_fact_ready"] is True
-        assert row["finished_location_name"] == "一楼 匿名真实成品待送区-02"
-        assert row["finished_location_ready"] is True
-        assert row["finished_capacity_warning"]
+        assert row["finished_location_name"] is None
+        assert row["finished_location_ready"] is False
+        assert row["finished_location_issue"]
 
 
 def test_frozen_500_600_receipts_split_450_580_600_and_block_duplicate_overreceipt(
@@ -1292,7 +1294,7 @@ def test_frozen_500_600_receipts_split_450_580_600_and_block_duplicate_overrecei
     assert third["reserve_planned_sheet_qty"] == 100
     assert third["reserve_actual_sheet_qty"] == 100
     assert third["reserve_variance_sheet_qty"] == 0
-    assert third["finished_location_name"] == "一楼 匿名真实成品待送区-01"
+    assert third["finished_location_name"] == "一楼 匿名真实成品待送区-02"
     assert third["reserve_location_name"] == "三楼 匿名三楼左区原料备料区-01"
     assert "F1-DISPATCH-01" not in third["finished_location_name"]
 
@@ -1330,7 +1332,7 @@ def test_frozen_500_600_receipts_split_450_580_600_and_block_duplicate_overrecei
         assert {lot.warehouse_location_id for lot in finished_lots}.issubset(
             fin_location_ids
         )
-        assert len({lot.warehouse_location_id for lot in finished_lots}) == 1
+        assert len({lot.warehouse_location_id for lot in finished_lots}) == 2
         reserve_details = list(
             session.scalars(
                 select(SemiFinishedInventoryDetail).where(

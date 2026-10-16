@@ -94,6 +94,8 @@ def auto_complete_receipt(db, receipt, lot, actor):
     _, item, _ = prep.source(db, receipt.id)
     block = processing_block(db, item, lot)
     if block:
+        if (item.reference_product_id or item.product_id) and not getattr(item, 'frozen_order_reserve', False):
+            prep.fail(f'明确产品用途的收料未能自动成品：{block}')
         return None
     key = 'auto-stock-complete:' + str(receipt.id)
     previous = db.get(Command, key)
@@ -111,7 +113,9 @@ def auto_complete_receipt(db, receipt, lot, actor):
         Job.receipt_item_id.in_(receipt_ids), Job.status == 'completed')))
     produced = sum(int(row.actual_output or 0) for row in completed)
     output_delta = target_output - produced
-    if output_delta <= 0:
+    if output_delta < 0:
+        prep.fail('累计已产数量超过冻结实收应产数量，请核对原任务，不能重复收料')
+    if output_delta == 0:
         return None
     target_consumed = min(ceil(target_output * pieces / factor), planned)
     consumed = sum(int(row.input_quantity or 0) for row in completed)
@@ -174,25 +178,23 @@ def auto_complete_receipt(db, receipt, lot, actor):
     contract=snapshot.get('frozen_bom_plan')
     output_kind='semi' if contract and contract.get('parent_product_id')!=snapshot['product_id'] else 'finished'
     from app.services.production_workflow import _receipt_auto_finished_ground_target
-    target_product_id=(snapshot['product_id'] if output_kind=='semi' else snapshot['product_id'])
-    from app.services.receipt_putaway import location_issue
-    from app.models.receipt_putaway import ProductStoragePreference
-    from app.models.warehouse_inventory import WarehouseArea,WarehouseFloor,WarehouseLocation
-    source_location_ids={source.warehouse_location_id for _,source,_ in sources}
-    if len(source_location_ids)==1 and db.get(ProductStoragePreference,target_product_id) is None:
-        source_location=db.get(WarehouseLocation,next(iter(source_location_ids)))
-        inventory_type='semi_finished' if output_kind=='semi' else 'finished'
-        if location_issue(db,source_location,inventory_type) is None:
-            area=db.scalar(select(WarehouseArea).join(WarehouseFloor).where(
-                WarehouseFloor.floor_number==source_location.warehouse_floor,
-                WarehouseArea.area_code==source_location.area_code))
-            if area is not None:
-                db.execute(update(Product).where(Product.id==target_product_id).values(
-                    product_code=Product.product_code))
-                db.add(ProductStoragePreference(product_id=target_product_id,area_id=area.id,
-                    location_id=source_location.id,version=1));db.flush()
-    target=_receipt_auto_finished_ground_target(db,claim=True,customer_id=item.customer_id,
-        product_id=target_product_id,inventory_type='semi_finished' if output_kind=='semi' else 'finished')
+    if output_kind=='semi':
+        # A BOM child is interim stock, not a finished parent. Keep it in the
+        # physically confirmed semi-capable source cell without saving that
+        # raw-material cell as the product's future finished destination.
+        from types import SimpleNamespace
+        from app.models.warehouse_inventory import WarehouseLocation
+        from app.services.receipt_putaway import location_issue
+        from app.services.location_candidates import claim_active_placed_location
+        source_location=db.get(WarehouseLocation,sources[-1][1].warehouse_location_id)
+        issue=location_issue(db,source_location,'semi_finished')
+        if issue or not source_location.floor3_layout or not claim_active_placed_location(
+                db,source_location.id,expected_layout_version=source_location.floor3_layout.version):
+            prep.fail(f'冻结BOM子件的暂存货位不可用：{issue or "位置版本已变化"}')
+        target=SimpleNamespace(location=source_location,layout_version=source_location.floor3_layout.version)
+    else:
+        target=_receipt_auto_finished_ground_target(db,claim=True,customer_id=item.customer_id,
+            product_id=snapshot['product_id'],inventory_type='finished')
     payload=dict(location_id=target.location.id,layout_version=target.layout_version)
     if output_kind=='semi':
         from app.services.stock_preparation_disposition import semi_output
@@ -243,6 +245,12 @@ def _auto_assemble_frozen_parent(db, receipt, item, snapshot, actor):
         return None
     parent_id=int(contract['parent_product_id']);target_sets=int(contract.get('finished_quantity') or 0)
     if target_sets<=0:prep.fail('冻结BOM缺少目标套数')
+    from app.services.stock_preparation_assembly import _plan_identity, preview, assemble_stock
+    from app.models.stock_replenishment import StockReplenishmentOrderItem
+    from app.services.stock_replenishment_plan import frozen_bom_plan
+    scope=dict(order_id=int(item.replenishment_order_id),parent_id=parent_id,
+        plan_hash=_plan_identity(contract),policy_id=int(contract.get('policy_id') or 0),
+        target_sets=target_sets)
     completed=0
     for command in db.scalars(select(Command).where(Command.operation_key.like('auto-stock-assembly:%'))):
         try:
@@ -251,24 +259,34 @@ def _auto_assemble_frozen_parent(db, receipt, item, snapshot, actor):
             continue
         if value.get('action')!='assemble' or value.get('recipe',{}).get('parent_id')!=parent_id:
             continue
-        input_jobs=[db.get(Job,row.get('job_id')) for row in value.get('inputs',[])]
-        input_receipts=[db.get(IncomingReceiptItem,row.receipt_item_id) for row in input_jobs if row]
-        if input_receipts and all(row.stock_replenishment_item_id==item.id for row in input_receipts):
+        source_items=[]
+        for row in value.get('inputs',[]):
+            input_lot=db.get(InventoryLot,row.get('lot_id'))
+            job=(db.get(Job,input_lot.source_ref_id) if input_lot and
+                input_lot.source_ref_type=='stock_preparation' else None)
+            source_receipt=db.get(IncomingReceiptItem,job.receipt_item_id) if job else None
+            source_items.append(db.get(StockReplenishmentOrderItem,source_receipt.stock_replenishment_item_id)
+                if source_receipt else None)
+        if source_items and all(source and source.replenishment_order_id==scope['order_id']
+                and (source_contract:=frozen_bom_plan(source))
+                and _plan_identity(source_contract)==scope['plan_hash']
+                and int(source_contract.get('policy_id') or 0)==scope['policy_id']
+                and int(source_contract.get('finished_quantity') or 0)==scope['target_sets']
+                for source in source_items):
             completed+=int(value.get('sets') or 0)
     remaining=target_sets-completed
     if remaining<=0:return None
-    from app.services.stock_preparation_assembly import preview,assemble_stock
-    first=preview(db,parent_id,1)
+    first=preview(db,parent_id,1,scope=scope)
     if first['shortages'] or first['available_sets']<=0:
         return None
     sets=min(remaining,int(first['available_sets']))
-    plan=preview(db,parent_id,sets)
+    plan=preview(db,parent_id,sets,scope=scope)
     if plan['shortages'] or not plan['sources']:
         return None
     from app.services.production_workflow import _receipt_auto_finished_ground_target
     target=_receipt_auto_finished_ground_target(db,claim=True,customer_id=item.customer_id,product_id=parent_id)
     return assemble_stock(db,dict(action='assemble_stock',parent_id=parent_id,sets=sets,
-        basis_hash=plan['basis_hash'],jobs=plan['sources'],location_id=target.location.id,
+        basis_hash=plan['basis_hash'],jobs=plan['sources'],scope=scope,location_id=target.location.id,
         layout_version=target.layout_version,operation_key=f'auto-stock-assembly:{receipt.id}:{parent_id}'),actor)
 
 

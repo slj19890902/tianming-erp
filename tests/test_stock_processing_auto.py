@@ -10,7 +10,7 @@ from app.models.warehouse_inventory import InventoryLot,InventoryReservation
 from app.models.incoming_receipt import IncomingReceiptItem
 
 
-def receive(client,payload=None,before_receive=None,quantity=20):
+def receive(client,payload=None,before_receive=None,quantity=20,expected_status=200):
     _login(client)
     created=client.post('/api/requisition/stock-replenishment/orders',json=payload or _customer_replenishment_payload(30))
     assert created.status_code==201,created.text
@@ -25,8 +25,25 @@ def receive(client,payload=None,before_receive=None,quantity=20):
     body={'received_quantity':quantity,'idempotency_key':'processing-receive'}
     if quantity<30:body['resolution_action']='await_supplier'
     response=client.put(f"/api/incoming/receive/sr{item['id']}",json=body)
-    assert response.status_code==200,response.text
+    assert response.status_code==expected_status,response.text
+    if expected_status!=200:
+        return item,response
     return item,body
+
+
+def configure_finished_location(factory,product_id=1):
+    from app.models.receipt_putaway import ProductStoragePreference
+    from app.models.warehouse_inventory import WarehouseArea,WarehouseLocation
+    with factory() as db:
+        area=db.scalar(select(WarehouseArea).where(WarehouseArea.area_code=='FG-004'))
+        location=db.scalar(select(WarehouseLocation).where(WarehouseLocation.area_code=='FG-004'))
+        existing=db.get(ProductStoragePreference,product_id)
+        if existing is None:
+            db.add(ProductStoragePreference(product_id=product_id,area_id=area.id,location_id=location.id,version=1))
+        else:
+            existing.area_id=area.id;existing.location_id=location.id;existing.version+=1
+        db.commit()
+        return location.id
 
 
 def row(client):
@@ -42,6 +59,7 @@ def completion(r,input=8,key='processing-complete'):
 
 def test_auto_receipt_partial_replay_completion_and_identity(stock_replenishment_app):
     app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
+    location_id=configure_finished_location(factory)
     with TestClient(app) as client:
         item,receipt=receive(client);r=row(client)
         assert (r['available'],r['reserved'],r['status'])==(0,0,'stock')
@@ -54,6 +72,7 @@ def test_auto_receipt_partial_replay_completion_and_identity(stock_replenishment
     with factory() as db:
         batch=db.scalar(select(Job));output=db.get(InventoryLot,batch.output_lot_id)
         assert output.quantity_available==20 and output.finished_detail.product_id==batch.product_id
+        assert output.warehouse_location_id==location_id
         source=db.get(InventoryLot,db.get(IncomingReceiptItem,batch.receipt_item_id).received_inventory_lot_id)
         assert source.quantity_consumed==20 and source.quantity_available==0
         assert len(list(db.scalars(select(Job).where(Job.status=='completed'))))==1
@@ -61,6 +80,7 @@ def test_auto_receipt_partial_replay_completion_and_identity(stock_replenishment
 
 def test_auto_receipt_uses_cumulative_rounding_across_split_lots(stock_replenishment_app):
     app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
+    configure_finished_location(factory)
     payload=_customer_replenishment_payload(3)
     payload['items'][0]['stock_yield_per_sheet']=1
     payload['items'][0]['pieces_per_box']=3
@@ -83,6 +103,41 @@ def test_auto_receipt_uses_cumulative_rounding_across_split_lots(stock_replenish
         assert output.quantity_available==1
         sources=[db.get(InventoryLot,db.get(IncomingReceiptItem,j.receipt_item_id).received_inventory_lot_id) for j in jobs]
         assert sum(row.quantity_consumed for row in sources)==3
+
+
+def test_explicit_product_without_saved_destination_rolls_back_receipt(stock_replenishment_app):
+    app,factory=stock_replenishment_app
+    from app.models.receipt_putaway import ProductStoragePreference
+    with factory() as db:
+        if preference:=db.get(ProductStoragePreference,1):db.delete(preference)
+        db.commit()
+    with TestClient(app) as client:
+        item,response=receive(client,expected_status=409)
+        assert '常用箱或客户资料' in response.text
+    with factory() as db:
+        assert not list(db.scalars(select(IncomingReceiptItem).where(
+            IncomingReceiptItem.stock_replenishment_item_id==item['id'])))
+        assert not list(db.scalars(select(Job)))
+        assert db.get(ProductStoragePreference,1) is None
+
+
+def test_customer_finished_area_fallback_keeps_raw_staging_out_of_product_default(stock_replenishment_app):
+    app,factory=stock_replenishment_app
+    from app.models.customer_finished_storage_preference import CustomerFinishedStoragePreference
+    from app.models.receipt_putaway import ProductStoragePreference
+    from app.models.warehouse_inventory import WarehouseArea
+    with factory() as db:
+        if preference:=db.get(ProductStoragePreference,1):db.delete(preference)
+        area=db.scalar(select(WarehouseArea).where(WarehouseArea.area_code=='FG-004'))
+        db.add(CustomerFinishedStoragePreference(customer_id=1,warehouse_area_id=area.id,priority=1))
+        db.commit()
+    with TestClient(app) as client:
+        receive(client)
+    with factory() as db:
+        job=db.scalar(select(Job))
+        output=db.get(InventoryLot,job.output_lot_id)
+        assert output.location.area_code=='FG-004'
+        assert db.get(ProductStoragePreference,job.product_id) is None
 
 
 def test_partial_audit_failure_rolls_back_and_zero_rejected(stock_replenishment_app,monkeypatch):

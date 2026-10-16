@@ -48,7 +48,6 @@ from app.services.requisition_quantities import (
 from app.services.warehouse_inventory import (
     SEMI_FINISHED_FLUTES_BY_LAYER,
     WarehouseInventoryError,
-    automatic_floor3_finished_turnover_location,
     automatic_raw_material_staging_location,
     manual_finished_in,
     manual_semi_finished_in,
@@ -1900,35 +1899,27 @@ def receive_replenishment_item(
             raise StockReplenishmentError(str(error), error.status_code) from error
     else:
         target = None
-        from app.services.receipt_putaway import resolve
-        from app.services.fixed_shelf import ShelfError
-        try:
-            receipt_target = resolve(db, product_id=finished_product.id if finished_product else None,
-                customer_id=item.customer_id or (finished_product.customer_id if finished_product else None), claim=True)
-        except ShelfError as exc:
-            raise StockReplenishmentError(str(exc), 409) from exc
-        if receipt_target is not None:
-            destination = receipt_target[0]
-        elif paperboard_finished:
-            try:
-                destination = automatic_floor3_finished_turnover_location(db)
-            except WarehouseInventoryError as error:
-                raise StockReplenishmentError(str(error), error.status_code) from error
-        elif external_finished and finished_product is not None:
+        receipt_target = None
+        if finished_product is not None:
             try:
                 from app.services.production_workflow import (
                     ProductionWorkflowError,
-                    _production_direct_finished_target,
+                    _receipt_auto_finished_ground_target,
                 )
-
-                destination, target = _production_direct_finished_target(
+                target = _receipt_auto_finished_ground_target(
                     db,
-                    customer_id=(item.customer_id or finished_product.customer_id),
+                    claim=True,
+                    customer_id=item.customer_id or finished_product.customer_id,
+                    product_id=finished_product.id,
+                )
+                destination = target.location
+                receipt_target = (
+                    destination,
+                    target.target_kind,
+                    target.capacity_warning,
                 )
             except ProductionWorkflowError as error:
-                raise StockReplenishmentError(
-                    str(error), error.status_code
-                ) from error
+                raise StockReplenishmentError(str(error), error.status_code) from error
         else:
             # Preserve receivability of historical non-liner finished rows only
             # through the explicit destination that was frozen on the row.
@@ -2005,8 +1996,7 @@ def receive_replenishment_item(
                 db,
                 customer_id=item.customer_id or product.customer_id,
                 product_id=product.id,
-                movement_reason=("待归位" if receipt_target and receipt_target[1]=="receipt_staging"
-                    else "自动入位" if receipt_target else "补库收料入库"),
+                movement_reason="自动入位" if receipt_target else "补库收料入库",
                 **common,
             )
             if physical_receipt is not None:

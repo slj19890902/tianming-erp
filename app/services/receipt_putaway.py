@@ -150,7 +150,8 @@ def remember_stocktake(db, lot, operator_id, *, follow_position=False):
         db.flush()
 
 
-def resolve(db, *, product_id=None, customer_id=None, claim=False, inventory_type="finished"):
+def resolve(db, *, product_id=None, customer_id=None, claim=False, inventory_type="finished",
+            require_configured=False):
     """None means installation has not yet configured the new receipt workflow."""
     staging_ids = set(db.scalars(select(ReceiptStagingArea.area_id)).all())
     warning = None
@@ -184,6 +185,11 @@ def resolve(db, *, product_id=None, customer_id=None, claim=False, inventory_typ
     for loc in candidates:
         if loc is None or location_issue(db, loc, inventory_type):
             continue
+        if pref is not None and pref.location_id is None and operational_location_issue(
+                db, loc, warehouse_types={inventory_type, 'shared'},
+                require_published=True, require_map_geometry=True,
+                required_inventory_type=inventory_type, require_empty=True):
+            continue
         # Existing exclusive picking bindings remain protected even in mixed cells.
         from app.models.fixed_shelf import ShelfBinding
         binding = db.get(ShelfBinding, loc.id)
@@ -197,7 +203,12 @@ def resolve(db, *, product_id=None, customer_id=None, claim=False, inventory_typ
         issue=location_issue(db,db.get(WarehouseLocation,pref.location_id),inventory_type)
         raise ShelfError(f"产品默认货位不可用：{issue or '固定货位被其他产品占用'}；请重新选择正式货位")
     if pref and not pref.location_id:
+        if pref.area_id:
+            raise ShelfError("产品指定区域当前没有可用的正式成品货位；请在常用箱中核对区域或选择具体货位")
         raise ShelfError("该产品默认货位已取消；请在本次收料前重新选择正式货位")
+    if product_id is not None and require_configured and inventory_type == 'finished':
+        # Historical stock (including raw staging) is not a saved destination.
+        return None
     if product_id is not None:
         existing=_existing_product_locations(db,product_id,customer_id,inventory_type)
         if len(existing)>1:

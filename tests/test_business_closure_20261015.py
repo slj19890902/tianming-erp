@@ -131,6 +131,12 @@ def test_bom_stock_replenishment_receipts_assemble_without_manual_post(stock_rep
     from app.core.receipt_price_guard import ReceiptPriceGuardSession
     app,factory=stock_replenishment_app;factory.class_=ReceiptPriceGuardSession
     policy=seed_two_component_plan(factory)
+    from app.models.customer_finished_storage_preference import CustomerFinishedStoragePreference
+    from app.models.warehouse_inventory import WarehouseArea
+    with factory() as db:
+        area=db.scalar(select(WarehouseArea).where(WarehouseArea.area_code=='FG-004'))
+        db.add(CustomerFinishedStoragePreference(customer_id=1,warehouse_area_id=area.id,priority=1))
+        db.commit()
     with TestClient(app) as client:
         login(client)
         preview=client.get(f'/api/requisition/stock-policies/{policy}/replenishment-draft',params={'finished_quantity':4})
@@ -157,3 +163,56 @@ def test_bom_stock_replenishment_receipts_assemble_without_manual_post(stock_rep
             output=db.get(InventoryLot,data['output_lot_id'])
             assert output.quantity_available==4 and output.quantity_reserved==0
             assert output.cost_snapshot_at is not None
+
+
+def test_bom_auto_assembly_never_borrows_another_replenishment_demand(stock_replenishment_app,monkeypatch):
+    from tests.test_stock_replenishment_save_recovery import seed_two_component_plan, login, PATH
+    from app.models.product import Product
+    from app.models.stock_replenishment import StockReplenishmentOrder,StockReplenishmentOrderItem
+    from app.services.stock_replenishment_plan import frozen_bom_plan
+    from app.services.stock_preparation_assembly import _plan_identity,preview as assembly_preview
+    from app.services import stock_preparation_processing
+    from app.core.receipt_price_guard import ReceiptPriceGuardSession
+    app,factory=stock_replenishment_app;factory.class_=ReceiptPriceGuardSession
+    policy=seed_two_component_plan(factory)
+    monkeypatch.setattr(stock_preparation_processing,'_auto_assemble_frozen_parent',lambda *args:None)
+    with TestClient(app) as client:
+        login(client)
+        draft=client.get(f'/api/requisition/stock-policies/{policy}/replenishment-draft',
+            params={'finished_quantity':4})
+        assert draft.status_code==200,draft.text
+        saved=client.post(PATH,json={**draft.json(),'idempotency_key':'scope-order',
+            'expected_actor_id':1})
+        assert saved.status_code==201,saved.text
+        items=saved.json()['items']
+        ids={row['id'] for row in items}
+        pending=[row for row in client.get('/api/requisition/pending').json()['items']
+            if row.get('stock_replenishment_item_id') in ids]
+        groups={}
+        for row in pending:
+            groups.setdefault(row['supplier_name'],[]).append(dict(
+                stock_replenishment_item_id=row['stock_replenishment_item_id'],
+                source_fingerprint=row['source_fingerprint']))
+        purchase=client.post('/api/requisition/supplier-orders/from-pending-selection',json={
+            'supplier_groups':[dict(supplier_name=name,request_key=f'scope-purchase-{index}',stock_sources=parts)
+                for index,(name,parts) in enumerate(groups.items())]})
+        assert purchase.status_code==201,purchase.text
+        for row in items:
+            result=client.put(f"/api/incoming/receive/sr{row['id']}",json={
+                'received_quantity':row['quantity'],'idempotency_key':f"scope-receipt-{row['id']}"})
+            assert result.status_code==200,result.text
+    with factory() as db:
+        rows=[db.get(StockReplenishmentOrderItem,row['id']) for row in items]
+        contract=frozen_bom_plan(rows[0])
+        parent=db.scalar(select(Product).where(Product.product_code=='RECOVERY-BOM-PARENT'))
+        scope=dict(order_id=rows[0].replenishment_order_id,parent_id=parent.id,
+            plan_hash=_plan_identity(contract),policy_id=contract['policy_id'],target_sets=4)
+        assert assembly_preview(db,parent.id,4,scope=scope)['available_sets']==4
+        other=StockReplenishmentOrder(order_number='SCOPE-OTHER',source_type='customer_request',
+            customer_id=1,status='confirmed')
+        db.add(other);db.flush()
+        rows[1].replenishment_order_id=other.id
+        db.flush()
+        scoped=assembly_preview(db,parent.id,4,scope=scope)
+        assert scoped['available_sets']==0
+        assert scoped['shortages']

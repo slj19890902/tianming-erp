@@ -23,6 +23,14 @@ def test_receipt_exceeds_single_staging_slot_preserves_conversion_cost_and_repla
     with TestClient(app) as client:
         _login(client,'admin')
         source=_create_frozen_sources(client,factory,order_quantity=500,purchase_total=600,order_purpose=500,stock_purpose=100)[0]
+        from app.models.receipt_putaway import ProductStoragePreference
+        from app.models.customer_finished_storage_preference import CustomerFinishedStoragePreference
+        with factory() as db:
+            area=db.scalar(select(WarehouseArea).where(WarehouseArea.area_code=='FIN-001'))
+            db.add(ProductStoragePreference(product_id=1,area_id=area.id,location_id=location_id,version=1))
+            for preference in db.scalars(select(CustomerFinishedStoragePreference)):
+                db.delete(preference)
+            db.commit()
         frozen=_freeze_receipt_fact(client,source,idempotency_key='putaway-price')
         assert frozen.status_code==200,frozen.text
         fact=frozen.json()

@@ -1744,9 +1744,13 @@ def _receive_stock_replenishment_one(
     # Only this real receipt transaction may create an explicit stock task.
     # Unified order raw plans and generic surplus retain their own workflow.
     from app.models.raw_purchase_plan import RawPurchasePlan
-    if not db.scalar(select(RawPurchasePlan.id).where(RawPurchasePlan.stock_item_id == item.id)):
+    if (lot.inventory_type == 'semi_finished' and not db.scalar(select(RawPurchasePlan.id).where(
+            RawPurchasePlan.stock_item_id == item.id))):
         from app.services.stock_preparation_processing import auto_complete_receipt
-        auto_complete_receipt(db, receipt_item, lot, user)
+        try:
+            auto_complete_receipt(db, receipt_item, lot, user)
+        except (WarehouseInventoryError, ProductionWorkflowError) as error:
+            raise IncomingReceiptError(str(error), error.status_code) from error
     from app.services.replenishment_receipt_progress import refresh_order_progress
     if resolution_status == "resolved" or cumulative >= planned:
         for pending in db.scalars(select(IncomingReceiptItem).where(

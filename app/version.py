@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.649"
-APP_VERSION_NAME = "客户标签与图号搜索优化"
+APP_VERSION = "v0.22.650"
+APP_VERSION_NAME = "收料自动成品与默认入位修复"
 APP_BUILD_DATE = "2026-10-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6350,3 +6350,17 @@ APP_VERIFICATION_STEPS = [
     "按v648标签验收步骤核对两类客户标题、产品标签与实际出纸；正式版本v0.22.649，数据库eq1015sa。",
 ]
 APP_CHANGELOG = [*(f"v0.22.649：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.650：明确产品收料自动成品及默认货位，无结构迁移。
+APP_CHANGES = [
+    "订单和补库的明确产品实收按冻结数量增量自动成品；冻结 BOM 子件齐套后在同一补库需求内自动组装父件。",
+    "成品依次进入常用箱具体货位、常用箱指定区域、客户成品区域；缺失或失效配置时明确提示，不把原料暂存位当成默认成品位。",
+    "分批收料沿用原来源、成本、预占及幂等保护；历史批次按已核实的实物位置单独处理。",
+]
+APP_VERIFICATION_STEPS = [
+    "查看80012632、80012410、80012411的历史待加工任务处理结果和成品货位；核对80010631剩余4430只在E2-1-1。",
+    "在有默认货位的明确产品小批量收料中核对新增成品、数量和位置；冻结BOM缺件时保留真实子件，齐套后只组一次。",
+    "未设产品或客户成品区域的产品试算应提示先设置位置，不应自动放到原纸暂存区；正式版本v0.22.650、数据库eq1015sa。",
+]
+APP_CHANGELOG = [*(f"v0.22.650：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

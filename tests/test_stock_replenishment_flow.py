@@ -1029,7 +1029,7 @@ def test_non_liner_replenishment_cannot_create_finished_inventory_directly(
     assert "只有正式识别为衬板" in response.text
 
 
-def test_liner_replenishment_receives_directly_into_floor3_temporary_turnover(
+def test_liner_replenishment_receives_at_product_default_location(
     stock_replenishment_app,
 ) -> None:
     app, session_factory = stock_replenishment_app
@@ -1065,6 +1065,21 @@ def test_liner_replenishment_receives_directly_into_floor3_temporary_turnover(
         item = created.json()["items"][0]
         assert item["product_id"] == liner["id"]
         assert item["reference_product_id"] == liner["id"]
+
+        from app.models.receipt_putaway import ProductStoragePreference
+        from app.models.warehouse_inventory import WarehouseArea, WarehouseLocation
+
+        with session_factory() as session:
+            destination = session.scalar(
+                select(WarehouseLocation).where(WarehouseLocation.location_code == "F3-FG-004-R01-L01-G01")
+            )
+            area = session.scalar(select(WarehouseArea).where(WarehouseArea.area_code == "FG-004"))
+            assert destination is not None and area is not None
+            session.add(ProductStoragePreference(
+                product_id=liner["id"], area_id=area.id,
+                location_id=destination.id, version=1,
+            ))
+            session.commit()
 
         # The already-created internal replenishment line is the stable routing
         # fact. A later common-box master change must not divert it into the
@@ -1146,8 +1161,8 @@ def test_liner_replenishment_receives_directly_into_floor3_temporary_turnover(
         assert lot.quantity_available == 32
         assert detail.inventory_code_snapshot == "LINER-001"
         assert location.warehouse_floor == 3
-        assert location.area_code == "F34"
-        assert location.location_code == "F34-P01"
+        assert location.area_code == "FG-004"
+        assert location.location_code == "F3-FG-004-R01-L01-G01"
         pallet = session.scalar(
             select(InventoryPallet).where(
                 InventoryPallet.location_id == location.id,
@@ -1155,8 +1170,8 @@ def test_liner_replenishment_receives_directly_into_floor3_temporary_turnover(
             )
         )
         assert pallet is not None
-        assert pallet.needs_relocation is True
-        assert session.scalar(select(func.count(WarehouseGroundOccupancy.id))) == 0
+        assert pallet.needs_relocation is False
+        assert session.scalar(select(func.count(WarehouseGroundOccupancy.id))) == 1
         assert session.scalar(select(func.count(InventoryLot.id))) == 1
         assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
         assert session.scalar(

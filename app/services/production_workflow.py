@@ -2089,7 +2089,8 @@ def _receipt_auto_finished_ground_target(
     from app.services.fixed_shelf import ShelfError
     try:
         resolved = resolve(db, product_id=product_id, customer_id=customer_id, claim=claim,
-            inventory_type=inventory_type)
+            inventory_type=inventory_type,
+            require_configured=product_id is not None and inventory_type == "finished")
     except ShelfError as exc:
         raise ProductionWorkflowError(str(exc), 409) from exc
     if resolved is not None:
@@ -2101,6 +2102,11 @@ def _receipt_auto_finished_ground_target(
         customer_id is not None
         and ordered_preferred_area_ids(db, int(customer_id))
     )
+    if product_id is not None and inventory_type == "finished" and not has_customer_preferences:
+        raise ProductionWorkflowError(
+            "产品未设置正式默认货位或区域，客户也未设置成品存放区域；请先在常用箱或客户资料中设置",
+            409,
+        )
     if product_id is not None and not has_customer_preferences:
         from app.services.fixed_shelf import incoming_primary_location, ShelfError
         try:

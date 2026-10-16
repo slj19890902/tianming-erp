@@ -1368,6 +1368,11 @@ def post_receipt_purpose_allocation(
                 "地堆位置",
                 "一楼原料区域",
                 "真实排位",
+                "产品默认货位",
+                "产品指定区域",
+                "客户指定区域",
+                "正式成品货位",
+                "成品存放区域",
             )
             code = (
                 "AUTO_FINISHED_LOCATION_UNAVAILABLE"

@@ -22,7 +22,7 @@ def _plan_identity(plan):
             for c in plan['components']],key=lambda c:c['product_id'])))
 
 
-def _recipe(db,parent_id,jobs):
+def _recipe(db,parent_id,jobs,*,required_plan_hash=None):
     parent=db.get(Product,parent_id)
     if not parent or not parent.is_active or parent.deleted_at or not parent.is_composite:
         prep.fail('组合产品已失效，请核对')
@@ -34,9 +34,12 @@ def _recipe(db,parent_id,jobs):
     for job in jobs:
         snapshot=json.loads(job.product_snapshot)
         plan=snapshot.get('frozen_bom_plan')
-        if plan and plan.get('parent_product_id')==parent_id:
+        if plan and plan.get('parent_product_id')==parent_id and (
+                required_plan_hash is None or _plan_identity(plan)==required_plan_hash):
             plans.append((plan,snapshot.get('bom_parent_basis')))
-    if plans and not (parent_profile and parent_profile.source == 'assembled'):
+    if required_plan_hash is not None and not plans:
+        prep.fail('本补库需求没有可用的冻结BOM子件，请核对原任务')
+    if plans and (required_plan_hash is not None or not (parent_profile and parent_profile.source == 'assembled')):
         # Explicit current stock assembly uses today's validated master recipe;
         # an old replenishment job is provenance, not a hidden recipe selector.
         # Frozen order assembly and legacy-only contracts keep their own path.
@@ -121,12 +124,12 @@ def assembly_outputs(db, *, product_id, customer_id, expected_basis):
     return sorted({lot.id:lot for lot in rows}.values(), key=lambda lot:(str(lot.stock_date or ''),lot.id))
 
 
-def preview(db,parent_id,sets,*,_dedicated_only=False):
+def preview(db,parent_id,sets,*,_dedicated_only=False,scope=None):
     parent=db.get(Product,parent_id)
     if not parent:
         prep.fail('组合产品不存在')
     from app.models.shared_finished_stock import SharedBomMember
-    if not _dedicated_only and db.get(SharedBomMember,parent_id):
+    if scope is None and not _dedicated_only and db.get(SharedBomMember,parent_id):
         # A shared-stock declaration adds optional sources. It must not force
         # an extra confirmation before consuming this customer's exact SKU.
         dedicated=preview(db,parent_id,sets,_dedicated_only=True)
@@ -149,6 +152,13 @@ def preview(db,parent_id,sets,*,_dedicated_only=False):
         .where(Job.status=='completed',InventoryLot.status=='active',InventoryLot.quantity_available>0)
         .order_by(Job.id).distinct())
     for job in candidates:
+        if scope is not None:
+            from app.models.incoming_receipt import IncomingReceiptItem
+            from app.models.stock_replenishment import StockReplenishmentOrderItem
+            receipt=db.get(IncomingReceiptItem,job.receipt_item_id)
+            stock_item=db.get(StockReplenishmentOrderItem,receipt.stock_replenishment_item_id) if receipt else None
+            if not stock_item or stock_item.replenishment_order_id!=scope['order_id']:
+                continue
         try:
             snapshot=json.loads(job.product_snapshot)
         except (ValueError,TypeError):
@@ -156,6 +166,10 @@ def preview(db,parent_id,sets,*,_dedicated_only=False):
                 excluded.append(dict(job_id=job.id,reason='历史子件身份不完整，请核对'))
             continue
         contract=snapshot.get('frozen_bom_plan')
+        if scope is not None and (not contract or _plan_identity(contract)!=scope['plan_hash']
+                or int(contract.get('policy_id') or 0)!=scope['policy_id']
+                or int(contract.get('finished_quantity') or 0)!=scope['target_sets']):
+            continue
         if contract and contract.get('parent_product_id')!=parent_id:
             continue
         if not contract and job.product_id not in child_ids:
@@ -166,7 +180,9 @@ def preview(db,parent_id,sets,*,_dedicated_only=False):
                 customer_id=parent.customer_id,expected_basis=snapshot.get('physical_basis'))
         if any(l.source_ref_type=='stock_preparation' and l.source_ref_id==job.id for l in eligible[identity_key]):
             jobs.append(job)
-    recipe=_recipe(db,parent_id,jobs)
+    recipe=_recipe(db,parent_id,jobs,required_plan_hash=scope['plan_hash'] if scope else None)
+    if scope is not None:
+        child_ids={row['product_id'] for row in recipe['children']}
     by_product=defaultdict(list)
     jobs_by_id={job.id:job for job in jobs}
     basis_by_product={}
@@ -185,6 +201,8 @@ def preview(db,parent_id,sets,*,_dedicated_only=False):
         # retained as provenance when present, but is no longer a prerequisite.
         for lot in assembly_outputs(db,product_id=pid,customer_id=parent.customer_id,expected_basis=expected):
             job=(jobs_by_id.get(lot.source_ref_id) if lot.source_ref_type=='stock_preparation' else None)
+            if scope is not None and job is None:
+                continue
             by_product[pid].append((job,lot,expected))
     # Do not hide a known child lot merely because its identity is incomplete.
     # It stays excluded and visible for an auditable ERP confirmation.
@@ -256,6 +274,8 @@ def preview(db,parent_id,sets,*,_dedicated_only=False):
         output_unit=unit_name(json.loads(recipe['parent_basis']).get('unit'), composite=True)[0],
         available_sets=min(capacities,default=0),shortages=shortages,excluded_sources=excluded,
         component_availability=component_availability,excluded_recipes=recipe.get('excluded_recipes',[]))
+    if scope is not None:
+        result['scope']=scope
     result['basis_hash']=digest(result)
     return result
 
@@ -265,7 +285,7 @@ def assemble_stock(db,payload,actor):
     if old:
         if old.actor_id!=actor.id or old.request_json!=request:prep.fail('操作标识已用于其他内容')
         return json.loads(old.result_json)
-    plan=preview(db,payload['parent_id'],payload['sets'])
+    plan=preview(db,payload['parent_id'],payload['sets'],scope=payload.get('scope'))
     if payload['basis_hash']!=plan['basis_hash']:prep.fail('子件、配比或库存已变化，请重新预览')
     if plan['shortages'] or not plan['sources']:prep.fail('子件不足，不能组套')
     submitted={(v.get('job_id'),v.get('lot_id')):(v.get('job_version',0),v['output_version']) for v in payload['jobs']}

@@ -41,6 +41,20 @@ class BuildSourceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 source_snapshot(self.root, version, revision)
 
+    def test_exact_commit_excludes_dirty_worktree_and_rejects_mutable_refs(self):
+        pinned = self.git('rev-parse', 'HEAD').decode().strip()
+        self.write('app/version.py', 'APP_VERSION = "dirty-other-task"\n')
+        self.write('another-task.py', 'raise RuntimeError("not published")\n')
+        commit, sources = source_snapshot(self.root, 'v2', 'b', commit=pinned)
+        self.assertEqual(commit, pinned)
+        self.assertEqual(sources['app/version.py'], b'APP_VERSION = "v2"\n')
+        self.assertNotIn('another-task.py', sources)
+        for value in ('HEAD', pinned[:8], '--all'):
+            with self.assertRaises(ValueError):
+                source_snapshot(self.root, 'v2', 'b', commit=value)
+        with self.assertRaises(ValueError):
+            source_snapshot(self.root, 'dirty-other-task', 'b', commit=pinned)
+
     def test_dirty_tracked_or_untracked_source(self):
         self.write('app/version.py', 'APP_VERSION = "v3"\n')
         with self.assertRaises(ValueError):

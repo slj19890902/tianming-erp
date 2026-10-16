@@ -3413,6 +3413,7 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
                 ),
                 DeliveryItem.unit_snapshot,
                 DeliveryItem.quantity_contract_json,
+                DeliveryItem.customer_document_snapshot_json,
                 OrderItem.snapshot_production_notes.label("production_notes"),
         )
         .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
@@ -3431,6 +3432,15 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
     result: list[dict] = []
     for row in rows:
         mapping = dict(row._mapping)
+        from app.services.customer_document_fields import decode_snapshot
+        try:
+            identity = decode_snapshot(mapping.pop("customer_document_snapshot_json", None))
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        mapping["customer_category"] = (identity or {}).get("customer_category")
+        mapping["customer_category_unresolved"] = bool(
+            identity and "customer_category" in identity.get("conflicts", [])
+        )
         mapping["specification"] = resolved_product_specification(
             mapping.pop("delivery_specification_snapshot", None),
             fallback_snapshots=(

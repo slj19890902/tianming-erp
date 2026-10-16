@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.644"
-APP_VERSION_NAME = "盘点入口与待认领入库收口"
+APP_VERSION = "v0.22.645"
+APP_VERSION_NAME = "送货类别与受管维护收口"
 APP_BUILD_DATE = "2026-10-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6282,3 +6282,17 @@ APP_VERIFICATION_STEPS = [
     "有实际待认领货物时从原管理员入口预览并登记，核对原件规格和参考成本；之后认领仍按真实产品核对。",
 ]
 APP_CHANGELOG = [*(f"v0.22.644：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.645：独立送货类别与维护候选，无结构迁移。
+APP_CHANGES = [
+    "送货明细显示本单冻结的客户类别；新建送货遇旧订单未知类别时只采用同产品已明确维护的类别，已有类别和明确空白仍保留。",
+    "正式业务控制台日志按8MiB、3份轮转；日志存储异常单独告警，不让控制台输出阻塞业务线程。",
+    "Mac冷启动在最终执行边界完整核验一次当前不可变程序，去掉同一启动调用中的重复核验；系统授权、迁移、兼容及实物保护检查保留。",
+    "成功更新的已验证恢复副本按原回执尝试收尾；权限或引用不能证明时保留并告警，不把健康业务改成发布失败。",
+]
+APP_VERIFICATION_STEPS = [
+    "打开YG-20261015-001明细，核对80012130客户类别BT；打印中图号7942511、数量30保持。",
+    "系统版本核对v0.22.645；原库存、订单和送货金额保持，打印/实机页面结果仍由管理员验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.645：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

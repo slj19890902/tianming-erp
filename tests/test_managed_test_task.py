@@ -59,3 +59,24 @@ def test_pytest_setup_preserves_managed_isolation(source,tmp_path,monkeypatch):
     result=run_task.run_task(source,tmp_path/'runs',[sys.executable,'-c',program])
     assert result['returncode']==0, (Path(result['job'])/'stderr.log').read_text()
     assert result['cleanup']=='removed'
+
+
+def test_child_stdin_is_closed_and_wait_timeout_preserves_live_copy(source,tmp_path,monkeypatch):
+    monkeypatch.setattr('desktop_assistant.cleanup.assert_idle',lambda p:None)
+    eof=run_task.run_task(source,tmp_path/'eof',[sys.executable,'-c','import sys; assert sys.stdin.read()==""'],timeout_seconds=3)
+    assert eof['returncode']==0
+    timed=run_task.run_task(source,tmp_path/'bounded',[sys.executable,'-c','import time;time.sleep(.3)'],timeout_seconds=.05)
+    assert timed['status']=='timed_out' and timed['returncode']==124
+    assert Path(timed['copies']).exists()
+    import psutil
+    try:psutil.Process(timed['pid']).wait(timeout=3)
+    except psutil.NoSuchProcess:pass
+
+
+def test_task_copies_the_selected_published_map_instead_of_the_seed(source,tmp_path,monkeypatch):
+    monkeypatch.setattr('desktop_assistant.cleanup.assert_idle',lambda p:None)
+    layout=tmp_path/'published.json';layout.write_text('{"published_probe":"kept"}')
+    result=run_task.run_task(source,tmp_path/'map',[sys.executable,'-c','pass'],keep_copy=True,layout_source=layout)
+    assert result['returncode']==0
+    copies=Path(result['copies']);paths=list(copies.rglob('twin_layout_v1.json'))
+    assert paths and any(p.read_bytes()==layout.read_bytes() for p in paths)

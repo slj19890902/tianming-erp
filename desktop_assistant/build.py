@@ -26,6 +26,18 @@ def remove_transient_build_trees(output: Path) -> None:
             raise ValueError(f"构建临时目录不得为链接: {path}")
         if path.exists():
             shutil.rmtree(path)
+    # Only reproducible transient trees are removed. Signed/unsigned candidates
+    # and verification records remain until their release/acceptance is closed.
+    try:
+        free = shutil.disk_usage(output).free
+        write_json(output / 'build-retention.json', {
+            'type': 'tianming.build-retention.v1', 'transient_trees_removed': True,
+            'candidate_retained': True, 'manual_acceptance': 'pending',
+            'free_bytes': free, 'low_space': free < 60 * 1024**3,
+            'warning': '低空间时先审查已关闭任务；不得删除恢复依赖或降低发布准入' if free < 60 * 1024**3 else None,
+        })
+    except OSError:
+        pass  # A completed package remains successful if housekeeping reporting fails.
 
 
 def runtime_copy_ignore(_directory, names):
@@ -34,11 +46,22 @@ def runtime_copy_ignore(_directory, names):
     return {name for name in names if name in rebuilt}
 
 
-def source_snapshot(root, version, revision):
+def source_snapshot(root, version, revision, *, commit=None):
     """Bind metadata and every source byte to one committed Git tree."""
-    if subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=all'], cwd=root):
+    if commit is None and subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=all'], cwd=root):
         raise ValueError('构建前请提交源码改动，工作区必须干净')
-    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    if commit is None:
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    else:
+        # A separate committed candidate can be built without staging/stashing
+        # another task's work or copying a second checkout. Mutable refs and
+        # worktree bytes are never included in this explicit mode.
+        import re
+        if not isinstance(commit, str) or not re.fullmatch('[0-9a-f]{40}', commit):
+            raise ValueError('独立候选必须指定完整不可变Git提交摘要')
+        resolved = subprocess.check_output(['git', 'rev-parse', '--verify', commit + '^{commit}'], cwd=root, text=True).strip()
+        if resolved != commit:
+            raise ValueError('候选提交身份不符')
     raw = subprocess.check_output(['git', '-c', 'core.autocrlf=false', '-c', 'core.eol=lf',
                                    'archive', '--format=zip', commit], cwd=root)
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:

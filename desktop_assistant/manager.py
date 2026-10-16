@@ -486,9 +486,10 @@ class Manager:
         state = self.state
         if not state.get('current'):
             raise ValueError('尚未接入或恢复ERP数据')
-        python = self._runtime_python(state['current'])
         from desktop_assistant.mac_published_runtime import selected as service_selected
-        if service_selected():
+        system_execution = service_selected()
+        python = None if system_execution else self._runtime_python(state['current'])
+        if system_execution:
             from desktop_assistant.mac_system_service import check_start
             check_start()
             from desktop_assistant.mac_factory_runtime import configuration, require_factory_service
@@ -499,6 +500,8 @@ class Manager:
         self._check_physical_kit_reader(state['current'])
         running = self._process()
         if running:
+            if python is None:
+                python = self._runtime_python(state['current'])
             expected = python
             if Path(running[1]['exe']).resolve() != expected.resolve():
                 raise ValueError('运行程序与已核对版本不一致，未接管或停止其他进程')
@@ -507,7 +510,14 @@ class Manager:
             raise ValueError('首次接入尚未完成完整备份，请点击“完成首次接入”后再启动')
         if state.get('operation') in ('migration_running', 'migration_failed'):
             raise ValueError('上次数据库升级未完成，先核对现场或从已验证备份恢复到空安装，不能直接启动')
-        release = self._execution_release(state['current'])
+        if system_execution:
+            # Authenticate the complete immutable tree once, at the final
+            # execution boundary. _runtime_python() used to authenticate this
+            # very same server tree once more before the non-executing gates.
+            release, manifest = self._published_release(state['current'])
+            python = runtime_python(release, manifest, runnable=True)
+        else:
+            release = self._execution_release(state['current'])
         info = database_info(self.root / 'shared/data/carton_erp.sqlite3')
         if not self.compatible(state['current'], info['revision']):
             raise ValueError('程序与数据库版本不同，须先完成专项迁移演练')

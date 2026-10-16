@@ -148,6 +148,20 @@ def after_update(manager, archive_dir: Path) -> None:
         report = cleanup_releases(manager, archive_dir)
     except Exception as error:
         report = {'error': str(error), 'removed_releases': [], 'removed_packages': []}
+    if manager.state.get('backup_work_retained'):
+        try:
+            from desktop_assistant import local_backup_only as local
+            from desktop_assistant.retained_recovery_cleanup import close_locked
+            if not local.enabled(manager):
+                raise ValueError('retained recovery is outside the explicit local policy')
+            _, owner, _ = local._authority()
+            report['recovery_copy_cleanup'] = close_locked(
+                manager, owner, manager.state['current'],
+                verify_cipher=local._check_proof,
+                healthy=lambda: manager._process() is not None,
+            )
+        except Exception as error:
+            report['recovery_copy_cleanup'] = {'status': 'retained', 'reason': str(error)}
     try:
         write_json(manager.root / 'control' / 'retention-latest.json', report)
     except OSError:

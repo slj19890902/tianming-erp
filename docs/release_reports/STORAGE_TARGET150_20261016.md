@@ -40,3 +40,5 @@ Mac长期空间规则已写入docs/storage_retention.md，并由AGENTS.md固定�
 
 机器汇总：/Users/kimiyf/ERP-Migration/evidence/storage-target150-20261016/summary.json。
 原受保护逐项记录：/Library/TianmingERP-StorageTarget150-20261016/result-r3.json、result-r4.json。对应本地只读副本保存在上述evidence目录。管理员授权仅用于本次受限维护，未读取或保存管理员密码。
+
+交付复测：清理事务结束后，另一个任务已开始创建v647程序和发布目录；本轮未触碰该活动任务。此时实际可用160.19GiB，仍超过150GiB。上表164.95GiB是本次清理结束时的测量，不代表后续新发布永远不占空间；新任务也须按同一收尾规则回收其技术副本。

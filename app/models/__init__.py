@@ -99,6 +99,9 @@ from app.models.delivery import (  # noqa: E402,F401
     DeliveryPickTask,
     DeliveryPickTaskItem,
 )
+from app.models.unordered_delivery_order_attribution import (  # noqa: E402,F401
+    UnorderedDeliveryOrderAttribution,
+)
 from app.models.material_mapping import MaterialCodeMappingCandidate  # noqa: E402,F401
 from app.models.material_price_history import (  # noqa: E402,F401
     MaterialPriceAdjustmentBatch,

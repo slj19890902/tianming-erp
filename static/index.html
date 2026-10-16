@@ -8552,7 +8552,7 @@
                 </table>
                 <table v-if="finishedInventoryReservations.length" style="margin-top:10px">
                   <thead><tr><th>库存批次</th><th>预占实物数量</th><th>抵扣客户数量</th><th>状态</th><th>预占时间</th><th>操作</th></tr></thead>
-                  <tbody><tr v-for="reservation in finishedInventoryReservations" :key="reservation.id"><td>{{ reservation.lot_number }}</td><td>{{ reservation.reserved_stock_quantity }}</td><td><span v-if="reservation.requirement_quantity_denominator>1 && !Number.isInteger(reservation.credited_requirement_quantity)">{{ reservation.credited_requirement_quantity_numerator }}/{{ reservation.requirement_quantity_denominator }}</span><span v-else>{{ reservation.credited_requirement_quantity }}</span></td><td>{{ reservation.status }}</td><td>{{ formatDateTime(reservation.reserved_at) }}</td><td><button v-if="reservation.status==='active' && canSales && canReserveFinishedForOrderItem(orderItemForm)" type="button" class="btn small danger" :disabled="finishedReservationActionBlocked()" @click="releaseFinishedInventoryReservation(reservation)">{{ finishedReservationActionLabel("release",reservation) }}</button></td></tr></tbody>
+                  <tbody><tr v-for="reservation in finishedInventoryReservations" :key="reservation.id"><td>{{ reservation.lot_number }}</td><td>{{ reservation.reserved_stock_quantity }}</td><td><span v-if="reservation.requirement_quantity_denominator>1 && !Number.isInteger(reservation.credited_requirement_quantity)">{{ reservation.credited_requirement_quantity_numerator }}/{{ reservation.requirement_quantity_denominator }}</span><span v-else>{{ reservation.credited_requirement_quantity }}</span></td><td>{{ reservation.status }}</td><td>{{ formatDateTime(reservation.reserved_at) }}</td><td><button v-if="canSales && Number(reservation.reserved_stock_quantity || 0) > Number(reservation.consumed_stock_quantity || 0) + Number(reservation.released_stock_quantity || 0)" type="button" class="btn small danger" :disabled="finishedReservationActionBlocked()" @click="releaseFinishedInventoryReservation(reservation)">{{ finishedReservationActionLabel("release",reservation) }}</button></td></tr></tbody>
                 </table>
               </div>
               <div v-if="orderItemForm.product_id" class="panel" style="margin-top:10px;padding:10px">
@@ -36208,7 +36208,7 @@
               this.orderItemForm = {
                 id:itemSnapshot.id, product_id:itemSnapshot.product_id || null, order_number:this.displayOrderNumber(orderSnapshot),
                 customer_name:orderSnapshot.customer_name || "", product_code:itemSnapshot.snapshot_product_code || "",
-                product_name:itemSnapshot.snapshot_product_name || "", material:itemSnapshot.display_material || this.displayMaterialText(itemSnapshot.snapshot_material) || "",
+                product_name:itemSnapshot.snapshot_product_name || "", material:itemSnapshot.snapshot_material || "",
                 specification:this.orderSpecificationText(itemSnapshot.snapshot_spec, ""), production_notes:itemSnapshot.snapshot_production_notes || "",
                 quantity:itemSnapshot.quantity, unit_price:this.money(itemSnapshot.unit_price),
                 bom_production_expected_revision:Number(itemSnapshot.bom_production_revision || 0),
@@ -36246,7 +36246,7 @@
                 sync_product:false,
                 _product_error:"",
                 _material_supplier: mat?.supplier_name || itemSnapshot.snapshot_supplier_name || product.material_supplier_name || "",
-                _material_display: mat ? this.buildMaterialDisplay(mat) : (itemSnapshot.display_material || ""),
+                _material_display: mat ? this.buildMaterialDisplay(mat) : (itemSnapshot.snapshot_material || ""),
                 _report_crease_touched:false,
                 _report_dims_manual:false,
                 _crease_dims_manual:false,
@@ -41115,7 +41115,9 @@
                 delete payload._bom_loading;
                 delete payload._bom_error;
                 if (!Number.isInteger(Number(payload.quantity)) || Number(payload.quantity) <= 0) throw new Error("实际数量必须是大于0的整数");
-                payload.material = this.orderItemForm._material_display || this.orderItemForm.material || null;
+                payload.material = this.orderItemForm.material_id
+                  ? (this.orderItemForm._material_display || this.orderItemForm.material || null)
+                  : (this.orderItemForm.material || null);
                 payload.material_id = this.orderItemForm.material_id || null;
                 payload.layer_count = this.orderItemForm.layer_count || null;
                 payload.flute_type = this.orderItemForm.flute_type || null;

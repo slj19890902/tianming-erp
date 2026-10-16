@@ -1208,6 +1208,12 @@ def list_external_purchase_routing_rows(
     )
     if visible_customer_ids is not None:
         statement = statement.where(Order.customer_id.in_(visible_customer_ids))
+    from app.services.warehouse_inventory import active_finished_reservations_by_item_ids
+
+    rows = db.execute(statement).all()
+    coverage = active_finished_reservations_by_item_ids(
+        db, [int(row.order_item_id) for row in rows]
+    )
     return [
         {
             "id": int(row.order_id),
@@ -1230,9 +1236,19 @@ def list_external_purchase_routing_rows(
             ),
             "purchase_unit": row.external_packaging_purchase_unit_snapshot,
             "component_count": int(row.component_count),
+            "finished_inventory_coverage": min(
+                int(row.quantity), int(coverage.get(int(row.order_item_id), 0))
+            ),
+            "remaining_purchase_requirement": max(
+                int(row.quantity) - int(coverage.get(int(row.order_item_id), 0)), 0
+            ),
             "status": "pending_confirmation",
         }
-        for row in db.execute(statement).all()
+        for row in rows
+        if not (
+            row.supply_mode_snapshot == "external_purchase"
+            and int(coverage.get(int(row.order_item_id), 0)) >= int(row.quantity)
+        )
     ]
 
 
@@ -1591,10 +1607,26 @@ def refresh_pending_external_purchase_candidates(
 def _graph_purchase_quantities(db, components, order_items):
     from app.services.multilevel_bom_external_identity import frozen_purchase_quantities
     from app.services.multilevel_bom_plan import BomPlanError
+    from app.services.warehouse_inventory import active_finished_reservations_by_item_ids
     try:
-        return frozen_purchase_quantities(db, components, order_items)
+        result = frozen_purchase_quantities(db, components, order_items)
     except BomPlanError as error:
         raise ExternalPurchaseContractError(str(error), status_code=409) from error
+    direct = [
+        row for row in components
+        if row.source_kind == "direct_product"
+        and row.id not in result
+        and order_items[row.sales_order_item_id].supply_mode_snapshot == "external_purchase"
+    ]
+    if direct:
+        coverage = active_finished_reservations_by_item_ids(
+            db, list({row.sales_order_item_id for row in direct})
+        )
+        for component in direct:
+            item = order_items[component.sales_order_item_id]
+            uncovered = max(int(item.quantity) - int(coverage.get(item.id, 0)), 0)
+            result[component.id] = _suggested_quantity(component, uncovered)
+    return result
 
 
 def _suggested_quantity(

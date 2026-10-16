@@ -121,6 +121,116 @@ def _seed_price(
         db.commit()
 
 
+def test_direct_external_purchase_uses_only_uncovered_quantity(
+    routing_app: FastAPI,
+) -> None:
+    """A reserved box cannot also become a supplier purchase requirement."""
+    from datetime import datetime
+
+    from app.models.order import OrderItem
+    from app.models.warehouse_inventory import InventoryLot, InventoryReservation, WarehouseLocation
+
+    ids = routing_app.state.fixture
+    with TestClient(routing_app) as client:
+        _login(client, "p1-40a-admin")
+        created = client.post(
+            "/api/master/products",
+            json=_external_payload(
+                ids,
+                candidates=[{"external_product_id": ids["CG-870-A"], "is_default": True}],
+            ),
+        )
+        assert created.status_code == 201, created.text
+        _seed_price(routing_app, ids["CG-870-A"])
+        order = client.post(
+            "/api/orders",
+            json=_order_payload_for(created.json()["id"], ids["customer_a"]),
+        )
+        assert order.status_code == 201, order.text
+        order_id = order.json()["id"]
+        with routing_app.state.factory() as db:
+            item = db.scalar(select(OrderItem).where(OrderItem.order_id == order_id))
+            location = WarehouseLocation(
+                location_code="EXT-CREDIT-01",
+                location_name="外购库存测试位",
+                warehouse_type="finished",
+            )
+            db.add(location)
+            db.flush()
+            lot = InventoryLot(
+                lot_number="EXT-CREDIT-LOT",
+                inventory_type="finished",
+                warehouse_location_id=location.id,
+                quantity_available=60,
+                quantity_reserved=40,
+                unit="boxes",
+                status="active",
+                source_type="stocktake",
+                stock_date=date(2026, 8, 11),
+                last_movement_at=datetime(2026, 8, 11),
+            )
+            db.add(lot)
+            db.flush()
+            reservation = InventoryReservation(
+                reservation_number="EXT-CREDIT-RESERVE",
+                inventory_lot_id=lot.id,
+                reservation_type="finished_order",
+                order_id=order_id,
+                order_item_id=item.id,
+                reserved_stock_quantity=40,
+                credited_requirement_quantity=40,
+                idempotency_key="ext-credit-reserve",
+                status="active",
+                reserved_at=datetime(2026, 8, 11),
+            )
+            db.add(reservation)
+            db.commit()
+            item_id = item.id
+
+        pending = client.get("/api/external-packaging-purchases/pending-confirmations")
+        assert pending.status_code == 200
+        row = next(row for row in pending.json()["items"] if row["order_item_id"] == item_id)
+        assert row["finished_inventory_coverage"] == 40
+        assert row["remaining_purchase_requirement"] == 60
+        preview = client.get(f"/api/orders/{order_id}/external-packaging-purchase")
+        assert preview.status_code == 200
+        assert preview.json()["items"][0]["suggested_purchase_quantity"] == "120"
+
+        saved = client.put(
+            f"/api/orders/items/{item_id}",
+            json={
+                "quantity": 100,
+                "unit_price": "2.50",
+                "product_code": created.json()["product_code"],
+                "product_name": created.json()["product_name"],
+                "material": "-",
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        with routing_app.state.factory() as db:
+            assert db.get(OrderItem, item_id).snapshot_material is None
+
+        with routing_app.state.factory() as db:
+            item = db.get(OrderItem, item_id)
+            reservation = db.scalar(
+                select(InventoryReservation).where(InventoryReservation.order_item_id == item_id)
+            )
+            reservation.reserved_stock_quantity = 100
+            reservation.credited_requirement_quantity = 100
+            db.commit()
+
+        covered = client.get(f"/api/orders/{order_id}/external-packaging-purchase")
+        assert covered.status_code == 200
+        assert covered.json()["status"] == "stock_covered"
+        assert covered.json()["items"] == []
+        assert not any(
+            row["order_item_id"] == item_id
+            for row in client.get(
+                "/api/external-packaging-purchases/pending-confirmations"
+            ).json()["items"]
+        )
+
+
 def test_direct_external_order_freezes_routes_skips_production_and_confirms(
     routing_app: FastAPI,
 ) -> None:

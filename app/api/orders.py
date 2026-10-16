@@ -9140,6 +9140,17 @@ def update_order_item(
     )
     _lock_orders_for_production_transition(db,[item.order_id])
     db.refresh(item)
+    # Older direct-purchase rows can have an empty material snapshot while the
+    # editor renders that empty value as "-".  It is a display placeholder,
+    # never a material change or a value to write back to the frozen order.
+    if (
+        item.supply_mode_snapshot == "external_purchase"
+        and item.material_id is None
+        and (item.snapshot_material or "").strip() in ("", "-")
+        and payload.material_id is None
+        and (payload.material or "").strip() == "-"
+    ):
+        payload.material = item.snapshot_material
     from app.services.order_status_policy import order_status_allows_item_fulfillment
     if not order_status_allows_item_fulfillment(order_for_scope.status) or item.is_force_closed:
         raise HTTPException(status_code=409, detail="订单或明细已作废、关闭或完成，不能修改订单明细")
@@ -9237,7 +9248,10 @@ def update_order_item(
                 "请先取消成品库存抵扣"
             ),
         )
-    if item.requisition_status != "未报料":
+    if item.requisition_status != "未报料" and not (
+        item.supply_mode_snapshot == "external_purchase"
+        and item.requisition_status == "外购包材待确认"
+    ):
         raise HTTPException(status_code=409, detail="请先取消报料再修改订单明细")
     if has_unconsumed_inventory_reservations(db, item.id):
         sensitive_changes = []

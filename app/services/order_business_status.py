@@ -12,6 +12,7 @@ from sqlalchemy import Row, event, func, or_, select
 from sqlalchemy.orm import Session, load_only, selectinload
 
 from app.models.delivery import Delivery, DeliveryItem
+from app.models.unordered_delivery_order_attribution import UnorderedDeliveryOrderAttribution
 from app.models.external_packaging_purchase import (
     ExternalPackagingPurchaseBatch,
     ExternalPackagingPurchaseCancellation,
@@ -561,6 +562,28 @@ def build_order_business_statuses(
             ):
                 dispatched_rows_by_item[int(order_item_id)].append(
                     (int(delivery_item_id), int(delivery_id), int(quantity or 0))
+                )
+            for delivery_item_id, order_item_id, delivery_id, quantity in db.execute(
+                select(
+                    DeliveryItem.id,
+                    UnorderedDeliveryOrderAttribution.order_item_id,
+                    Delivery.id,
+                    UnorderedDeliveryOrderAttribution.quantity,
+                )
+                .join(
+                    DeliveryItem,
+                    DeliveryItem.id == UnorderedDeliveryOrderAttribution.delivery_item_id,
+                )
+                .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+                .where(
+                    UnorderedDeliveryOrderAttribution.order_item_id.in_(item_id_chunk),
+                    DeliveryItem.is_current.is_(True),
+                    DeliveryItem.source_type == "unordered_finished",
+                    Delivery.status == "dispatched",
+                )
+            ):
+                dispatched_rows_by_item[int(order_item_id)].append(
+                    (int(delivery_item_id), int(delivery_id), int(quantity))
                 )
 
     dispatched_delivery_item_ids = sorted(

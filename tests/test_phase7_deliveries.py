@@ -15,6 +15,15 @@ from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 
+def test_unordered_priority_counts_open_order_even_when_picker_has_no_ready_row(delivery_api_app) -> None:
+    from app.api.deliveries import _pending_order_quantities_by_product_code
+    app, factory = delivery_api_app
+    with factory() as db:
+        pending = _pending_order_quantities_by_product_code(db, customer_id=1)
+    assert pending['sme-001'] >= 80
+    assert pending['sme-002'] >= 150
+
+
 @pytest.fixture()
 def delivery_api_app(tmp_path: Path):
     from app.api.auth import router as auth_router

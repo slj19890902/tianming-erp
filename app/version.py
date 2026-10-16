@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.652"
-APP_VERSION_NAME = "单品 BOM 展示与常用箱保存修复"
+APP_VERSION = "v0.22.653"
+APP_VERSION_NAME = "包材订单库存抵扣与送货闭环修复"
 APP_BUILD_DATE = "2026-10-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6393,3 +6393,19 @@ APP_VERIFICATION_STEPS = [
     "核对正式版本 v0.22.652、数据库 revision 仍为 eq1015sa；历史订单、库存和已有货位不因本次升级改写。",
 ]
 APP_CHANGELOG = [*(f"v0.22.652：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.653：订单库存、外购包材与历史送货归属闭环。
+APP_CHANGES = [
+    "订单明细编辑使用真实材质快照，空材质不再误判为变更；未确认外购包材仍可修正订单并释放未消耗库存预占。",
+    "外购包材采购建议扣除已交付和有效成品库存预占，库存足额的直接外购产品不再重复出现采购数量。",
+    "无订单成品送货检查同客户同存货编码的全部未交订单需求，避免待送列表暂未显示时绕过订单优先规则。",
+    "新增已核实无订单送货归属记录；经备份与逐项核对后，修正 TM20261009004 的重复盘点、预占和已发货订单关联，原送货单、出库与价格保持。",
+]
+APP_VERIFICATION_STEPS = [
+    "检查 TM20261009004 的两行各已送100、有效预占为0，80020549现存2700、82021188现存3600；两款采购待办均不再重复出现。",
+    "新建有库存的外购包材订单，确认默认抵扣；明确选择不抵扣时保留原数量，部分抵扣仅建议未覆盖数量。",
+    "打开空材质订单明细并保存，确认不误报材质变更；未消耗预占可点击释放后重新编辑。",
+    "核对正式版本 v0.22.653 与数据库 revision er1016pa，既有送货价格与出库流水不变。",
+]
+APP_CHANGELOG = [*(f"v0.22.653：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -7350,9 +7350,7 @@ def _pending_order_quantities_by_product_code(
     """Return authoritative currently deliverable order quantity by stock code."""
 
     rows = list(db.execute(_pending_query(db=db, customer_id=customer_id)))
-    if not rows:
-        return {}
-    context = _PendingDeliveryReadContext(db, rows)
+    context = _PendingDeliveryReadContext(db, rows) if rows else None
     totals: dict[str, int] = {}
     for row in rows:
         mapping = row._mapping
@@ -7363,6 +7361,29 @@ def _pending_order_quantities_by_product_code(
         code = str(mapping["product_code"] or "").strip().casefold()
         if quantity > 0 and code:
             totals[code] = totals.get(code, 0) + int(quantity)
+    # An open order can temporarily be absent from the deliverable picker
+    # because its stock has not yet been reserved.  That is precisely when an
+    # unordered shipment must not bypass it.  Compare all open demand with the
+    # deliverable view and use the larger per-code count, never their sum.
+    open_totals: dict[str, int] = {}
+    for code, quantity, delivered in db.execute(
+        select(func.coalesce(func.nullif(OrderItem.snapshot_product_code, ''), Product.product_code), OrderItem.quantity, OrderItem.delivered_quantity)
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(
+            Order.customer_id == customer_id,
+            Order.status.in_(DELIVERY_CANDIDATE_ORDER_STATUSES),
+            OrderItem.is_force_closed.is_(False),
+            OrderItem.delivered_quantity < OrderItem.quantity,
+        )
+    ):
+        normalized = str(code or "").strip().casefold()
+        if normalized:
+            open_totals[normalized] = open_totals.get(normalized, 0) + max(
+                int(quantity or 0) - int(delivered or 0), 0
+            )
+    for code, quantity in open_totals.items():
+        totals[code] = max(totals.get(code, 0), quantity)
     return totals
 
 

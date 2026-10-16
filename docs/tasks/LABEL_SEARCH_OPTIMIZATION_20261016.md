@@ -12,3 +12,5 @@
 本机Chrome配置DisablePrintPreview=true，直接使用已被现场证明可用的系统对话框；用户级纸型w80h40mm、print-scaling=none。Chrome内部策略页受工具URL安全策略限制，不能自动刷新核验，交管理员重启Chrome后确认。原设置保存在任务evidence目录。
 
 发布补查：v648切换期间发现合框需保留原客户拼音展开，v649按每个查询词独立展开客户ID并与权限范围相交，避免拼音+图号绕过第二个条件。新功能12项通过（含组合条件、无权限及非法输入）。
+
+最终正式技术发布v649已完成，源码8472f75f，包b76dba21；详情见docs/release_reports/LABEL_SEARCH_V649_20261016.md。物理打印交管理员试打一张确认。

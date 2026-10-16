@@ -3,7 +3,9 @@ import argparse
 import ast
 import io
 import json
+import os
 import re
+import stat
 from pathlib import Path
 import shutil
 import subprocess
@@ -17,6 +19,43 @@ from desktop_assistant.storage import archive_path, pack_tree, sha, write_json
 from desktop_assistant.schema_contract import schema_contract_from_sources
 
 
+def remove_identical_signing_duplicates(output: Path) -> dict:
+    """Keep final packages; remove only byte-identical, idle signing copies."""
+    from desktop_assistant.cleanup import assert_idle, local_path
+
+    output = archive_path(output)
+    report = {'removed': [], 'retained': []}
+    # Only a direct build directory is inspected. Never recurse into tasks,
+    # formal programs, backups, or another checkout. A subsequent build can
+    # collect a signing copy created after the preceding build finished.
+    folders = [output]
+    if output.parent.name == 'builds':
+        folders += sorted(p for p in output.parent.glob('mac-arm64-*') if p != output)
+    for folder in folders:
+        pending = folder / 'release.signed.zip.pending'
+        final = folder / 'release.signed.zip'
+        if not pending.exists() and not pending.is_symlink():
+            continue
+        try:
+            if local_path(folder) != folder or not folder.is_dir():
+                raise ValueError('签名副本目录身份不符')
+            before, kept = pending.lstat(), final.lstat()
+            owner = os.getuid() if hasattr(os, 'getuid') else before.st_uid
+            if any(not stat.S_ISREG(s.st_mode) or s.st_nlink != 1 or s.st_uid != owner
+                   for s in (before, kept)):
+                raise ValueError('签名副本不是当前用户的独立普通文件')
+            if before.st_size != kept.st_size or sha(pending) != sha(final):
+                raise ValueError('签名副本与最终包不一致')
+            assert_idle(pending, allow_unrelated_inaccessible_file=True)
+            if pending.lstat() != before or final.lstat() != kept:
+                raise ValueError('签名副本在核验期间变化')
+            pending.unlink()
+            report['removed'].append({'path': str(pending), 'bytes': before.st_size})
+        except (OSError, ValueError) as error:
+            report['retained'].append({'path': str(pending), 'reason': str(error)})
+    return report
+
+
 def remove_transient_build_trees(output: Path) -> None:
     """Remove reproducible build trees after durable artifacts are complete."""
     output = archive_path(output)
@@ -26,13 +65,18 @@ def remove_transient_build_trees(output: Path) -> None:
             raise ValueError(f"构建临时目录不得为链接: {path}")
         if path.exists():
             shutil.rmtree(path)
-    # Only reproducible transient trees are removed. Signed/unsigned candidates
-    # and verification records remain until their release/acceptance is closed.
+    try:
+        duplicates = remove_identical_signing_duplicates(output)
+    except (OSError, ValueError, ImportError) as error:
+        duplicates = {'removed': [], 'retained': [{'reason': str(error)}]}
+    # Final signed/unsigned candidates and verification records remain. Only
+    # exact duplicate signing scratch files can be collected without closure.
     try:
         free = shutil.disk_usage(output).free
         write_json(output / 'build-retention.json', {
             'type': 'tianming.build-retention.v1', 'transient_trees_removed': True,
             'candidate_retained': True, 'manual_acceptance': 'pending',
+            'identical_signing_duplicates': duplicates,
             'free_bytes': free, 'low_space': free < 60 * 1024**3,
             'warning': '低空间时先审查已关闭任务；不得删除恢复依赖或降低发布准入' if free < 60 * 1024**3 else None,
         })

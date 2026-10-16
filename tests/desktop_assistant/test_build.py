@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from desktop_assistant.build import remove_transient_build_trees, source_snapshot
+from desktop_assistant.build import remove_identical_signing_duplicates, remove_transient_build_trees, source_snapshot
 
 
 class BuildSourceTests(unittest.TestCase):
@@ -93,3 +93,57 @@ class BuildSourceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 remove_transient_build_trees(output)
         self.assertTrue((output / 'payload').is_dir())
+
+    def test_signing_duplicate_cleanup_keeps_final_and_unique_candidates(self):
+        from unittest.mock import patch
+        output = self.root / 'builds' / 'mac-arm64-new'
+        old = output.parent / 'mac-arm64-old'
+        old.mkdir(parents=True)
+        output.mkdir()
+        (old / 'release.signed.zip').write_bytes(b'finished')
+        (old / 'release.signed.zip.pending').write_bytes(b'finished')
+        (output / 'release.signed.zip').write_bytes(b'current1')
+        (output / 'release.signed.zip.pending').write_bytes(b'current2')
+        unsigned = old / 'release.unsigned.zip'
+        unsigned.write_bytes(b'unsigned')
+        with patch('desktop_assistant.cleanup.assert_idle'):
+            report = remove_identical_signing_duplicates(output)
+            replay = remove_identical_signing_duplicates(output)
+        self.assertEqual(len(report['removed']), 1)
+        self.assertEqual(replay['removed'], [])
+        self.assertEqual((old / 'release.signed.zip').read_bytes(), b'finished')
+        self.assertEqual(unsigned.read_bytes(), b'unsigned')
+        self.assertTrue((output / 'release.signed.zip.pending').exists())
+
+    def test_signing_duplicate_cleanup_rejects_links_and_active_file(self):
+        from unittest.mock import patch
+        output = self.root / 'output'
+        output.mkdir()
+        final = output / 'release.signed.zip'
+        final.write_bytes(b'finished')
+        pending = output / 'release.signed.zip.pending'
+        pending.symlink_to(final)
+        report = remove_identical_signing_duplicates(output)
+        self.assertEqual(report['removed'], [])
+        self.assertTrue(pending.is_symlink())
+        pending.unlink()
+        pending.write_bytes(b'finished')
+        with patch('desktop_assistant.cleanup.assert_idle', side_effect=ValueError('active')):
+            report = remove_identical_signing_duplicates(output)
+        self.assertEqual(report['removed'], [])
+        self.assertTrue(pending.exists())
+
+    def test_optional_signing_cleanup_dependency_cannot_fail_completed_build(self):
+        from unittest.mock import patch
+        import json
+        output = self.root / 'output'
+        output.mkdir()
+        artifact = output / 'release.zip'
+        artifact.write_bytes(b'finished')
+        with patch('desktop_assistant.build.remove_identical_signing_duplicates',
+                   side_effect=ImportError('optional process inspection unavailable')):
+            remove_transient_build_trees(output)
+        report = json.loads((output / 'build-retention.json').read_text())
+        self.assertEqual(report['identical_signing_duplicates']['removed'], [])
+        self.assertTrue(report['identical_signing_duplicates']['retained'])
+        self.assertEqual(artifact.read_bytes(), b'finished')

@@ -20351,6 +20351,7 @@ def _mold_tools_query(
     include_inactive: bool,
     customer_ids: set[int] | None = None,
     customer_keyword: str | None = None,
+    keyword_customer_ids: dict[str, set[int]] | None = None,
     product_code: str | None = None,
     rack_location: str | None = None,
     include_unprinted: bool = True,
@@ -20524,6 +20525,9 @@ def _mold_tools_query(
             if not token:
                 continue
             pattern = f"%{token}%"
+            token_customer_ids = set((keyword_customer_ids or {}).get(token, set()))
+            if allowed_customer_ids is not None:
+                token_customer_ids &= allowed_customer_ids
             linked_molds = (
                 select(Product.mold_tool_id)
                 .join(Customer, Customer.id == Product.customer_id)
@@ -20540,6 +20544,7 @@ def _mold_tools_query(
                         Customer.name.like(pattern),
                         Customer.chinese_short_name.like(pattern),
                         Customer.customer_code.like(pattern),
+                        Customer.id.in_(token_customer_ids),
                     ),
                 )
             )
@@ -20556,6 +20561,7 @@ def _mold_tools_query(
                         Customer.name.like(pattern),
                         Customer.chinese_short_name.like(pattern),
                         Customer.customer_code.like(pattern),
+                        Customer.id.in_(token_customer_ids),
                     ),
                 )
             )
@@ -20599,6 +20605,7 @@ def _mold_tools_query(
 @router.get("/molds")
 def list_mold_tools(
     q: str | None = None,
+    keyword_customers: Annotated[str | None, Query(max_length=4000)] = None,
     customer_keyword: Annotated[str | None, Query(max_length=150)] = None,
     customer_ids: str | None = Query(default=None, max_length=400),
     product_code: Annotated[str | None, Query(max_length=150)] = None,
@@ -20624,6 +20631,23 @@ def list_mold_tools(
         resolved_customer_ids.add(int(normalized))
     if len(resolved_customer_ids) > 50:
         raise HTTPException(status_code=422, detail="客户搜索条件过多")
+    resolved_keyword_customers: dict[str, set[int]] = {}
+    if keyword_customers:
+        try:
+            raw = json.loads(keyword_customers)
+            tokens = set(re.split(r"\s+", (q or "").strip()))
+            if not isinstance(raw, dict) or len(raw) > 20:
+                raise ValueError()
+            for token, ids in raw.items():
+                if token not in tokens or not re.fullmatch(r"[A-Za-z]+", token):
+                    raise ValueError()
+                if not isinstance(ids, list) or len(ids) > 50:
+                    raise ValueError()
+                if any(type(value) is not int or value <= 0 for value in ids):
+                    raise ValueError()
+                resolved_keyword_customers[token] = set(ids)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="客户拼音搜索条件无效")
     query, allowed_customer_ids = _mold_tools_query(
         db=db,
         user=user,
@@ -20631,6 +20655,7 @@ def list_mold_tools(
         include_inactive=include_inactive,
         customer_ids=resolved_customer_ids,
         customer_keyword=customer_keyword,
+        keyword_customer_ids=resolved_keyword_customers,
         product_code=product_code,
         rack_location=rack_location,
         include_unprinted=include_unprinted,

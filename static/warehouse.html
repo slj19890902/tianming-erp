@@ -2421,12 +2421,13 @@
     async function loadMolds(){
       const filters=moldFilterSnapshot(),signature=JSON.stringify(filters),requestId=++state.loadRequests.molds,hadRows=state.molds.length>0;if(!hadRows)$("moldBody").innerHTML='<tr><td colspan="7" class="empty">正在加载模具位置…</td></tr>';
       try{
-        let pinyinCustomerIds=[];
-        if(filters.customer&&/^[A-Za-z\s]+$/.test(filters.customer)){
-          await ensureCustomers();const runtime=await ensureMoldPinyinRuntime(),compact=filters.customer.toLocaleLowerCase().replace(/\s+/g,"");
-          if(runtime)pinyinCustomerIds=state.customers.filter(row=>{try{return [runtime.pinyin(row.name,{toneType:"none"}),runtime.pinyin(row.name,{pattern:"first",toneType:"none",type:"array"}).join("")].some(value=>String(value||"").toLocaleLowerCase().replace(/\s+/g,"").includes(compact))}catch{return false}}).slice(0,50).map(row=>Number(row.id));
+        const keywordCustomers={};
+        const pinyinTokens=[...new Set(filters.keyword.split(/\s+/).filter(token=>/^[A-Za-z]+$/.test(token)))].slice(0,20);
+        if(pinyinTokens.length){
+          await ensureCustomers();const runtime=await ensureMoldPinyinRuntime();
+          if(runtime)for(const token of pinyinTokens){const compact=token.toLocaleLowerCase();const ids=state.customers.filter(row=>{try{return [runtime.pinyin(row.name,{toneType:"none"}),runtime.pinyin(row.name,{pattern:"first",toneType:"none",type:"array"}).join("")].some(value=>String(value||"").toLocaleLowerCase().replace(/\s+/g,"").includes(compact))}catch{return false}}).slice(0,50).map(row=>Number(row.id));if(ids.length)keywordCustomers[token]=ids}
         }
-        const customerQuery=pinyinCustomerIds.length?`&customer_ids=${encodeURIComponent(pinyinCustomerIds.join(","))}`:"",customerKeywordQuery=filters.customer?`&customer_keyword=${encodeURIComponent(filters.customer)}`:"",rackQuery=filters.rack?`&rack_location=${encodeURIComponent(filters.rack)}`:"",keywordQuery=filters.keyword?`&q=${encodeURIComponent(filters.keyword)}`:"",data=await api(`/api/warehouse/molds?include_inactive=${filters.includeInactive}&include_archived=${filters.includeInactive}&include_unprinted=${filters.includeUnprinted}&include_repair=${filters.includeRepair}&sort_by=${encodeURIComponent(filters.sortBy)}&page=${state.moldPage}&page_size=${state.moldPageSize}${keywordQuery}${customerKeywordQuery}${customerQuery}${rackQuery}`);
+        const pinyinQuery=Object.keys(keywordCustomers).length?`&keyword_customers=${encodeURIComponent(JSON.stringify(keywordCustomers))}`:"",keywordQuery=filters.keyword?`&q=${encodeURIComponent(filters.keyword)}`:"",data=await api(`/api/warehouse/molds?include_inactive=${filters.includeInactive}&include_archived=${filters.includeInactive}&include_unprinted=${filters.includeUnprinted}&include_repair=${filters.includeRepair}&sort_by=${encodeURIComponent(filters.sortBy)}&page=${state.moldPage}&page_size=${state.moldPageSize}${keywordQuery}${pinyinQuery}`);
         if(requestId!==state.loadRequests.molds||state.tab!=="molds"||signature!==moldFilterSignature())return false;
         state.molds=data.items||[];state.moldTotal=Number(data.total||0);state.moldPage=Number(data.page||state.moldPage);state.moldPageSize=Number(data.page_size||state.moldPageSize);state.moldSelection.clear();
         const pages=Math.max(1,Math.ceil(state.moldTotal/state.moldPageSize));if(state.moldPage>pages){state.moldPage=pages;return loadMolds()}renderMolds();renderMoldPager();updateMoldStatusSortControl();return true;

@@ -168,3 +168,26 @@ def test_title_audit_failure_rolls_back_version_and_content(mold_app,monkeypatch
     with factory() as db:
         row=db.get(MoldTool,mid)
         assert row.version==1 and row.label_overrides_json is None
+
+
+def test_unified_pinyin_tokens_preserve_narrowing_and_scope(mold_app):
+    app,factory=mold_app;mid=_complete_named_mold(factory);setup_product(factory,mid)
+    with TestClient(app) as client:
+        _login(client,'admin')
+        mapping=json.dumps({'yan': [1]})
+        response=client.get('/api/warehouse/molds',params={'q':'yan DWG-7942511','keyword_customers':mapping})
+        assert response.status_code==200,response.text
+        assert [row['id'] for row in response.json()['items']]==[mid]
+        # A customer expansion belongs to its own token; it cannot bypass
+        # the second token and return every mold of that customer.
+        assert client.get('/api/warehouse/molds',params={'q':'yan DOES-NOT-EXIST','keyword_customers':mapping}).json()['items']==[]
+        assert client.get('/api/warehouse/molds',params={'q':'yan','keyword_customers':'{"other":[1]}'}).status_code==422
+        assert client.get('/api/warehouse/molds',params={'q':'yan','keyword_customers':'{"yan":[true]}'}).status_code==422
+    from app.models.user import User
+    from app.api.warehouse import _mold_tools_query
+    with factory() as db:
+        user=db.scalar(select(User).where(User.username=='sales'))
+        user.customer_access_mode='selected';db.flush()
+        query,scope=_mold_tools_query(db=db,user=user,q='yan',include_inactive=False,keyword_customer_ids={'yan':{1}})
+        assert scope==set()
+        assert db.scalars(query).all()==[]

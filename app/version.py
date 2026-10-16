@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.648"
+APP_VERSION = "v0.22.649"
 APP_VERSION_NAME = "客户标签与图号搜索优化"
 APP_BUILD_DATE = "2026-10-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -6338,3 +6338,15 @@ APP_VERIFICATION_STEPS = [
     "用同一个产品图号分别查询模具与常用箱，确认找到对应产品及模具位置；正式版本v0.22.648，数据库eq1015sa。",
 ]
 APP_CHANGELOG = [*(f"v0.22.648：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.649：统一查询保留客户拼音，无结构迁移。
+APP_CHANGES = [
+    "模具统一搜索保留客户全拼与首字母搜索；拼音、图号和位置等多词条件继续逐项缩小结果，客户范围保持。",
+    "包含v648的客户模具标题、预览修改、研光光洋产品标签和80×40默认出纸优化。",
+]
+APP_VERIFICATION_STEPS = [
+    "同一搜索框输入客户拼音及图号，核对准确匹配；错误图号不应返回该客户全部模具。",
+    "按v648标签验收步骤核对两类客户标题、产品标签与实际出纸；正式版本v0.22.649，数据库eq1015sa。",
+]
+APP_CHANGELOG = [*(f"v0.22.649：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

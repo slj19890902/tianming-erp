@@ -70,6 +70,17 @@ def test_initial_inbound_rejects_stale_stock_and_non_admin(stocktake_app):
 
 def test_admin_adds_different_product_to_same_location(stocktake_app):
     app, factory, ids, _ = stocktake_app
+    from app.models.product import Product
+    with factory() as db:
+        # Both synthetic SKUs must meet the current physical-entry contract;
+        # report dimensions alone are not a finished-carton specification.
+        first = db.get(Product, ids['product'])
+        other = db.get(Product, ids['other_product'])
+        other.length_mm, other.width_mm, other.height_mm = first.length_mm, first.width_mm, first.height_mm
+        for field in ('material_id', 'report_length_mm', 'report_width_mm', 'pieces_per_box',
+                      'flute_type', 'layer_count', 'splice_mode', 'default_cutting_mode', 'unit'):
+            setattr(other, field, getattr(first, field))
+        db.commit()
     with TestClient(app) as client:
         _login(client, "p147d-admin")
         first = _initial(ids, _context(client, ids))

@@ -198,6 +198,10 @@ def validate_entries(session):
                 basis=basis,
                 has_legal_frozen_spec=legal_frozen_spec,
             )
+            if product is None and not missing:
+                from app.services.unassigned_finished_entry import verified_unassigned_entry
+                if verified_unassigned_entry(session, lot, basis, cost_detail):
+                    physical_issues = []
             if consumed_spec_issues:
                 physical_issues = [dict(field='assembly_evidence', label=issue,
                     reason='组套输出与本次真实子件消耗依据不一致', source='assembly',

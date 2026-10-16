@@ -8624,6 +8624,7 @@ def floor3_product_candidates(
     q: str = Query(default="", max_length=150),
     customer_id: int | None = Query(default=None, gt=0),
     limit: int = Query(default=30, ge=1, le=100),
+    stocktake: bool = Query(default=False),
     db: Session = Depends(get_db),
     user: User = Depends(_can_locate_twin),
 ) -> dict:
@@ -8756,6 +8757,9 @@ def floor3_product_candidates(
         )
     )
     items = candidates[:limit]
+    if stocktake is True:
+        from app.services.stocktake_product_routing import route_candidates
+        items = route_candidates(db, items)
     return {
         "items": items,
         "total": len(items),

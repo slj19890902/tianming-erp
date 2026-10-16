@@ -1,7 +1,7 @@
 """Physical stock with an honestly unknown owner; never a customer/product master."""
 import hashlib
 import json
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from types import SimpleNamespace
 
 from sqlalchemy import update
@@ -71,9 +71,9 @@ def create(db, payload, user):
     now = utc_now_naive()
     lot = InventoryLot(lot_number=_number('UF'), inventory_type='finished',
         warehouse_location_id=payload.location_id, quantity_available=payload.quantity, unit='boxes',
-        status='active', source_type='stocktake', stock_date=payload.stock_date,
+        status='active', source_type='stocktake', source_ref_type='unassigned_finished_entry', stock_date=payload.stock_date,
         last_movement_at=now, remarks=payload.note, created_by=user.id)
-    estimate.detail['operator_id'] = user.id
+    estimate.detail.update(operator_id=user.id, box_style=payload.box_style)
     apply_cost_snapshot(lot, estimate, captured_at=now)
     basis = dict(estimate.detail, schema=1, product_id=None, unit='只', identity_status='unassigned',
         box_style=payload.box_style, spec=f'{payload.length_mm}×{payload.width_mm}×{payload.height_mm}',
@@ -91,6 +91,73 @@ def create(db, payload, user):
     _ensure_finished_projection_postcondition(db, lot=lot, operator_id=user.id, create_missing=True)
     db.flush()
     return lot
+
+
+def verified_unassigned_entry(db, lot, basis, cost):
+    """Recognize only the explicit admin stocktake, never a missing SKU shortcut.
+
+    The frozen physical facts must agree with its cost, goods receipt and audit.
+    Today's product/material master is deliberately not used to invent an owner.
+    """
+    from sqlalchemy import select
+    from app.models.audit import OperationLog
+    from app.models.warehouse_goods import WarehouseGoodsProfile, WarehouseGoodsMutation
+    from app.models.warehouse_inventory import InventoryMovement
+    from app.services.inventory_valuation import CONFIRMED_SOURCE
+    detail = lot.finished_detail
+    if (lot.inventory_type != 'finished' or lot.source_type != 'stocktake'
+            or lot.source_ref_type != 'unassigned_finished_entry'
+            or lot.cost_snapshot_source != CONFIRMED_SOURCE or not detail
+            or detail.product_id is not None or detail.owner_customer_id is not None
+            or not detail.is_general or lot.unit != 'boxes'
+            or basis.get('schema') != 1 or basis.get('identity_status') != 'unassigned'
+            or basis.get('product_id') is not None or basis.get('unit') != '只'
+            or cost.get('identity_status') != 'unassigned' or cost.get('temporary') is not True
+            or cost.get('estimate_basis') != 'physical_stocktake_selected_material_not_purchase_fact'
+            or cost.get('operator_id') != lot.created_by or not lot.created_by):
+        return False
+    dimensions = [detail.length_mm, detail.width_mm, detail.height_mm]
+    if (any(v is None or v <= 0 for v in dimensions)
+            or cost.get('physical_dimensions_mm') != dimensions
+            or basis.get('spec') != '×'.join(map(str, dimensions))
+            or basis.get('box_style') != detail.box_type_snapshot
+            or any(basis.get(k) != v for k, v in cost.items())
+            or basis.get('material_id') != cost.get('material_id')
+            or detail.material_code_snapshot != cost.get('material_code')):
+        return False
+    profile = db.get(WarehouseGoodsProfile, lot.id)
+    if not profile:
+        return False
+    try:
+        pieces = int(cost['pieces_per_box'])
+        if pieces not in (1, 2) or cost['source_tax_included'] not in (True, False):
+            return False
+        area = Decimal(str(cost['report_length_mm'])) * Decimal(str(cost['report_width_mm'])) / 1000000
+        price = Decimal(str(lot.estimated_square_price_snapshot))
+        expected = (area * price).quantize(Decimal('.0001'), rounding=ROUND_HALF_UP)
+        if not cost['source_tax_included']:
+            expected = (expected * (1 + Decimal(cost['source_tax_rate']))).quantize(Decimal('.0001'), rounding=ROUND_HALF_UP)
+        if (area <= 0 or price <= 0 or expected * pieces != lot.estimated_unit_cost_snapshot
+                or (area * pieces).quantize(Decimal('.000001')) != lot.estimated_cost_area_m2_snapshot):
+            return False
+        facts = json.loads(profile.data_json)
+        if (facts.get('scope') != 'general' or facts.get('product_ids') != []
+                or facts.get('customer_ids') != []
+                or facts.get('verified_material_id') != basis.get('material_id')
+                or facts.get('material_confidence') != cost.get('material_confidence')):
+            return False
+        mutation = db.scalar(select(WarehouseGoodsMutation).where(WarehouseGoodsMutation.lot_id == lot.id))
+        movement = db.scalar(select(InventoryMovement).where(InventoryMovement.inventory_lot_id == lot.id,
+            InventoryMovement.movement_type == 'manual_in'))
+        audit = db.scalar(select(OperationLog.id).where(OperationLog.action == 'CREATE',
+            OperationLog.resource == f'warehouse/goods/{lot.id}', OperationLog.entity_id == lot.id,
+            OperationLog.user_id == lot.created_by))
+        return bool(mutation and movement and audit
+            and json.loads(mutation.response_json).get('lot_id') == lot.id
+            and movement.idempotency_key == 'goods:' + mutation.idempotency_key
+            and movement.operator_id == lot.created_by and movement.quantity > 0)
+    except (ValueError, TypeError, AttributeError, KeyError, ArithmeticError):
+        return False
 
 
 def claim_matches(detail, product):

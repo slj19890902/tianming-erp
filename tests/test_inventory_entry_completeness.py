@@ -122,6 +122,67 @@ def test_unknown_customer_quote_change_and_audit_failure_leave_no_stock(db,monke
     assert db.scalar(select(func.count()).select_from(InventoryLot))==0
 
 
+@pytest.mark.parametrize('damage', ['source', 'dimension', 'identity', 'cost', 'receipt', 'audit'])
+def test_unassigned_exception_requires_exact_physical_receipt_and_audit(db, damage):
+    import json
+    from sqlalchemy import delete
+    from fastapi import HTTPException
+    from app.api.warehouse_goods import create_unassigned, preview_unassigned
+    from app.models.warehouse_inventory import InventoryLot
+    from app.models.warehouse_goods import WarehouseGoodsMutation
+    from app.models.audit import OperationLog
+    from app.core.inventory_entry_guard import validate_entries
+    _, _, user, payload = unassigned_setup(db)
+    payload.fingerprint = preview_unassigned(payload, db, user)['fingerprint']
+    result = create_unassigned(payload, db, user)
+    lot = db.get(InventoryLot, result['lot_id'])
+    db.info['new_inventory_entry_ids'] = {lot.id}
+    validate_entries(db)
+    if damage == 'source': lot.source_ref_type = None
+    elif damage == 'dimension': lot.finished_detail.width_mm += 1
+    elif damage == 'identity':
+        raw = json.loads(lot.finished_detail.physical_basis_json)
+        raw['identity_status'] = 'confirmed'
+        lot.finished_detail.physical_basis_json = json.dumps(raw)
+    elif damage == 'cost': lot.estimated_unit_cost_snapshot += Decimal('1')
+    elif damage == 'receipt': db.execute(delete(WarehouseGoodsMutation))
+    elif damage == 'audit': db.execute(delete(OperationLog))
+    with pytest.raises(HTTPException): validate_entries(db)
+    db.rollback()
+
+
+@pytest.mark.parametrize('splice,tax_included', [('single', True), ('double', True), ('single', False)])
+def test_unassigned_entry_commits_through_actual_transaction_guard(db, splice, tax_included):
+    from app.core.receipt_price_guard import ReceiptPriceGuardSession
+    from app.api.warehouse_goods import create_unassigned, preview_unassigned
+    from app.models.warehouse_inventory import InventoryLot
+    with ReceiptPriceGuardSession(bind=db.get_bind(), expire_on_commit=False) as guarded:
+        _, material, user, payload = unassigned_setup(guarded)
+        material.purchase_tax_included = tax_included
+        guarded.commit()
+        payload.splice_mode = splice
+        payload.fingerprint = preview_unassigned(payload, guarded, user)['fingerprint']
+        result = create_unassigned(payload, guarded, user)
+        assert create_unassigned(payload, guarded, user) == result
+        assert guarded.get(InventoryLot, result['lot_id']).quantity_available == 7
+
+
+def test_unassigned_late_guard_failure_rolls_back_entire_entry(db, monkeypatch):
+    from app.core.receipt_price_guard import ReceiptPriceGuardSession
+    from app.api.warehouse_goods import create_unassigned, preview_unassigned
+    from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+    from app.models.warehouse_goods import WarehouseGoodsProfile, WarehouseGoodsMutation
+    from sqlalchemy import select, func
+    from fastapi import HTTPException
+    with ReceiptPriceGuardSession(bind=db.get_bind(), expire_on_commit=False) as guarded:
+        _, _, user, payload = unassigned_setup(guarded)
+        payload.fingerprint = preview_unassigned(payload, guarded, user)['fingerprint']
+        monkeypatch.setattr('app.services.unassigned_finished_entry.verified_unassigned_entry', lambda *args: False)
+        with pytest.raises(HTTPException): create_unassigned(payload, guarded, user)
+        for model in (InventoryLot, InventoryMovement, WarehouseGoodsProfile, WarehouseGoodsMutation):
+            assert guarded.scalar(select(func.count()).select_from(model)) == 0
+
+
 def test_strict_bom_cost_cannot_hide_unpriced_child_with_sale(db):
     from app.services.inventory_valuation import resolve_product_cost
     row,material=product(db,sale_unit_price=99)

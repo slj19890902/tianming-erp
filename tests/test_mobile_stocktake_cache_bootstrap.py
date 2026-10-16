@@ -17,8 +17,8 @@ function run(fresh,query=''){
  return {redirects,scripts,links,context};
 }
 const old=run(false);assert.equal(old.scripts.length,0);assert.equal(old.redirects.length,1);
-const target=new URL(old.redirects[0]);assert.equal(target.searchParams.get('location_id'),'42');assert.equal(target.searchParams.get('return_area'),'F');assert.equal(target.searchParams.get('stocktake_ui'),'5');
-const repeated=run(false,'&stocktake_ui=5');assert.equal(repeated.redirects.length,0);assert.equal(repeated.scripts.length,0);assert.equal(repeated.links.length,1);
+const target=new URL(old.redirects[0]);assert.equal(target.searchParams.get('location_id'),'42');assert.equal(target.searchParams.get('return_area'),'F');assert.equal(target.searchParams.get('stocktake_ui'),'6');
+const repeated=run(false,'&stocktake_ui=6');assert.equal(repeated.redirects.length,0);assert.equal(repeated.scripts.length,0);assert.equal(repeated.links.length,1);
 const current=run(true);assert.equal(current.redirects.length,0);assert.equal(current.scripts.length,1);assert.match(current.scripts[0].src,/initial-stocktake-runtime/);vm.runInContext(SOURCE,current.context);assert.equal(current.scripts.length,1);
 """
     result=subprocess.run(["node","-e","const SOURCE="+json.dumps(source)+";\n"+harness],capture_output=True,text=True)

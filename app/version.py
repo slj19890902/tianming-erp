@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.643"
-APP_VERSION_NAME = "BOM盘点组套与二次粘合修复"
+APP_VERSION = "v0.22.644"
+APP_VERSION_NAME = "盘点入口与待认领入库收口"
 APP_BUILD_DATE = "2026-10-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6269,3 +6269,16 @@ APP_VERIFICATION_STEPS = [
     "查看000222停用格挡提示及BOM编辑入口；仅按真实产品关系维护。",
 ]
 APP_CHANGELOG = [*(f"v0.22.643：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.644：受控待认领入口及现有BOM盘点路由，无结构迁移。
+APP_CHANGES = [
+    "盘点搜索子件交付组合时，直接列出现有本品和真实子件；虚拟组合不作为实物选项，不改变历史交付合同。",
+    "客户待认领实物沿原管理员入口核验冻结规格、材料成本、入库流水和审计后可保存；认领、权限、幂等和回滚保护保留。",
+    "共享补库自动入列已按当前真实收料流程复核，历史库存数量、身份及停用关系不自动改写。",
+]
+APP_VERIFICATION_STEPS = [
+    "手机或电脑盘点搜索子件交付组合，直接选择实际本品或子件；核对无虚拟父件入库选项。",
+    "有实际待认领货物时从原管理员入口预览并登记，核对原件规格和参考成本；之后认领仍按真实产品核对。",
+]
+APP_CHANGELOG = [*(f"v0.22.644：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

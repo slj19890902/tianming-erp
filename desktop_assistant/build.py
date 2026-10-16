@@ -26,6 +26,18 @@ def remove_transient_build_trees(output: Path) -> None:
             raise ValueError(f"构建临时目录不得为链接: {path}")
         if path.exists():
             shutil.rmtree(path)
+    # Only reproducible transient trees are removed. Signed/unsigned candidates
+    # and verification records remain until their release/acceptance is closed.
+    try:
+        free = shutil.disk_usage(output).free
+        write_json(output / 'build-retention.json', {
+            'type': 'tianming.build-retention.v1', 'transient_trees_removed': True,
+            'candidate_retained': True, 'manual_acceptance': 'pending',
+            'free_bytes': free, 'low_space': free < 60 * 1024**3,
+            'warning': '低空间时先审查已关闭任务；不得删除恢复依赖或降低发布准入' if free < 60 * 1024**3 else None,
+        })
+    except OSError:
+        pass  # A completed package remains successful if housekeeping reporting fails.
 
 
 def runtime_copy_ignore(_directory, names):

@@ -68,6 +68,17 @@ test('return from a location restores its area instead of closing warehouse map'
   assert.equal(restored, 1);
   assert.equal(state.warehouseMapFocusLocationId, null);
   assert.match(stocktake, /return_floor/);
-  assert.match(stocktake, /\+'#warehouse'/);
+  const hrefSource = stocktake.match(/^    function warehouseMapHref\(.*$/m)?.[0];
+  assert.ok(hrefSource);
+  const href = vm.runInNewContext(`(${hrefSource.trim()})`, {
+    state: {selectedLocation: {floor_code: '3F', area_code: 'A1', location_id: 4}},
+    URLSearchParams, window: {location: {search: ''}},
+    pick: (row, keys, fallback) => keys.map(key => row[key]).find(value => value != null) ?? fallback,
+  })();
+  const target = new URL(href, 'http://isolated.invalid');
+  assert.equal(target.hash, '#warehouse');
+  assert.equal(target.searchParams.get('floor_code'), '3F');
+  assert.equal(target.searchParams.get('area_code'), 'A1');
+  assert.equal(target.searchParams.get('location_id'), '4');
   assert.match(stocktake, /stopImmediatePropagation/);
 });

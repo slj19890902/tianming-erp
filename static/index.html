@@ -14568,7 +14568,7 @@
             return `${dimensions.map(fmt).join("×")}mm`;
           },
           orderSpecificationText(value, emptyValue = "-") {
-            const text = String(value ?? "").trim();
+            const text = String(value ?? "").replace(/[（(]\s*单片尺寸未登记\s*[）)]|单片尺寸未登记/g, "").trim();
             if (!text) return emptyValue;
             const dimensionWithUnit = /^\d+(?:\.\d+)?\s*[xX×*]\s*\d+(?:\.\d+)?(?:\s*[xX×*]\s*\d+(?:\.\d+)?)?\s*mm$/i;
             return dimensionWithUnit.test(text) ? text.replace(/\s*mm\s*$/i, "").trim() : text;

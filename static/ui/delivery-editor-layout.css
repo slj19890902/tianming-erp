@@ -52,6 +52,7 @@
 .delivery-editor-total strong { color:#065be8; margin-left:10px; }
 .delivery-editor .delivery-component-plan { flex:none; max-height:120px; overflow:auto; margin:0; }
 .delivery-editor .notice { flex:none; margin:0; }
+.delivery-editor .delivery-reminder-summary { flex:none; min-height:0; max-height:min(180px,25vh); overflow:auto; }
 .delivery-editor-exit { position:absolute; inset:0; z-index:20; background:#0006; display:grid; place-items:center; }
 .delivery-editor-exit > div { background:#fff; padding:24px; border-radius:10px; max-width:520px; }
 .delivery-editor-modal { position:relative; }

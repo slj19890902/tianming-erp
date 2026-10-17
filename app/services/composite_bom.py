@@ -30,7 +30,7 @@ from app.models.user import User
 from app.models.multilevel_bom import ProductBomProfile, ProductBomInventoryRelation
 from app.services.bom_transactions import atomic_bom
 from app.services.master_data_versioning import apply_versioned_update
-from app.services.product_specification import product_dimension_specification
+from app.services.product_specification import product_stock_specification
 from app.services.sheet_cutting_settings import product_yield_mode, component_settings
 from app.services.requisition_quantities import (
     DEFAULT_CUTTING_MODE,
@@ -280,7 +280,7 @@ def _bom_row_values(row: Any, *, parent_code: str, fallback_position: int) -> di
 
 
 def _component_product_summary(product: Product) -> dict[str, Any]:
-    spec = product_dimension_specification(product)
+    spec = product_stock_specification(product)
     return {
         "id": product.id,
         "customer_id": product.customer_id,
@@ -963,7 +963,7 @@ def _snapshot_kwargs(
         and relation.get("mold_tool_id") == component.mold_tool_id
     ):
         selected_mold = component.mold_tool
-    spec = product_dimension_specification(component)
+    spec = product_stock_specification(component)
     semantic_values = [
         (("sales_order_item_id", "order_item_id"), order_item.id),
         (("parent_product_id",), parent.id),

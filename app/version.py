@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.657"
-APP_VERSION_NAME = "开票文件使用存货编码与客户图号"
+APP_VERSION = "v0.22.658"
+APP_VERSION_NAME = "模切成品按真实模具身份入库"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6444,3 +6444,7 @@ APP_VERIFICATION_STEPS = [step.replace("v0.22.655", "v0.22.656") for step in APP
 # v0.22.657：仅更改开票文件产品行的名称与规格投影。
 APP_CHANGELOG = ["v0.22.657：开票文件项目名称使用存货编码，规格型号使用冻结客户图号，缺图号留空；金额税率及附加收费保持。", *APP_CHANGELOG]
 APP_VERIFICATION_STEPS = ["对账与开票下载开票文件，核对项目名称为存货编码、规格型号为图号；缺图号为空，数量金额税率不变。"]
+
+# v0.22.658：整副多模刀模尺寸不能冒充单片成品尺寸。
+APP_CHANGELOG = ["v0.22.658：模切成品缺单片尺寸时，使用真实有效模具与明确模数冻结描述规格；入库、订单与BOM沿用同一实物身份，不虚填尺寸、不放大库存数量，成本和普通成品资料门禁保留。", *APP_CHANGELOG]
+APP_VERIFICATION_STEPS = ["核对模切成品显示真实模具与模数、明确提示单片尺寸未登记；已盘点成品可在历史送货中按订单实际数量选择。", *APP_VERIFICATION_STEPS]

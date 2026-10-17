@@ -72,6 +72,36 @@ def product_dimension_specification(product: Product | None) -> str | None:
     )
 
 
+def product_stock_specification(product: Product | None) -> str | None:
+    """Keep die identity without pretending a multi-up tool is one piece's size.
+
+    A registered die and explicit mold count identify an existing die-cut SKU.
+    This descriptive specification never supplies dimensions or changes units,
+    quantities, supplier cutting factors, or material-cost evidence.
+    """
+    dimensions = product_dimension_specification(product)
+    if dimensions or product is None:
+        return dimensions
+    from app.services.sheet_cutting_settings import component_settings
+    from app.services.sheet_cutting_contract import SheetCuttingContractError
+    try:
+        setting = component_settings(getattr(product, "sheet_cutting_settings", None))
+    except SheetCuttingContractError:
+        return None
+    if setting is None or not setting.is_die_cut:
+        return None
+    mold = getattr(product, "mold_tool", None)
+    code = str(getattr(product, "product_code", "") or "").strip()
+    mold_code = str(getattr(mold, "mold_code", "") or "").strip()
+    if (not code or not mold_code or mold is None
+            or not getattr(mold, "is_active", False)
+            or getattr(mold, "deleted_at", None) is not None
+            or getattr(mold, "archive_status", "active") != "active"
+            or getattr(product, "mold_tool_id", None) != mold.id):
+        return None
+    return f"模切成品 {code}；模具 {mold_code}；{setting.mold_count}模（单片尺寸未登记）"
+
+
 def normalized_specification_text(value: Any) -> str | None:
     """Normalize a pure 2D/3D size while preserving non-dimensional text."""
 
@@ -118,5 +148,5 @@ def resolved_product_specification(
         if embedded is not None:
             return embedded
     if product is not None:
-        return product_dimension_specification(product)
+        return product_stock_specification(product)
     return dimension_specification(length_mm, width_mm, height_mm)

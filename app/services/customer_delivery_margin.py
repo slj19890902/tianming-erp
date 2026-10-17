@@ -17,7 +17,7 @@ from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import OrderItem
 from app.services.material_cost_lineage import material_cost_coverage_report
 
-MONEY = Decimal("0.001")
+MONEY = Decimal("0.01")
 RATE = Decimal("0.0001")
 
 
@@ -26,7 +26,7 @@ def _money(value: Decimal | int | None) -> Decimal:
 
 
 def _amount(value: Decimal | None) -> str:
-    return format(_money(value), ".3f")
+    return format(_money(value), ".2f")
 
 
 def _rate(value: Decimal | None) -> str | None:
@@ -121,7 +121,7 @@ def _sales_projection(
                 tax_rate_snapshot=Decimal(frozen['tax_rate']) if frozen.get('tax_rate') is not None else None)
             frozen_unit = frozen['unit']
             if frozen.get('money_decimal_places') == 3:
-                sale_quantum = MONEY
+                sale_quantum = Decimal("0.001")
         except (ValueError, TypeError, KeyError, ArithmeticError):
             return dict(amount=None,known_amount=Decimal(0),reasons={'invalid_sales_contract'},
                 financial_reasons={'invalid_sales_contract'},quantity=int(item.delivered_quantity or 0),unit=None)
@@ -139,9 +139,9 @@ def _sales_projection(
                 and order_item.tax_rate_snapshot is not None
             ):
                 rate = Decimal(str(order_item.tax_rate_snapshot))
-                if sale_quantum == MONEY:
-                    net = base.quantize(MONEY, rounding=ROUND_HALF_UP)
-                    amount = net + (net * rate).quantize(MONEY, rounding=ROUND_HALF_UP)
+                if contract and "money_decimal_places" in frozen:
+                    net = base.quantize(sale_quantum, rounding=ROUND_HALF_UP)
+                    amount = net + (net * rate).quantize(sale_quantum, rounding=ROUND_HALF_UP)
                 else:
                     amount = (base * (Decimal("1") + rate)).quantize(sale_quantum, rounding=ROUND_HALF_UP)
                 known_amount = amount

@@ -85,7 +85,8 @@ can_profile_manage = PermissionChecker("finance.invoice_profile.manage")
 can_attachment_view = PermissionChecker("finance.invoice_attachment.view")
 can_attachment_manage = PermissionChecker("finance.invoice_attachment.manage")
 
-MONEY = Decimal("0.001")
+MONEY = Decimal("0.01")
+PRICE = Decimal("0.001")
 TAX_TEMPLATE_PATH = (
     PROJECT_ROOT
     / "app"
@@ -853,11 +854,11 @@ def _confirmed_rule_by_product(
 
 
 def _frozen_exclusive_parts(quantity, price, rate, total):
-    """Accept three-place new facts or exactly proven legacy two-place facts.
+    """Accept new two-place amounts and exactly proven older three-place facts.
 
     Never reinterpret an already confirmed receivable using today's precision.
     """
-    for quantum in (MONEY, Decimal("0.01")):
+    for quantum in (MONEY, Decimal("0.001")):
         net = (quantity * price).quantize(quantum, rounding=ROUND_HALF_UP)
         tax = (net * rate).quantize(quantum, rounding=ROUND_HALF_UP)
         if net + tax == total:
@@ -964,7 +965,7 @@ def _snapshot_for_statement(
                     continue
                 net, tax = parts
                 amount = net
-                unit_price = raw_unit_price.quantize(MONEY, rounding=ROUND_HALF_UP)
+                unit_price = raw_unit_price.quantize(PRICE, rounding=ROUND_HALF_UP)
             else:
                 net = (total / (Decimal("1") + rate)).quantize(
                     MONEY, rounding=ROUND_HALF_UP
@@ -1060,7 +1061,7 @@ def _snapshot_for_statement(
             net, tax = parts
             amount = net
             unit_price = (
-                raw_unit_price.quantize(MONEY, rounding=ROUND_HALF_UP)
+                raw_unit_price.quantize(PRICE, rounding=ROUND_HALF_UP)
                 if rule.fill_unit_price
                 else None
             )
@@ -1993,7 +1994,7 @@ def download_tax_template(
         f"{short_name}{statement_month}导入模板.xlsx"
     )
     output = export_dir / (
-        f"{task.task_number}-{task.source_snapshot_hash[:12]}-code-drawing-money3-v2-{download_name}"
+        f"{task.task_number}-{task.source_snapshot_hash[:12]}-code-drawing-price3-money2-v3-{download_name}"
     )
     try:
         from app.services.invoice_export_identity import export_lines
@@ -2004,7 +2005,7 @@ def download_tax_template(
     task.export_count += 1
     task.last_export_hash = export.sha256
     task.last_exported_at = datetime.now()
-    _audit(db, user=user, action="EXPORT_INVOICE_TAX_TEMPLATE", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number, "file_hash": export.sha256, "line_count": export.line_count, "warnings": list(export.warnings), "item_identity_policy": "code-drawing-money3-v2"}, description="生成税局开票导入文件")
+    _audit(db, user=user, action="EXPORT_INVOICE_TAX_TEMPLATE", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number, "file_hash": export.sha256, "line_count": export.line_count, "warnings": list(export.warnings), "item_identity_policy": "code-drawing-price3-money2-v3"}, description="生成税局开票导入文件")
     db.commit()
     return FileResponse(export.path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=download_name)
 

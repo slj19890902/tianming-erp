@@ -214,7 +214,7 @@ def _set_cell_value(cell: ElementTree.Element, value: Any) -> None:
     text.text = str(value)
 
 
-def _three_decimal_style_xml(archive: zipfile.ZipFile) -> tuple[bytes, int]:
+def _three_decimal_style_xml(archive: zipfile.ZipFile) -> tuple[bytes, int, int]:
     """Append a minimal custom ``0.000`` cell style and return its index."""
 
     styles_root = ElementTree.fromstring(archive.read("xl/styles.xml"))
@@ -241,10 +241,13 @@ def _three_decimal_style_xml(archive: zipfile.ZipFile) -> tuple[bytes, int]:
             "applyNumberFormat": "true",
         },
     )
-    cell_xfs.attrib["count"] = str(style_id + 1)
+    amount_style_id = style_id + 1
+    ElementTree.SubElement(cell_xfs, _qualified("xf"), {"numFmtId": "2", "fontId": "0", "fillId": "0", "borderId": "0", "xfId": "0", "applyNumberFormat": "true"})
+    cell_xfs.attrib["count"] = str(style_id + 2)
     return (
         ElementTree.tostring(styles_root, encoding="utf-8", xml_declaration=True),
         style_id,
+        amount_style_id,
     )
 
 
@@ -274,8 +277,9 @@ def _write_detail_rows(path: Path, lines: Sequence[Mapping[str, Any]]) -> None:
             use_three_decimal_unit_price = bool(lines)
             styles_xml: bytes | None = None
             three_decimal_style_id: int | None = None
+            amount_style_id: int | None = None
             if use_three_decimal_unit_price:
-                styles_xml, three_decimal_style_id = _three_decimal_style_xml(
+                styles_xml, three_decimal_style_id, amount_style_id = _three_decimal_style_xml(
                     source_archive
                 )
             sheet_data = detail_root.find(_qualified("sheetData"))
@@ -302,8 +306,10 @@ def _write_detail_rows(path: Path, lines: Sequence[Mapping[str, Any]]) -> None:
                     if cell is None:
                         cell = ElementTree.SubElement(row, _qualified("c"), {"r": reference})
                         cells[reference] = cell
-                    if column in ("F", "G", "I") and three_decimal_style_id is not None:
+                    if column == "F" and three_decimal_style_id is not None:
                         cell.attrib["s"] = str(three_decimal_style_id)
+                    elif column in ("G", "I") and amount_style_id is not None:
+                        cell.attrib["s"] = str(amount_style_id)
                     _set_cell_value(cell, value)
             detail_xml = ElementTree.tostring(
                 detail_root, encoding="utf-8", xml_declaration=True

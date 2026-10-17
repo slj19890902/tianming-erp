@@ -3520,7 +3520,7 @@
                       <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.quantity" :disabled="loading || quotationActionBusy() || !quotationEditable" /></td>
                       <td class="cost-sensitive"><strong>{{ line.estimated_unit_cost == null ? '待计算' : money(line.estimated_unit_cost) }}</strong></td>
                       <td class="cost-sensitive"><input class="input quotation-number-input" type="number" min="0" max="99" step="0.1" v-model.number="line.margin_rate" :disabled="loading || quotationActionBusy() || !quotationEditable" @change="refreshQuotationLine(line)" /></td>
-                      <td class="cost-sensitive"><strong>{{ line.suggested_unit_price == null ? '待计算' : money(line.suggested_unit_price) }}</strong><div class="muted" style="font-size:11px">{{ line._message || '' }}</div></td>
+                      <td class="cost-sensitive"><strong>{{ line.suggested_unit_price == null ? '待计算' : unitPrice(line.suggested_unit_price) }}</strong><div class="muted" style="font-size:11px">{{ line._message || '' }}</div></td>
                       <td><input class="input quotation-price-input" type="number" min="0" step="0.0001" v-model.number="line.final_unit_price" :disabled="loading || quotationActionBusy() || !quotationEditable" @input="line._final_manual=true" /><div v-if="line.customer_square_price != null" class="muted" style="font-size:11px">{{ line.price_source || '客户平方价' }}：￥{{ money(line.customer_square_price) }}/㎡</div></td>
                       <td><input class="input compact-input" v-model.trim="line.remarks" :disabled="loading || quotationActionBusy() || !quotationEditable" /></td>
                       <td><button class="btn small danger" :disabled="loading || quotationActionBusy() || !quotationEditable || quotationDraft.items.length===1" @click="removeQuotationLine(index)">删除</button></td>
@@ -3757,7 +3757,7 @@
                   <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
                   <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="runExplicitPageListLoad('products')">重试</button></div>
                   <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table data-viewport-page="products"><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>单位</th><th>分类</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div><span v-if="row.customer_document?.missing_labels?.length" class="status orange">{{ row.customer_document.missing_labels.join('、') }}待核对</span><span v-else class="status green">送货资料已具备</span></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td>{{ productUnitLabel(row) }}<span v-if="row.unit_needs_review" class="status orange">单位待完善</span></td><td :title="row.classification?.legacy_name" style="white-space:nowrap">{{ row.classification?.label || "待核对" }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '报料资料完整' : '报料资料待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="(canRequisition || canEditStockAlerts) && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table data-viewport-page="products"><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>单位</th><th>分类</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div><span v-if="row.customer_document?.missing_labels?.length" class="status orange">{{ row.customer_document.missing_labels.join('、') }}待核对</span><span v-else class="status green">送货资料已具备</span></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td>{{ productUnitLabel(row) }}<span v-if="row.unit_needs_review" class="status orange">单位待完善</span></td><td :title="row.classification?.legacy_name" style="white-space:nowrap">{{ row.classification?.label || "待核对" }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '报料资料完整' : '报料资料待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="(canRequisition || canEditStockAlerts) && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <data-panel v-else-if="productTab === 'suppliers'" :empty="false">
@@ -4336,7 +4336,7 @@
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(orderSpecificationText(item.snapshot_spec))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></span></td>
                                     <td style="white-space:normal;word-break:break-all;max-width:140px;font-size:12px"><span v-for="(part,index) in orderSearchHighlightParts(orderItemMaterialText(item, false))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></span></td>
                                     <td class="cell-right"><strong>订单 {{ item.quantity }}</strong><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div><span class="workflow-remaining">未交 {{ Math.max(0,Number(item.quantity || 0)-Number(item.business_delivered_quantity || 0)) }}</span></td>
-                                    <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ money(item.unit_price) }}</td>
+                                    <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ unitPrice(item.unit_price) }}</td>
                                     <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ money(item.subtotal) }}</td>
                                     <td v-if="canViewCosts" class="cost-sensitive cell-right"><div>成本 {{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</div><div class="muted" style="font-size:11px">毛利 {{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</div></td>
                                     <td>
@@ -4383,7 +4383,7 @@
                 <table><thead><tr><th>主操作</th><th></th><th>客户订单号</th><th class="erp-order-no">ERP订单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
                   <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><order-reference :row="row" :secondary="false"></order-reference></td><td class="erp-order-no">{{ row.order_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ row.business_delivery_progress?.delivered_quantity || 0 }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><status-tag :value="orderDisplayStatusKey(row)"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
-                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="canViewSalesAmounts ? 14 : 13"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格mm</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">客户销售单价</th><th v-if="canViewCosts" class="cost-sensitive">预计成本</th><th v-if="canViewCosts" class="cost-sensitive">预计利润</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div v-if="orderBomDemandSaveState.outcomeUncertain && Number(orderBomDemandSaveState.itemId)===Number(item.id)" class="notice warning" style="margin:6px 0">上次组件数量保存结果暂不确定，请点击上方“刷新”核对后再操作。</div><div class="bom-preview-list"><div v-for="component in visibleBomComponents(item)" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" @click="saveOrderBomComponentDemand(item,component)">{{ orderBomDemandSaveState.saving && Number(orderBomDemandSaveState.itemId)===Number(item.id) && Number(orderBomDemandSaveState.componentId)===Number(component.id) ? "保存中…" : "保存本订单需求" }}</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ orderSpecificationText(item.snapshot_spec) }}</td><td>{{ item.quantity }}<details v-if="item.replenishment_supply && item.replenishment_supply.sources && item.replenishment_supply.sources.length" class="order-replenishment-supply" style="margin-top:4px;white-space:normal;font-size:12px" @click.stop><summary>{{ orderReplenishmentSupplyText(item) }}</summary><div v-if="item.replenishment_supply.total_coverable_finished_quantity != null" class="muted">含补库可覆盖合计 {{ item.replenishment_supply.total_coverable_finished_quantity }}{{ item.replenishment_supply.unit_label }}</div><div v-for="(source,supplyIndex) in item.replenishment_supply.sources" :key="supplyIndex" class="muted">{{ source.product_name || source.product_code }}：覆盖用料 {{ source.covered_piece_quantity }}片 · {{ orderReplenishmentSupplyStage(source.stage) }}<div>{{ source.order_number }}</div></div></details><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="orderReplenishmentWaitingStatus(item)"></status-tag></td><td><status-tag :value="item.requisition_display_status || item.requisition_status" :title="item.requisition_display_hint"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.unit_price) }}</td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong><div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin-top:3px">{{ item.estimated_cost_health_label }}</div></td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit !== null && item.total_estimated_gross_profit !== undefined ? money(item.total_estimated_gross_profit) : "-" }}</strong><div v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined" class="muted">{{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</div></td><td class="toolbar-group"><template v-if="canWarehouseReserve" v-for="target in manualSheetTargetsForItem(item)" :key="target.key"><div class="muted">{{ target.label }}</div><manual-sheet-deduction :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" :order-item-id="target.order_item_id" :snapshot-id="target.bom_snapshot_id || 0" :component-type="target.component_type" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualSheetOrder(item,$event,row.id)"></manual-sheet-deduction></template><button v-if="hasBomComponents(item) && hasPermission('warehouse.view')" class="btn small" @click="openOrderBomStockReview(item)">BOM库存核对</button><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
+                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="canViewSalesAmounts ? 14 : 13"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格mm</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">客户销售单价</th><th v-if="canViewCosts" class="cost-sensitive">预计成本</th><th v-if="canViewCosts" class="cost-sensitive">预计利润</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div v-if="orderBomDemandSaveState.outcomeUncertain && Number(orderBomDemandSaveState.itemId)===Number(item.id)" class="notice warning" style="margin:6px 0">上次组件数量保存结果暂不确定，请点击上方“刷新”核对后再操作。</div><div class="bom-preview-list"><div v-for="component in visibleBomComponents(item)" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" @click="saveOrderBomComponentDemand(item,component)">{{ orderBomDemandSaveState.saving && Number(orderBomDemandSaveState.itemId)===Number(item.id) && Number(orderBomDemandSaveState.componentId)===Number(component.id) ? "保存中…" : "保存本订单需求" }}</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ orderSpecificationText(item.snapshot_spec) }}</td><td>{{ item.quantity }}<details v-if="item.replenishment_supply && item.replenishment_supply.sources && item.replenishment_supply.sources.length" class="order-replenishment-supply" style="margin-top:4px;white-space:normal;font-size:12px" @click.stop><summary>{{ orderReplenishmentSupplyText(item) }}</summary><div v-if="item.replenishment_supply.total_coverable_finished_quantity != null" class="muted">含补库可覆盖合计 {{ item.replenishment_supply.total_coverable_finished_quantity }}{{ item.replenishment_supply.unit_label }}</div><div v-for="(source,supplyIndex) in item.replenishment_supply.sources" :key="supplyIndex" class="muted">{{ source.product_name || source.product_code }}：覆盖用料 {{ source.covered_piece_quantity }}片 · {{ orderReplenishmentSupplyStage(source.stage) }}<div>{{ source.order_number }}</div></div></details><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="orderReplenishmentWaitingStatus(item)"></status-tag></td><td><status-tag :value="item.requisition_display_status || item.requisition_status" :title="item.requisition_display_hint"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(item.unit_price) }}</td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong><div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin-top:3px">{{ item.estimated_cost_health_label }}</div></td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit !== null && item.total_estimated_gross_profit !== undefined ? money(item.total_estimated_gross_profit) : "-" }}</strong><div v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined" class="muted">{{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</div></td><td class="toolbar-group"><template v-if="canWarehouseReserve" v-for="target in manualSheetTargetsForItem(item)" :key="target.key"><div class="muted">{{ target.label }}</div><manual-sheet-deduction :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" :order-item-id="target.order_item_id" :snapshot-id="target.bom_snapshot_id || 0" :component-type="target.component_type" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualSheetOrder(item,$event,row.id)"></manual-sheet-deduction></template><button v-if="hasBomComponents(item) && hasPermission('warehouse.view')" class="btn small" @click="openOrderBomStockReview(item)">BOM库存核对</button><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
                   <tr>
@@ -6732,7 +6732,7 @@
                     <div class="field"><label>单位</label><input class="input" v-model.trim="customerInvoiceRule.unit" /></div>
                     <div class="field"><label>税率</label><input class="input" type="number" min="0" max="1" step="0.01" v-model="customerInvoiceRule.tax_rate" /></div>
                     <div class="field"><label>规格型号来源</label><select class="select" v-model="customerInvoiceRule.spec_source"><option value="product_code_snapshot">送货存货编码（默认）</option><option value="product_snapshot">产品规格</option><option value="blank">留空</option></select></div>
-                    <div class="field"><label>导出单价</label><label class="inline-check"><input type="checkbox" v-model="customerInvoiceRule.fill_unit_price" /> 未税客户填写两位单价</label></div>
+                    <div class="field"><label>导出单价</label><label class="inline-check"><input type="checkbox" v-model="customerInvoiceRule.fill_unit_price" /> 未税客户填写三位单价</label></div>
                     <div class="field"><label>确认状态</label><select class="select" v-model="customerInvoiceRule.confirmation_status"><option value="pending">待确认</option><option value="confirmed">已确认</option></select></div>
                   </fieldset>
                   <button class="btn small primary" style="margin-top:7px" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving || !!customerInvoiceRule.error || Number(customerInvoiceState.ruleLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceRule">{{ customerInvoiceState.ruleSaving ? '默认规则保存中…' : '保存默认规则' }}</button>
@@ -7931,7 +7931,7 @@
                         <div class="pdf-stock-reference">{{ pdfInventoryReferenceText(item) }}</div>
                         <span v-if="pdfFinishedInventoryExplicitlySkipped(item) && pdfInventoryBalanceHint(item)" class="status neutral">本行未抵扣</span>
                       </td>
-                      <td v-if="canViewSalesAmounts"><input class="input compact-input" type="number" min="0" step="0.0001" v-model="item.unit_price" placeholder="待核对" @input="invalidateImportDraftConfirmation(draft);refreshPdfPriceConflict(item)" /><span v-if="item.price_conflict" class="status orange">价格变化<info-note>常用箱价格 {{money(item.price_conflict.product_default_price)}}，请核对本单价格。</info-note></span></td>
+                      <td v-if="canViewSalesAmounts"><input class="input compact-input" type="number" min="0" step="0.0001" v-model="item.unit_price" placeholder="待核对" @input="invalidateImportDraftConfirmation(draft);refreshPdfPriceConflict(item)" /><span v-if="item.price_conflict" class="status orange">价格变化<info-note>常用箱价格 {{unitPrice(item.price_conflict.product_default_price)}}，请核对本单价格。</info-note></span></td>
                       <td v-if="canViewSalesAmounts"><strong>{{pdfItemAmount(item)}}</strong></td>
                       <td style="font-size:11px;white-space:normal" :title="pdfInventoryIssueText(item)">
                         <button v-if="item.matched_product_id && !item.is_new_product && !commonBoxReadiness(item).ready && canEditProducts && !isImportDraftLocked(draft)" type="button" class="status orange order-readiness-link" :disabled="orderContextOpening" @click.stop="openCommonBoxEditorFromPdf(draftIndex,item)">常用箱资料待完善</button><span v-else-if="pdfInventoryIssueText(item)" :class="['status',pdfInventoryDisplayState(item)==='exception'?'red':'orange']">{{ pdfInventoryIssueText(item) }}</span>
@@ -7966,7 +7966,7 @@
                           <div class="sensitive-price">
                             <span class="pdf-advanced-label">客户单价</span>
                             <input class="input compact-input" type="number" min="0" step="0.0001" v-model="item.unit_price" @input="invalidateImportDraftConfirmation(draft); refreshPdfPriceConflict(item)" />
-                            <div v-if="item.price_conflict" class="pdf-shortage-line">本单价不同｜常用箱 {{ money(item.price_conflict.product_default_price) }}</div>
+                            <div v-if="item.price_conflict" class="pdf-shortage-line">本单价不同｜常用箱 {{ unitPrice(item.price_conflict.product_default_price) }}</div>
                           </div>
                           <div>
                             <span class="pdf-advanced-label">图纸</span>
@@ -8734,7 +8734,7 @@
                     <td><strong>{{ item.production_required_qty }}</strong></td>
                     <td style="font-size:12px;white-space:nowrap">{{ formatReportDims(item) }}</td>
                     <td style="font-size:12px">{{ formatCrease(item) }}</td>
-                    <td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.unit_price) }}</td>
+                    <td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(item.unit_price) }}</td>
                     <td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.subtotal) }}</td>
                     <td><status-tag :value="itemBusinessStatusKey(item)"></status-tag></td>
                     <td>
@@ -8938,7 +8938,7 @@
                 <td><strong>{{ item.production_required_qty }}</strong></td>
                 <td style="font-size:12px;white-space:nowrap">{{ formatReportDims(item) }}</td>
                 <td style="font-size:12px">{{ formatCrease(item) }}</td>
-                <td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.unit_price) }}</td>
+                <td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(item.unit_price) }}</td>
                 <td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.subtotal) }}</td>
                 <td style="font-size:12px">
                   <template v-if="item.drawing_file || item.product_drawing_file">
@@ -9003,7 +9003,7 @@
                   <button v-if="canAdmin && canViewCosts && orderDetail.external_packaging_purchase_summary?.status!=='cancelled'" class="btn primary" @click="openExternalPurchase(orderDetail)">{{ orderDetail.external_packaging_purchase_summary?.status==='confirmed' ? '查看采购确认' : '核对并确认采购' }}</button>
                 </div>
                 <div v-for="item in orderDetail.items.filter(hasExternalPackagingRequirements)" :key="`external-${item.id}`" class="external-packaging-order-item">
-                  <div><strong>{{ item.item_sequence || '-' }}. {{ item.snapshot_product_code || '-' }}｜{{ item.snapshot_product_name || '-' }}</strong> · 订单 {{ item.quantity }} {{ orderLineUnitLabel(item) }}<div class="external-packaging-order-meta">供货：{{ item.supply_mode_snapshot==='external_purchase' ? '纯外购包材' : '纸板主件＋外购组件' }}<span v-if="canViewSalesAmounts" class="sensitive-price"> · 客户销售单价 {{ money(item.unit_price) }} 元/{{ item.external_packaging_purchase_unit_snapshot || '只' }}</span></div></div>
+                  <div><strong>{{ item.item_sequence || '-' }}. {{ item.snapshot_product_code || '-' }}｜{{ item.snapshot_product_name || '-' }}</strong> · 订单 {{ item.quantity }} {{ orderLineUnitLabel(item) }}<div class="external-packaging-order-meta">供货：{{ item.supply_mode_snapshot==='external_purchase' ? '纯外购包材' : '纸板主件＋外购组件' }}<span v-if="canViewSalesAmounts" class="sensitive-price"> · 客户销售单价 {{ unitPrice(item.unit_price) }} 元/{{ item.external_packaging_purchase_unit_snapshot || '只' }}</span></div></div>
                   <div class="external-packaging-order-grid">
                     <div v-for="component in item.external_packaging_requirements" :key="component.id" class="external-packaging-order-card">
                       <strong>{{ component.purpose }}</strong>
@@ -9869,12 +9869,12 @@
                     <td>{{ item.product_code || '-' }}</td>
                     <td>{{ item.product_name || '-' }}</td>
                     <td>{{ item.source_type==='customer_charge' ? item.charge_quantity : item.actual_received_quantity }}</td>
-                    <td class="sensitive-price">¥ {{ money(item.unit_price_snapshot) }}</td>
+                    <td class="sensitive-price">¥ {{ unitPrice(item.unit_price_snapshot) }}</td>
                     <td class="sensitive-price">¥ {{ money(item.receivable_amount) }}</td>
                   </tr>
                 </tbody>
               </table>
-              <details v-if="statementDetail.voided_versions?.length" style="margin-top:12px"><summary>已作废的对账版本</summary><details v-for="old in statementDetail.voided_versions" :key="old.version"><summary>版本 {{old.version}} · {{old.created_at}} · {{old.reason}} · ¥ {{money(old.snapshot.total_receivable)}}</summary><table><thead><tr><th>送货单</th><th>产品</th><th>数量</th><th>单价</th><th>金额</th></tr></thead><tbody><tr v-for="item in old.snapshot.items" :key="item.statement_item_id"><td>{{item.delivery_number}}</td><td>{{item.product_name}}</td><td>{{item.actual_received_quantity ?? item.charge_quantity}}</td><td>{{money(item.unit_price_snapshot)}}</td><td>{{money(item.receivable_amount)}}</td></tr></tbody></table></details></details>
+              <details v-if="statementDetail.voided_versions?.length" style="margin-top:12px"><summary>已作废的对账版本</summary><details v-for="old in statementDetail.voided_versions" :key="old.version"><summary>版本 {{old.version}} · {{old.created_at}} · {{old.reason}} · ¥ {{money(old.snapshot.total_receivable)}}</summary><table><thead><tr><th>送货单</th><th>产品</th><th>数量</th><th>单价</th><th>金额</th></tr></thead><tbody><tr v-for="item in old.snapshot.items" :key="item.statement_item_id"><td>{{item.delivery_number}}</td><td>{{item.product_name}}</td><td>{{item.actual_received_quantity ?? item.charge_quantity}}</td><td>{{unitPrice(item.unit_price_snapshot)}}</td><td>{{money(item.receivable_amount)}}</td></tr></tbody></table></details></details>
               <details style="margin-top:12px" open><summary>开票与收款追溯</summary>
                 <div class="muted" style="margin:8px 0">发票登记和收款分别记录；合并开票显示分配到本账单的金额。</div>
                 <table><thead><tr><th>发票号</th><th>开票日期</th><th>本账单开票金额</th><th>状态</th></tr></thead><tbody><tr v-for="invoice in statementDetail.invoices || []" :key="invoice.id"><td>{{ invoice.invoice_number }}</td><td>{{ invoice.invoice_date }}</td><td class="sensitive-price">¥ {{ money(invoice.invoice_amount) }}</td><td>{{ invoice.invoice_status==='voided' ? '已作废' : '已开票' }}</td></tr><tr v-if="!statementDetail.invoices?.length"><td colspan="4" class="muted">暂无实际开票登记</td></tr></tbody></table>
@@ -10345,7 +10345,7 @@
                     <td :title="row.product_name">{{ row.product_name || "-" }}<span v-if="orderCommonBoxImportedRow(row.id)" class="status blue">已导入 · 第{{orderCommonBoxImportedRow(row.id)}}行</span></td>
                     <td>{{ orderSpecificationText(spec(row)) }}</td>
                     <td>{{ orderCommonBoxMaterialText(row) }}</td>
-                    <td class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td v-if="hasPermission('warehouse.view')" :title="row.inventory_error || '可用成品数量，已排除预占'">{{ row.inventory_error ? '待核对' : (row.available_finished_quantity ?? '—') }}</td>
+                    <td class="sensitive-price">{{ unitPrice(row.sale_unit_price) }}</td><td v-if="hasPermission('warehouse.view')" :title="row.inventory_error || '可用成品数量，已排除预占'">{{ row.inventory_error ? '待核对' : (row.available_finished_quantity ?? '—') }}</td>
                     <td><button v-if="!commonBoxReadiness(row).ready && canEditProducts" type="button" class="status orange order-readiness-link" :disabled="orderContextOpening" :title="commonBoxReadinessTitle(row)" @click.stop="openCommonBoxEditorFromPicker(row)">待完善</button><span v-else :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']">{{ commonBoxReadiness(row).ready ? "完善" : "待完善" }}</span></td>
                   </tr>
                   <tr v-if="!orderCommonBoxPicker.loading && !orderCommonBoxPicker.items.length"><td :colspan="hasPermission('warehouse.view') ? 9 : 8" class="empty">当前筛选没有可用常用箱</td></tr>
@@ -13171,7 +13171,8 @@
             };
             return icons[key] || '';
           },
-          money(value) { return Number(value || 0).toFixed(3); },
+          money(value) { return Number(value || 0).toFixed(2); },
+          unitPrice(value) { return Number(value || 0).toFixed(3); },
           percent(value) { return `${(Number(value || 0) * 100).toFixed(1)}%`; },
           squarePrice(value) {
             if (value === null || value === undefined || value === "") return "-";
@@ -33974,7 +33975,7 @@
               || candidate?.sale_unit_price === undefined
               || candidate?.sale_unit_price === ""
               ? "-"
-              : this.money(candidate.sale_unit_price);
+              : this.unitPrice(candidate.sale_unit_price);
             const parts = [
               `常用箱编码 ${candidate?.product_code || "-"}`,
               `名称 ${candidate?.product_name || "-"}`,
@@ -35200,7 +35201,7 @@
               material: product.material_code || this.materialName(product.material_id, product.legacy_material_text),
               specification: this.orderSpecificationText(this.spec(product), ""), production_notes: product.production_notes || "",
               _layer_filter: product.layer_count || null, _flute_filter: product.flute_type || null,
-              _material_supplier: "", quantity: sets * perSet, unit_price: this.money(product.sale_unit_price),
+              _material_supplier: "", quantity: sets * perSet, unit_price: this.unitPrice(product.sale_unit_price),
               cost_status: "pending", estimated_cost: null, _from_product: true,
               _manual_modified: !!product.manual_modified, flute_type: product.flute_type || null,
               layer_count: product.layer_count || null, _material_code: product.material_code || "",
@@ -35399,7 +35400,7 @@
             item.material = data.material_code || this.materialName(data.material_id, data.legacy_material_text);
             item.specification = this.orderSpecificationText(this.spec(data), "");
             item.production_notes = data.production_notes || "";
-            item.unit_price = this.money(data.sale_unit_price);
+            item.unit_price = this.unitPrice(data.sale_unit_price);
             // v0.19.2-B: 常用箱自动带出层数/楞型/材质快照，锁定不允许直接修改
             item._from_product = true;
             item._manual_modified = !!data.manual_modified;
@@ -36297,7 +36298,7 @@
                 customer_name:orderSnapshot.customer_name || "", product_code:itemSnapshot.snapshot_product_code || "",
                 product_name:itemSnapshot.snapshot_product_name || "", material:itemSnapshot.snapshot_material || "",
                 specification:this.orderSpecificationText(itemSnapshot.snapshot_spec, ""), production_notes:itemSnapshot.snapshot_production_notes || "",
-                quantity:itemSnapshot.quantity, unit_price:this.money(itemSnapshot.unit_price),
+                quantity:itemSnapshot.quantity, unit_price:this.unitPrice(itemSnapshot.unit_price),
                 bom_production_expected_revision:Number(itemSnapshot.bom_production_revision || 0),
                 requisition_status:itemSnapshot.requisition_status || "未报料",
                 supply_mode_snapshot:itemSnapshot.supply_mode_snapshot,
@@ -42279,7 +42280,7 @@
               this.showToast("该对账单没有已开票待收金额，请刷新后核对", true);
               return false;
             }
-            this.financeSettlementForm = {statement:{...row},amount:remaining.toFixed(3),settlement_date:today(),account:""};
+            this.financeSettlementForm = {statement:{...row},amount:remaining.toFixed(2),settlement_date:today(),account:""};
             this.modal = {type:"statementSettlement",title:`确认收款 ${row.statement_number}`};
             return true;
           },
@@ -42470,7 +42471,7 @@
               const invoiceNumber = String(prompt("请输入发票号码") || "").trim();
               if (!invoiceNumber) return false;
               const remaining = Number(row.pending_invoice_amount ?? (Number(row.total_receivable) - Number(row.invoiced_amount)));
-              const amountInput = prompt("请输入本次开票金额", remaining.toFixed(3));
+              const amountInput = prompt("请输入本次开票金额", remaining.toFixed(2));
               if (amountInput === null) return false;
               const amountNumber = Number(amountInput);
               if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
@@ -42478,7 +42479,7 @@
                 return false;
               }
               if (amountNumber > remaining + 0.000001) {
-                this.showToast(`本次开票金额不能超过待开票余额 ${remaining.toFixed(3)}`, true);
+                this.showToast(`本次开票金额不能超过待开票余额 ${remaining.toFixed(2)}`, true);
                 return false;
               }
               const expectedVersion = Number(row.version);
@@ -42497,7 +42498,7 @@
                   statement_id:statementId,
                   invoice_number:invoiceNumber,
                   invoice_date:today(),
-                  invoice_amount:amountNumber.toFixed(3),
+                  invoice_amount:amountNumber.toFixed(2),
                   expected_version:expectedVersion,
                   expected_ledger_version:expectedLedgerVersion,
                   idempotency_key:createIdempotencyKey(),
@@ -42584,7 +42585,7 @@
             }
             if (!attempt) {
               const remaining = Number(row.pending_payment_action_amount ?? row.pending_payment_amount ?? (Number(row.total_receivable) - Number(row.settled_amount)));
-              const amountInput = draft ? draft.amount : prompt("请输入本次收款金额", remaining.toFixed(3));
+              const amountInput = draft ? draft.amount : prompt("请输入本次收款金额", remaining.toFixed(2));
               if (amountInput === null) return false;
               const amountNumber = Number(amountInput);
               if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
@@ -42592,7 +42593,7 @@
                 return false;
               }
               if (amountNumber > remaining + 0.000001) {
-                this.showToast(`本次收款金额不能超过待收余额 ${remaining.toFixed(3)}`, true);
+                this.showToast(`本次收款金额不能超过待收余额 ${remaining.toFixed(2)}`, true);
                 return false;
               }
               const expectedVersion = Number(row.version);
@@ -42608,7 +42609,7 @@
               attempt = this.setFinanceManualMutationAttempt("settle", {
                 statementId,
                 payload:{
-                  amount:amountNumber.toFixed(3),
+                  amount:amountNumber.toFixed(2),
                   settlement_date:String(draft?.settlement_date || today()),
                   account:String(draft?.account || "").trim(),
                   expected_version:expectedVersion,

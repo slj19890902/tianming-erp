@@ -56,8 +56,8 @@ def test_unknown_unit_does_not_hide_a_complete_tax_and_cost_amount():
             }
         ]
     )
-    assert result["sales_amount"] == "10.000"
-    assert result["material_margin"] == "7.000"
+    assert result["sales_amount"] == "10.00"
+    assert result["material_margin"] == "7.00"
     assert result["unknown_unit_quantity"] == 2
     assert _sales_projection(item, order, frozen_unit="套")["unit"] == "套"
 
@@ -193,8 +193,8 @@ def test_line_rounding_and_reference_status_are_explicit():
         }
 
     result = _metrics([line(1, Decimal("0.005")), line(1, Decimal("0.005"), True)])
-    assert result["sales_amount"] == "0.020"
-    assert result["covered_sales_amount"] == "0.020"
+    assert result["sales_amount"] == "0.02"
+    assert result["covered_sales_amount"] == "0.02"
     assert result["status"] == "complete_with_reference"
 
 
@@ -307,7 +307,7 @@ def test_margin_endpoint_reads_only_dispatched_current_lines(requisition_app):
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["summary"]["delivery_line_count"] == 1
-    assert body["summary"]["sales_amount"] == "10.000"
+    assert body["summary"]["sales_amount"] == "10.00"
     assert body["summary"]["unknown_unit_quantity"] == 2
 
 
@@ -395,10 +395,10 @@ def test_real_gap_collector_and_approved_reference_complete_margin_without_write
             event.remove(engine, "before_cursor_execute", observe_write)
         assert write_operations == []
         assert result["summary"]["status"] == "complete_with_reference"
-        assert result["summary"]["sales_amount"] == "3.600"
-        assert result["summary"]["material_cost"] == "2.500"
-        assert result["summary"]["material_margin"] == "1.100"
-        assert result["summary"]["supplemental_material_cost"] == "2.500"
+        assert result["summary"]["sales_amount"] == "3.60"
+        assert result["summary"]["material_cost"] == "2.50"
+        assert result["summary"]["material_margin"] == "1.10"
+        assert result["summary"]["supplemental_material_cost"] == "2.50"
         assert result["summary"]["management_cost_gap_lines"] == 0
         assert result["gaps"]["total_lines"] == 1
         assert "no_delivery_cost_source" not in result["gaps"]["reason_counts"]
@@ -454,7 +454,7 @@ def test_real_gap_reference_fingerprint_or_quantity_mismatch_stays_partial(
             db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 30), customer_id=1
         )
         assert result["summary"]["status"] == "partial"
-        assert result["summary"]["sales_amount"] == "7.200"
+        assert result["summary"]["sales_amount"] == "7.20"
         assert result["summary"]["material_cost"] is None
         assert result["summary"]["material_margin"] is None
         assert result["summary"]["management_cost_gap_lines"] == 1

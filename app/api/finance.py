@@ -18,7 +18,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.services.invoice_statement_scope import StatementInvoice, task_statement_filter, task_statement_rows
 from app.services.reconciliation_cycle import default_receipt_month
-from sqlalchemy import and_, case, delete, func, or_, select, text, update
+from sqlalchemy import BigInteger, Numeric, and_, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased
 
@@ -111,7 +111,7 @@ can_adjust_reconciliation_period = PermissionChecker(
 )
 can_manage_customer_charge = PermissionChecker("finance.customer_charge.manage")
 can_confirm_customer_charge = PermissionChecker("finance.customer_charge.confirm")
-MONEY = Decimal("0.000")
+MONEY = Decimal("0.00")
 STATEMENT_COST_FIELDS = frozenset(
     {"total_gross_profit", "unit_cost_snapshot", "gross_profit_amount"}
 )
@@ -2490,7 +2490,7 @@ def export_customer_statement_excel(
         for column in (2, 3, 4):
             sheet.cell(row, column).number_format = "@"
         sheet.cell(row, 7).number_format = "0.000"
-        sheet.cell(row, 8).number_format = "0.000"
+        sheet.cell(row, 8).number_format = "0.00"
     output = BytesIO()
     _literal_statement_text(workbook)
     workbook.save(output)
@@ -4083,14 +4083,16 @@ def supplement_missing_delivery_price(
 
 
 def _pending_line_amount(unit_price):
-    # Newly supplemented exclusive prices carry explicit tax terms; keep the
-    # pending projection equal to the amount that statement creation freezes.
-    base = ReturnReceiptItem.actual_received_quantity * unit_price
-    supplemented_exclusive = and_(DeliveryItem.price_source == "finance_supplement",
-        func.json_extract(DeliveryItem.sales_contract_json, "$.tax_mode") == "tax_exclusive")
-    return case((supplemented_exclusive,
-                 func.round(base, 3) + func.round(func.round(base, 3) * func.json_extract(DeliveryItem.sales_contract_json, "$.tax_rate"), 3)),
-                else_=base)
+    # Frozen delivery terms own pending receivables; a later order/master
+    # price edit must not change an already dispatched line's value.
+    mode = func.coalesce(func.json_extract(DeliveryItem.sales_contract_json, "$.tax_mode"), OrderItem.price_tax_mode_snapshot)
+    rate = func.coalesce(func.json_extract(DeliveryItem.sales_contract_json, "$.tax_rate"), OrderItem.tax_rate_snapshot)
+    # Integer micro-units avoid SQLite binary-float .005 rounding errors.
+    micros = ReturnReceiptItem.actual_received_quantity * cast(func.round(unit_price * 1000000), BigInteger)
+    cents = cast((micros + 5000).self_group().op("/", precedence=8)(10000), BigInteger)
+    rate_micros = cast(func.round(rate * 1000000), BigInteger)
+    tax_cents = cast((cents * rate_micros + 500000).self_group().op("/", precedence=8)(1000000), BigInteger)
+    return case((mode == "tax_exclusive", (cents + tax_cents) / 100), else_=cents / 100)
 
 
 def _pending_statement_query(
@@ -4100,12 +4102,9 @@ def _pending_statement_query(
     period_start: date | None = None,
     period_end: date | None = None,
 ):
-    effective_unit_price = case(
-        (
-            DeliveryItem.source_type == "unordered_finished",
-            DeliveryItem.unit_price_snapshot,
-        ),
-        else_=OrderItem.unit_price,
+    effective_unit_price = func.coalesce(
+        cast(func.json_extract(DeliveryItem.sales_contract_json, "$.unit_price"), Numeric(18, 6)),
+        case((DeliveryItem.source_type == "unordered_finished", DeliveryItem.unit_price_snapshot), else_=OrderItem.unit_price),
     )
     query = (
         select(
@@ -4407,12 +4406,9 @@ def pending_statement_customer_summaries(
 
     broad_start = min(period[0] for period in customer_periods.values())
     broad_end = max(period[1] for period in customer_periods.values())
-    effective_unit_price = case(
-        (
-            DeliveryItem.source_type == "unordered_finished",
-            DeliveryItem.unit_price_snapshot,
-        ),
-        else_=OrderItem.unit_price,
+    effective_unit_price = func.coalesce(
+        cast(func.json_extract(DeliveryItem.sales_contract_json, "$.unit_price"), Numeric(18, 6)),
+        case((DeliveryItem.source_type == "unordered_finished", DeliveryItem.unit_price_snapshot), else_=OrderItem.unit_price),
     )
     pending_item_count = func.sum(
         case((StatementItem.id.is_(None), 1), else_=0)

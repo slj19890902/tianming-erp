@@ -1,3 +1,4 @@
+from decimal import Decimal
 from datetime import date
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -79,7 +80,7 @@ def test_explicit_historical_tax_and_unit_adoption_is_atomic_and_replayable(fin0
         assert db.get(Delivery,delivery_id).version==1
         service.adopt(db,**kwargs);db.commit()
         line=db.get(DeliveryItem,line_id)
-        assert read_sales_contract(line)['unit_price']=='7.0000'
+        assert Decimal(read_sales_contract(line)['unit_price']) == Decimal('7.000')
         assert read_sales_contract(line)['tax_mode']=='tax_inclusive'
         assert line.delivered_quantity==3 and line.unit_snapshot=='只'
         assert db.get(Delivery,delivery_id).version==2

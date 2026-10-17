@@ -9,7 +9,7 @@ import os
 import re
 import mimetypes
 from datetime import datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Literal
 from fastapi import (
@@ -532,6 +532,12 @@ class ProductPayload(BaseModel):
     unit: str = "只"
     sale_unit_price: Decimal | None = Field(default=None, ge=0)
     sale_unit_price_no_tax: Decimal | None = Field(default=None, ge=0)
+
+    @field_validator("sale_unit_price")
+    @classmethod
+    def round_sales_unit_price(cls, value):
+        return value.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP) if value is not None else None
+
     cost_unit_price: Decimal | None = Field(default=None, ge=0)
     board_price: Decimal | None = Field(default=None, ge=0)
     suggested_price: Decimal | None = Field(default=None, ge=0)

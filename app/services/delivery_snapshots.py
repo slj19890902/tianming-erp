@@ -30,7 +30,7 @@ def sales_contract(*, unit, price, tax_mode, tax_rate, source, money_decimal_pla
     if tax_rate is not None and (not Decimal(str(tax_rate)).is_finite() or not 0 <= Decimal(str(tax_rate)) <= 1):
         raise ValueError('销售税率无效')
     return json.dumps(dict(schema_version=1,currency='CNY',unit=_text(unit),unit_price=str(price),
-        tax_mode=tax_mode,tax_rate=str(tax_rate) if tax_rate is not None else None,source=source,**({"money_decimal_places":3} if money_decimal_places == 3 else {})),ensure_ascii=False,sort_keys=True)
+        tax_mode=tax_mode,tax_rate=str(tax_rate) if tax_rate is not None else None,source=source,money_decimal_places=money_decimal_places),ensure_ascii=False,sort_keys=True)
 
 
 def read_sales_contract(item):
@@ -81,7 +81,7 @@ def build_order_delivery_snapshot(
             source.update(tax_basis='customer_terms_at_delivery_creation',
                           profile_id=terms.profile_id, profile_version=terms.profile_version)
     try:
-        contract = sales_contract(unit=unit,price=order_item.unit_price,money_decimal_places=3,
+        contract = sales_contract(unit=unit,price=order_item.unit_price,money_decimal_places=2,
             tax_mode=mode,tax_rate=rate,source=source)
     except ValueError as error:
         from fastapi import HTTPException
@@ -138,7 +138,7 @@ def ensure_unordered_sales_contract(db, delivery, item):
     from app.services.warehouse_inventory import WarehouseInventoryError
     terms=resolve_customer_price_tax_terms(db,delivery.customer_id)
     try:
-        item.sales_contract_json=sales_contract(unit=item.unit_snapshot,price=item.unit_price_snapshot,money_decimal_places=3,
+        item.sales_contract_json=sales_contract(unit=item.unit_snapshot,price=item.unit_price_snapshot,money_decimal_places=2,
             tax_mode=terms.price_tax_mode,tax_rate=terms.tax_rate,
             source={'kind':'pending_unordered_first_dispatch','profile_id':terms.profile_id,'profile_version':terms.profile_version})
     except ValueError as error:

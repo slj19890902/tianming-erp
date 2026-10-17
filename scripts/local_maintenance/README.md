@@ -4,7 +4,7 @@
 
 ## 安装与运行
 
-源码入口 `install.py` 本身不能直接安装：须把全部维护资产SHA-256固化到 `PINS`，审核该安装脚本，再通过现有系统管理员授权运行。资产安装到 `/Library/TianmingERP-LocalMaintenance`，root所有、普通账号不可写；没有通用免密sudo。`launcher.py` 只接受 cleanup、backup、verify-pair 固定动作，验证资产和实际当前签名运行依赖，不执行开发工作区代码。
+源码入口 `install.py` 本身不能直接安装：须把全部维护资产SHA-256固化到 `PINS`，审核该安装脚本，再通过现有系统管理员授权运行。资产安装到 `/Library/TianmingERP-LocalMaintenance`，root所有、普通账号不可写；没有通用免密sudo。`launcher.py` 只接受 cleanup、backup、verify-pair、close-readback 固定动作，验证资产和实际当前签名运行依赖，不执行开发工作区代码。
 
 - `cn.tianming.erp.local-maintenance`：每小时检查（启动后亦检查）。原生维护锁或发布锁忙则跳过。
 - `cn.tianming.erp.online-backup`：每15分钟检查。使用专用服务身份499及已存在钥匙串授权，在原生维护锁内执行在线备份；不停服。
@@ -22,6 +22,8 @@
 3. 成功且已交付的 `instance/staging/migration-*` 隔离测试负载；保留报告与回执，失败/未知/活动目录保护。
 4. 无角色/引用的已交付历史程序展开目录及安装缓存。签名原件独立保护；唯一原件另按必要程序＋每月1份最多12个月规则轮换。开发别名链接阻止目标删除，不新增链接或复制回大文件。
 5. 完整 `.tmbackup` 普通旧点：必须存在最近完整恢复的原始认证/恢复证明，且旧点有可信来源、无活动/恢复引用，才回收。恢复源及最后可用点优先于数量设置。频率选择不等于删光恢复材料。
+
+原生备份因普通身份进程检查受限而留下的 `backup_work_retained`，复用当前签名程序 `retained_recovery_cleanup.close_locked` 完成认证收尾：核对同一加密备份及所有者回执、完整恢复清单与每件SHA、隔离库完整性和原生进程引用，在原维护锁内删除可再生的独立恢复副本，随后用保留原所有权的CAS/持久化审计关闭标记。未知、变化、故障或没有原始证明的现场保留并停止本次维护。此入口不停止服务，不删加密备份，不改业务库。
 
 仅维护日志轮转8MiB×3；正式 server.log 沿用实际运行包已经启用的8MiB×3进程内轮转。业务审计、数据库伴随文件、Docker卷、系统快照、Codex数据、个人文件和全局uv缓存不进入本策略。
 

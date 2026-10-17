@@ -439,6 +439,25 @@ def user_cleanup():
     return result
 
 
+def close_readback_locked(manager):
+    """Reuse the signed runtime's receipt-bound, restart-free owner closure."""
+    if os.geteuid()!=0 or manager.state.get('current')!=_runtime_tree.parent.name:
+        raise ValueError('Current protected administrator runtime required')
+    from desktop_assistant import retained_recovery_cleanup as closure,local_backup_only as local
+    if not manager._process() or not health():raise ValueError('Healthy live process required')
+    return closure.close_locked(manager,{'uid':499,'gid':499},manager.state['current'],
+        verify_cipher=local._check_proof,healthy=health)
+
+
+def close_readback():
+    from desktop_assistant.manager import Manager
+    from desktop_assistant.operation_lock import operation_lock
+    from desktop_assistant import mac_release_publish as publication
+    with operation_lock(ROOT/'control/operation.lock',existing_only=True),publication.lock():
+        manager=Manager(ROOT,(BASE/'publisher-public.pem').read_bytes())
+        return close_readback_locked(manager)
+
+
 def root_cleanup():
     if os.geteuid() != 0:
         raise ValueError('Root maintenance identity required')
@@ -461,6 +480,13 @@ def root_cleanup():
             state = manager.state
             if state.get('current')!=_runtime_tree.parent.name:
                 return {'status':'runtime-changed'}
+            if settings['apply_cleanup'] and state.get('backup_work_retained'):
+                closure=close_readback_locked(manager)
+                report['readback_closure']=closure
+                if closure.get('status')=='closed':
+                    report['removed'].append({'path':closure['path'],'kind':'verified-disposable-readback',
+                                              'bytes':closure['deleted_bytes']})
+                state=manager.state
             if not policy.maintenance_admitted(state, running=manager._process(), healthy=health()):
                 report['status']='maintenance-attention';record();return report
             raw = (ROOT/'state.json').read_bytes()
@@ -731,6 +757,9 @@ def main():
         result=user_cleanup()
     elif action=='cleanup':
         result=root_cleanup()
+    elif action=='close-readback':
+        result=close_readback()
+        write(INSTALL/'readback-closure.json',result,mode=0o644)
     elif action=='verify-pair':
         if os.geteuid()!=0:raise ValueError('Root admission required')
         run=worker_child('service-verify-pair')
@@ -765,7 +794,7 @@ if __name__=='__main__':
         failure={'status':'failed','error_type':type(error).__name__,'at':utc_now().isoformat()}
         if os.geteuid()==0 and Path(__file__).resolve()==INSTALL/'native.py' and len(sys.argv)==2:
             action=sys.argv[1]
-            if action in ('cleanup','backup','verify-pair'):
+            if action in ('cleanup','backup','verify-pair','close-readback'):
                 try:write(INSTALL/(action+'-status.json'),failure,mode=0o644)
                 except OSError:pass
         print(json.dumps(failure),flush=True)

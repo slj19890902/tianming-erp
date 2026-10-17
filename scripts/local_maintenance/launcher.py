@@ -33,7 +33,7 @@ def digest(p):
 def main():
     if (os.geteuid()!=0 or Path(__file__).absolute()!=INSTALL/'launcher.py'
             or not sys.flags.isolated or not sys.flags.no_site or not sys.dont_write_bytecode
-            or len(sys.argv)!=2 or sys.argv[1] not in ('cleanup','backup','verify-pair')):
+            or len(sys.argv)!=2 or sys.argv[1] not in ('cleanup','backup','verify-pair','close-readback')):
         raise ValueError('Fixed launchd maintenance entry required')
     for p in (INSTALL,*INSTALL.parents):
         require_protected(p,directory=True)

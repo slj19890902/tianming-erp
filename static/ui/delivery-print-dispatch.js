@@ -31,9 +31,18 @@
       const value = await request(`/api/deliveries/${id}/dispatch-results/${encodeURIComponent(record.key)}/resolve`, 'POST',
         {expected_actor_id:actor, original_request:record.body});
       api.validateResolve(value,record,actor);
-      if (value.status==='completed') { store.confirm(record.key,value.dispatch_receipt,value.current);state.record=null;state.status='dispatched';return; }
+      if (value.status==='completed') {
+        store.confirm(record.key,value.dispatch_receipt,value.current);state.record=null;
+        state.status=value.current.status;
+        if (state.status!=='dispatched') throw new Error('原发货后来已撤销或作废，请重新读取送货单后核对');
+        return;
+      }
       if (value.status!=='not_recorded') throw new Error('原发货结果待核对，请返回送货单查原结果');
-    } else if (state.status==='dispatched') return;
+    } else if (state.status==='dispatched') {
+      const current = await request(`/api/deliveries/${id}`);
+      if (current.status!=='dispatched') throw new Error('送货单已撤销或作废，请重新读取后核对');
+      return;
+    }
     if (!record) {
       const p = state.packet;
       if (!p || p.snapshot.delivery.version!==state.version) throw new Error('送货内容已变化，请重新读取');

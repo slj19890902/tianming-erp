@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.663"
-APP_VERSION_NAME = "送货两级界面与明细精简"
+APP_VERSION = "v0.22.664"
+APP_VERSION_NAME = "送货分页稳定与撤回后追加"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6517,3 +6517,17 @@ APP_VERIFICATION_STEPS = [
     "展开已有送货核对图号、位置、单价金额与缺失留空；实际发货继续由确认打印执行。",
 ]
 APP_CHANGELOG = [*(f"v0.22.663：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.664：送货分页稳定、保存和撤回后继续导入。
+APP_CHANGES = [
+    "修复二级导入翻页被布局重测请求覆盖而退回第一页；保留跨页数量和选择。",
+    "待发货单保存后可继续导入订单或库存；已发货先撤回，按原分配精确反冲并保留历史修订后再追加。",
+    "新单客户支持下拉和关键字查询，选中锁定、明确清除后重选；已保存单客户身份保持锁定。",
+    "原作废接口不变，保留版本、幂等、客户范围、回单对账和事务校验；无数据库迁移或历史数据修复。",
+]
+APP_VERIFICATION_STEPS = [
+    "打开导入窗口连续翻到第二、第三页并跨页选择，确认不再退回第一页，导入后核对数量。",
+    "保存待发单后继续导入；已发货单先撤回，核对库存和订单待送恢复后追加再发。",
+    "新单下拉或关键词选择客户，确认选中锁定、清除后可重选；已有单不能更换客户。",
+]
+APP_CHANGELOG = [*(f"v0.22.664：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

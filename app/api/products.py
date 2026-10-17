@@ -1595,7 +1595,7 @@ def _summary_response(product: Product, user: User, *, bom_profiles: dict | None
         "customer_id": product.customer_id,
         "product_code": product.product_code,
         "customer_material_code": product.customer_material_code,
-        "customer_document": document_snapshot(product),
+        "customer_document": document_snapshot(product, allow_source_reference=False),
         "product_name": product.product_name,
         "supply_mode": product.supply_mode,
         "external_packaging_category_code": product.external_packaging_category_code,

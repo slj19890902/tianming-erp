@@ -85,6 +85,19 @@ def test_common_box_customer_fields_save_read_search_and_old_payload_compatibili
         detail=client.get(f'/api/products/{product["id"]}')
         assert detail.status_code==200,detail.text
         assert detail.json()['customer_category']=='AT'
+        changed = client.put(f'/api/products/{product["id"]}', json={**payload,
+            'expected_version': product['version'], 'customer_drawing_number':'007932681',
+            'customer_category':'BT', 'customer_model':'NEW-MODEL'})
+        assert changed.status_code == 200, changed.text
+        assert changed.json()['customer_drawing_number'] == '007932681'
+        assert client.get(f'/api/products/{product["id"]}').json()['customer_model'] == 'NEW-MODEL'
+        updated_summary = client.get('/api/products?customer_id=1&keyword=007932681&response_mode=summary').json()['items'][0]
+        assert updated_summary['customer_document']['customer_drawing_number'] == '007932681'
+        assert updated_summary['customer_document']['customer_category'] == 'BT'
+        # Restore the known identifier for the existing search compatibility check.
+        restored = client.put(f'/api/products/{product["id"]}', json={**payload,
+            'expected_version': changed.json()['version']})
+        assert restored.status_code == 200, restored.text
         search=client.get('/api/products?customer_id=1&keyword=0631965-1&response_mode=summary')
         assert search.status_code==200,search.text
         assert [row['id'] for row in search.json()['items']]==[product['id']]

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.670"
-APP_VERSION_NAME = "送货规格与通用版列宽修复"
+APP_VERSION = "v0.22.671"
+APP_VERSION_NAME = "订单规格来源及模具位置显示修复"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6599,3 +6599,16 @@ APP_VERIFICATION_STEPS = [
     "核对通用版存货编码列已加宽，单位横向显示；研光、光洋专用列宽保持。",
 ]
 APP_CHANGELOG = [*(f"v0.22.670：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.671：订单规格与模具身份分离。
+APP_CHANGES = [
+    "订单明细规格不再以模具编号和模数补缺；保留真实冻结规格，过滤旧自动生成的工程身份描述。",
+    "新建和编辑订单采用成品规格专用规则，缺失留空；历史客户PO去重保护保持。",
+    "订单模具位置只显示位置标签或位置码，不拼模具编号、模数和操作提示。",
+    "本版无数据库迁移，不批改原始历史快照、库存、价格或预占。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新研光和海外订单明细，核对有真实规格的明细保留规格，无成品尺寸的明细不再显示模具编号或模数。",
+    "核对模具位置只显示当前位置标签；新建和编辑订单缺失规格不会再生成模具身份文字。",
+]
+APP_CHANGELOG = [*(f"v0.22.671：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

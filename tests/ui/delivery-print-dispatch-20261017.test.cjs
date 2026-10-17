@@ -9,7 +9,8 @@ function setup({lost=false,dispatched=false}={}) {
  context.fetch=async(url,options)=>{
   calls.push({url,options});let result;
   if(url.endsWith('/dispatch-snapshot'))result=fixture.snapshot.body;
-  else if(url.endsWith('/resolve'))result=fixture.resolve.body;
+  else if(url.endsWith('/resolve'))result={...fixture.resolve.body,current:{...fixture.resolve.body.current,status:'dispatched',version:fixture.write.body.dispatch_receipt.completed_version}};
+  else if(url===`/api/deliveries/${fixture.originalBody.snapshot.delivery.id}`) result={status:'dispatched'};
   else if(url.endsWith('/dispatch')){
    assert.deepEqual(JSON.parse(options.body),fixture.originalBody);
    if(lost&&first){first=false;throw new TypeError('response lost after commit')}
@@ -38,7 +39,7 @@ test('lost committed response resolves original key without a new inventory writ
 });
 test('an already dispatched delivery opens for reprint without any command',async()=>{
  const h=setup({dispatched:true});await h.context.TmDeliveryPrintDispatch.prepare(h.data);
- await h.context.TmDeliveryPrintDispatch.confirm(h.data);assert.equal(h.calls.length,0);
+ await h.context.TmDeliveryPrintDispatch.confirm(h.data);assert.equal(h.calls.length,1);assert.equal(h.calls[0].options.method,'GET');
 });
 test('Vue order import preserves decimal price; amount uses exact cents; stock edits conserve allocations',()=>{
  const html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
@@ -78,4 +79,16 @@ test('selected nine-column row precedes candidates and renders full business val
  assert.ok(!dom.document.body.textContent.includes('ERP TM'));
  assert.ok(!dom.document.body.textContent.includes('FG-'));
  app.unmount();
+});
+
+test('completed original request cannot print as a new dispatch after cancellation',async()=>{
+ const h=setup({lost:true}),a=h.context.TmDeliveryPrintDispatch;
+ await a.prepare(h.data);await assert.rejects(a.confirm(h.data));
+ const original=h.context.fetch;
+ h.context.fetch=async(url,options)=>{
+  if(url.endsWith('/resolve'))return {ok:true,json:async()=>({...fixture.resolve.body,current:{...fixture.resolve.body.current,status:'pending'}})};
+  return original(url,options);
+ };
+ await assert.rejects(a.confirm(h.data),/撤销/);
+ assert.equal(h.calls.filter(c=>c.url.endsWith('/dispatch')).length,1);
 });

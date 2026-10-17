@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.669"
-APP_VERSION_NAME = "缺资料客户共用库存修复"
+APP_VERSION = "v0.22.670"
+APP_VERSION_NAME = "送货规格与通用版列宽修复"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6587,3 +6587,15 @@ APP_VERIFICATION_STEPS = [
     "核对先成功预占的订单先占用，同一批库存不得双算。",
 ]
 APP_CHANGELOG = [*(f"v0.22.669：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.670：送货规格只采用常用箱产品规格。
+APP_CHANGES = [
+    "送货规格移除模具位置和模数，只采用常用箱成品规格，缺失留空，不推填报料或模具尺寸。",
+    "通用送货单存货编码列加宽约两个数字字符，单位横向显示；BOM子件沿用同一规格规则。",
+    "本版无数据库迁移，不改历史冻结资料、价格、数量、库存成本或预占。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新JSD送货单默认打印预览，核对规格与常用箱一致，缺失为空且没有模具位置或模数。",
+    "核对通用版存货编码列已加宽，单位横向显示；研光、光洋专用列宽保持。",
+]
+APP_CHANGELOG = [*(f"v0.22.670：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

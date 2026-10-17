@@ -10,4 +10,4 @@
 
 验证：63项前端回归通过；15项后端HTTP/列表性能/当前资料呈现回归通过。覆盖24h前一秒和恰好24h、取消/重新确认、普通编辑、已确认/草稿对账差异、列表summary/full与详情一致、读取前后库存/订单/流水不变、撤回再追加/重放链。完整Vue模板与内联JavaScript编译、Python/JS语法、差异检查、唯一head er1016pa通过。无V2源码改动，无需重建其已发布bundle。
 
-开发证据：/Users/kimiyf/ERP-Migration/evidence/delivery-acceptance-20261017（before/after下拉图、倒计时图、前后端日志）。正式尚未发布，候选交已授权维护聊天统一发布。增量打包必须排除上述删除模块，不能从旧包保留这些成员。
+开发证据：/Users/kimiyf/ERP-Migration/evidence/delivery-acceptance-20261017（before/after下拉图、倒计时图、前后端日志）。2026-10-17 已以v0.22.668/4923931f正式技术发布，原生恢复副本已收尾；人工验收待反馈。停服372.308024秒。三个退役模块已从签名包及安装双树移除；两处在线诊断/演练目录仍按保护规则保留。详见 docs/release_reports/DELIVERY_ACCEPTANCE_V668_20261017.md。

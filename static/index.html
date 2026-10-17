@@ -39142,7 +39142,12 @@
                 this.showToast("库存批次缺少产品或批次标识，无法导入", true);
                 return false;
               }
-              let line = this.deliveryForm.lines.find(row => Number(row.product_id) === productId && row.source_type === "unordered_finished" && String(row.unit_price ?? "") === String(Number(item.unit_price || 0)>0 ? item.unit_price : ""));
+              let line = this.deliveryForm.lines.find(row => Number(row.product_id) === productId && row.source_type === "unordered_finished");
+              const priceKey = value => Number(value) > 0 ? this.deliveryLinePriceText({unit_price:value}) : "";
+              if (line && priceKey(line.unit_price) !== priceKey(item.unit_price)) {
+                this.showToast(`${item.product_code || "该产品"} 多个库存位置的单价不一致，请统一单价后再导入`, true);
+                return false;
+              }
               if (!line) {
                 line = this.createDeliveryLine({ source_type:"unordered_finished", product_id:productId, product_code:item.product_code || "", product_name:item.product_name || "", specification:item.specification || "", material_display:item.material_display || "", location_name:item.location_name || "", customer_drawing_number:item.customer_drawing_number || "", unit_price:Number(item.unit_price || 0) > 0 ? String(item.unit_price) : null, delivered_quantity:0, allocations:[], order_pending_quantity:Number(item.order_pending_quantity || 0) });
                 this.deliveryForm.lines.push(line);

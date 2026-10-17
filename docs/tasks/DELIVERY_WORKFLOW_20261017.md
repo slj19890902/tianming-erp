@@ -11,8 +11,10 @@
 - 已整合正式v659源码346d7ac8；业务提交c3633ca6、3fe0c048。保持v659的三位金额口径，送货单价完整精度只读。
 - 后端35项原发货门禁及本轮定向测试通过；调整后15项最终价格/清理/库存身份/分类/语法测试通过；既有恢复与打印控制49项JS/Vue测试通过（44既有+5新），随后补充撤销后补打状态检查，新controller共6项通过。前端vue-tsc与Vite构建通过，dist入口及哈希资源同步。
 - 两份旧测试集存在基线失败：test_customer_drawing_fields中已过期常用箱编辑器标题断言；test_finished_stock_bom_identity使用缺inventory_type的旧桩及缺入库成本种子（9失败/5通过在未改本任务代码的v659工作区同样复现）。不扩大修改这些无关旧用例。
-- 使用今天12:51已批准导出的v659共同来源：evidence/replenishment-history-20261017/current-snapshot.sqlite3、current-map.json；其isolated-input/input.sqlite3只重绑已核对哈希的PDF路径，ownership.json保留证明。本任务经scripts/uat/run_task.py新建自有副本，未修改共同来源。
+- 使用今天12:51已批准导出的v658时点来源（并非最新正式v659）：evidence/replenishment-history-20261017/current-snapshot.sqlite3、current-map.json；其isolated-input/input.sqlite3只重绑已核对哈希的PDF路径，ownership.json保留证明。本任务经scripts/uat/run_task.py新建自有副本，未修改共同来源。
 - 实测清理清单64处：sales_order_items.snapshot_spec32处、sales_delivery_items.specification_snapshot32处。清单hash3484e67041028dcf571c2b59ece9003b7eb2c021c3fccb5c3901c2bfcead11ae。清理事务的审计故障回滚、外层回滚、幂等重放通过；数量/金额/库存/财务不变，原285个兼容成品身份均继续兼容。
 - 另有BOM冻结原始证据snapshot_component_spec 2处（记录63/64），由不可变触发器保护，不属于可改写字段。保留原证据，不删除/放松保护；规格读取层删除后缀，日常页面不会显示。原审计和不可变幂等证据同样保留修复前信息。未增加schema migration，er1016pa唯一head。
 - 证据目录：/Users/kimiyf/ERP-Migration/evidence/delivery-workflow-20261017。真实副本结果copy-verification.json、清单cleanup-plan.json。受管任务task-3c7cdc9760584598a7a5e0c73279371a通过；清理器因不能证明跨身份ERP进程已退出而保留约238MB，不绕过守卫强删。
-- 已按老板此前统一发布授权发送至维护聊天01a13d3c-bacf-7b30-b1f6-e8545a12ac96串行发布。当前正式v659，另有v660候选活动，必须串行。新只读捕获窗口等待macOS验证；已有同版本副本已完成候选验证，但正式时点备份、清单再核对及发布仍由受保护入口执行。尚未正式部署或清理。
+- 已按老板此前统一发布授权发送至维护聊天01a13d3c-bacf-7b30-b1f6-e8545a12ac96串行发布。当前正式v659，另有v660候选活动，必须串行。新只读捕获窗口等待macOS验证；已有v658时点副本已完成v659基线候选的兼容验证，但正式时点备份、清单再核对及发布仍由受保护入口执行。尚未正式部署或清理。
+
+来源元数据复核：12:51副本确为v658/84950836，当前正式v659/346d7ac8。两者head同为er1016pa且副本含新订单78行，但不能称作当前正式时点。正式清理仍必须在最新时点备份后对64处逐字段before/after及完整hash重新核实，资料漂移拒绝执行；其他v660候选须先串行完成。

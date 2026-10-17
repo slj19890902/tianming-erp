@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.664"
+APP_VERSION = "v0.22.665"
 APP_VERSION_NAME = "送货分页稳定与撤回后追加"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -6518,7 +6518,7 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.663：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
-# v0.22.664：送货分页稳定、保存和撤回后继续导入。
+# v0.22.665：送货分页稳定、保存和撤回后继续导入。
 APP_CHANGES = [
     "修复二级导入翻页被布局重测请求覆盖而退回第一页；保留跨页数量和选择。",
     "待发货单保存后可继续导入订单或库存；已发货先撤回，按原分配精确反冲并保留历史修订后再追加。",
@@ -6530,4 +6530,4 @@ APP_VERIFICATION_STEPS = [
     "保存待发单后继续导入；已发货单先撤回，核对库存和订单待送恢复后追加再发。",
     "新单下拉或关键词选择客户，确认选中锁定、清除后可重选；已有单不能更换客户。",
 ]
-APP_CHANGELOG = [*(f"v0.22.664：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.665：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

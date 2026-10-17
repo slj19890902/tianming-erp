@@ -16,7 +16,6 @@ from app.services import delivery_dispatch_commands as dispatch_commands
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
-from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.encoders import jsonable_encoder
@@ -35,6 +34,7 @@ from app.api.deps import (
     require_customer_access,
 )
 from app.core.time_contract import beijing_today, utc_naive_to_api, utc_now_naive
+from app.services.delivery_location_retention import policies as delivery_location_policies
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
@@ -727,61 +727,12 @@ def _has_active_production_stock_reservation(
     ) is not None
 
 
-_DELIVERY_ROUTE_AREAS = (
-    ("苏州工业园区", ("苏州工业园区", "工业园区")),
-    ("相城区", ("相城区",)),
-    ("吴中区", ("吴中区",)),
-    ("吴江区", ("吴江区",)),
-    ("虎丘区/高新区", ("虎丘区", "高新区", "苏州新区")),
-    ("姑苏区", ("姑苏区",)),
-    ("昆山市", ("昆山市", "昆山")),
-    ("常熟市", ("常熟市", "常熟")),
-    ("太仓市", ("太仓市", "太仓")),
-    ("张家港市", ("张家港市", "张家港")),
-)
 
 
-def _delivery_route_area(address: str | None) -> tuple[str, str | None]:
-    text = re.sub(r"\s+", "", str(address or "").strip())
-    if not text:
-        return "地址未登记", None
-    area = "其他区域"
-    for label, aliases in _DELIVERY_ROUTE_AREAS:
-        if any(alias in text for alias in aliases):
-            area = label
-            break
-    if area == "其他区域":
-        match = re.search(r"([\u4e00-\u9fff]{2,8}(?:区|县|市))", text)
-        if match:
-            area = match.group(1)
-    subarea_match = re.search(
-        r"([\u4e00-\u9fff]{2,12}(?:镇|街道|开发区|产业园|工业园))",
-        text,
-    )
-    return area, subarea_match.group(1) if subarea_match else None
 
 
-def _baidu_delivery_direction_url(
-    origin: str | None,
-    destination: str | None,
-) -> str | None:
-    if not origin or not destination:
-        return None
-    return "https://api.map.baidu.com/direction?" + urlencode(
-        {
-            "origin": origin,
-            "destination": destination,
-            "mode": "driving",
-            "region": "苏州",
-            "output": "html",
-            "coord_type": "bd09ll",
-            "src": "webapp.tianming.erp",
-        }
-    )
 
 
-def _normalized_delivery_address(address: str | None) -> str:
-    return re.sub(r"[\s,，/]+", "", str(address or "").strip()).lower()
 
 
 class UnorderedFinishedAllocationCreate(BaseModel):
@@ -4795,6 +4746,7 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         "customers": customers,
         "reconciliation_cycles": cycle_days_for_customers(db, customers),
         "receipts": receipts,
+        "location_retention": delivery_location_policies(db, deliveries, receipts),
         "receipt_item_quantities_by_delivery_item": (
             receipt_item_quantities_by_delivery_item
         ),
@@ -5074,6 +5026,7 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
         "customers": customers,
         "reconciliation_cycles": cycle_days_for_customers(db, customers),
         "receipts": receipts,
+        "location_retention": delivery_location_policies(db, deliveries, receipts),
         "item_counts": item_counts,
         "delivered_quantities": delivered_quantities,
         "receipt_actual_quantities": receipt_actual_quantities,
@@ -5389,6 +5342,7 @@ def _delivery_summary_response(delivery_id: int, *, context: dict) -> dict:
         ),
         "printed_by": delivery.printed_by,
         "return_receipt_id": return_receipt.id if return_receipt else None,
+        "location_retention": context["location_retention"][delivery_id],
         "return_receipt_status": (
             return_receipt.status if return_receipt else None
         ),
@@ -5797,6 +5751,7 @@ def _delivery_response(
         ),
         "printed_by": delivery.printed_by,
         "return_receipt_id": return_receipt.id if return_receipt else None,
+        "location_retention": (list_context["location_retention"][delivery_id] if list_context is not None else delivery_location_policies(db, {delivery_id:delivery}, {delivery_id:return_receipt} if return_receipt else {})[delivery_id]),
         "return_receipt_status": (
             return_receipt.status if return_receipt else None
         ),
@@ -7843,141 +7798,6 @@ def unordered_finished_candidates(
     }
 
 
-@router.get("/route-suggestions")
-def delivery_route_suggestions(
-    db: Session = Depends(get_db),
-    user: User = Depends(can_read),
-) -> dict:
-    raw_rows = list(
-        db.execute(
-            _pending_query(db=db, customer_ids=_visible_customer_ids(user, db))
-        )
-    )
-    customer_ids = {
-        int(row._mapping["customer_id"])
-        for row in raw_rows
-        if row._mapping["customer_id"] is not None
-    }
-    customers = {
-        row.id: row
-        for row in db.scalars(
-            select(Customer).where(Customer.id.in_(customer_ids))
-        ).all()
-    }
-    aggregate: dict[int, dict] = {}
-    for row in raw_rows:
-        mapping = row._mapping
-        order_item = db.get(OrderItem, mapping["order_item_id"])
-        remaining = _delivery_remaining_quantity(db, order_item) if order_item else 0
-        if remaining <= 0:
-            continue
-        customer_id = int(mapping["customer_id"])
-        customer = customers.get(customer_id)
-        if customer is None:
-            continue
-        entry = aggregate.setdefault(
-            customer_id,
-            {
-                "customer_id": customer_id,
-                "customer_name": customer.name,
-                "address": (customer.address or "").strip() or None,
-                "contact_person": customer.contact_person,
-                "phone": customer.phone,
-                "pending_item_count": 0,
-                "pending_quantity": 0,
-                "earliest_delivery_date": None,
-                "product_codes": set(),
-            },
-        )
-        entry["pending_item_count"] += 1
-        entry["pending_quantity"] += int(remaining)
-        if mapping["product_code"]:
-            entry["product_codes"].add(str(mapping["product_code"]))
-        delivery_date = mapping["delivery_date"]
-        if delivery_date and (
-            entry["earliest_delivery_date"] is None
-            or delivery_date < entry["earliest_delivery_date"]
-        ):
-            entry["earliest_delivery_date"] = delivery_date
-
-    company = db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
-    origin_address = (company.address or "").strip() if company else ""
-    origin_area, _origin_subarea = _delivery_route_area(origin_address)
-    grouped: dict[str, list[dict]] = {}
-    for entry in aggregate.values():
-        area, subarea = _delivery_route_area(entry["address"])
-        entry["area"] = area
-        entry["subarea"] = subarea
-        entry["product_codes"] = sorted(entry["product_codes"])
-        grouped.setdefault(area, []).append(entry)
-
-    groups = []
-    for area, entries in grouped.items():
-        entries.sort(
-            key=lambda row: (
-                row["subarea"] or "",
-                row["earliest_delivery_date"] or date.max,
-                row["customer_name"],
-            )
-        )
-        previous_address = origin_address or None
-        for sequence, entry in enumerate(entries, start=1):
-            entry["sequence"] = sequence
-            entry["navigation_from"] = previous_address
-            is_same_address = bool(
-                _normalized_delivery_address(previous_address)
-                and _normalized_delivery_address(previous_address)
-                == _normalized_delivery_address(entry["address"])
-            )
-            entry["same_as_previous_address"] = is_same_address
-            if is_same_address:
-                entry["navigation_url"] = None
-                entry["navigation_note"] = "与上一站同地址，可同站处理"
-            else:
-                entry["navigation_url"] = _baidu_delivery_direction_url(
-                    previous_address, entry["address"]
-                )
-                entry["navigation_note"] = (
-                    None if entry["navigation_url"] else "缺少起点或地址"
-                )
-            if entry["address"]:
-                previous_address = entry["address"]
-        groups.append(
-            {
-                "area": area,
-                "same_as_origin_area": bool(origin_address and area == origin_area),
-                "customer_count": len(entries),
-                "pending_item_count": sum(
-                    row["pending_item_count"] for row in entries
-                ),
-                "pending_quantity": sum(row["pending_quantity"] for row in entries),
-                "customers": entries,
-            }
-        )
-    groups.sort(
-        key=lambda group: (
-            not group["same_as_origin_area"],
-            min(
-                (
-                    row["earliest_delivery_date"] or date.max
-                    for row in group["customers"]
-                ),
-                default=date.max,
-            ),
-            group["area"],
-        )
-    )
-    return {
-        "origin_address": origin_address or None,
-        "origin_area": origin_area if origin_address else None,
-        "customer_count": len(aggregate),
-        "groups": groups,
-        "planning_mode": "regional_grouping_with_segment_navigation",
-        "disclaimer": (
-            "这是按客户地址区域和交期生成的同车辅助建议，不是实时路况最优解；"
-            "请在百度地图打开每一段后由司机确认最终顺序。"
-        ),
-    }
 
 
 class _PendingDeliveryReadContext:

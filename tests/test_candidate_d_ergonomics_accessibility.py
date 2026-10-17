@@ -237,7 +237,7 @@ def test_destructive_delivery_confirmations_name_customer_and_document() -> None
         assert "deliveryNumber" in body
         assert 'String(row?.customer_name || "客户未登记")' in body
     assert "必填原因" not in delete_body + cancel_body + receipt_body
-    receipt_modal = _between(INDEX, "<div v-else-if=\"modal.type === 'receipt'\">", "<div v-else-if=\"modal.type === 'deliveryRoute'\">")
+    receipt_modal = _between(INDEX, "<div v-else-if=\"modal.type === 'receipt'\">", "<div v-else-if=\"modal.type === 'deliveryDispatch'\">")
     assert "receiptForm.customer_name" in receipt_modal
     assert "receiptForm.delivery_number" in receipt_modal
     open_receipt = _between(INDEX, "async openReceipt(row) {", "async saveReceipt() {")

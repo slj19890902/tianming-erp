@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.667"
-APP_VERSION_NAME = "按产品选择多客户库存共用"
+APP_VERSION = "v0.22.668"
+APP_VERSION_NAME = "送货验收返修与停用功能精简"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6559,3 +6559,17 @@ APP_VERIFICATION_STEPS = [
     "按真实业务核对共用库存余额和原货位；从开票任务重新下载总开票文件核对三项金额。",
 ]
 APP_CHANGELOG = [*(f"v0.22.667：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.668：送货客户纵向下拉、位置展示期限与停用功能移除。
+APP_CHANGES = [
+    "客户纵向下拉按当前订单与库存条件展示，支持关键词、选中锁定和清除重选。",
+    "已确认对账立即隐藏送货位置；回单确认24小时后到期隐藏，待回单继续保留出库位置。",
+    "移除送货路线辅助、样品Excel下载导入及混合样品整理的界面、接口和独占模块，保留已形成业务资料。",
+    "不迁移、不批改正式数据；保留v666税务及v667共享库存、读取保护与V2资源。",
+]
+APP_VERIFICATION_STEPS = [
+    "新建送货，核对纵向客户列表与订单/库存筛选，搜索、选中锁定及清除重选。",
+    "查看待回单、已确认回单及已确认对账的送货位置；核对倒计时和到期自动隐藏。",
+    "确认路线辅助和指定样品功能已移除；正常常用箱、工程附件、税务及共享库存仍可使用。",
+]
+APP_CHANGELOG = [*(f"v0.22.668：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

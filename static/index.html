@@ -13,7 +13,7 @@
     <script src="/static/ui/product-workbench.js?v=20261014processed01"></script>
     <script src="/static/ui/order-context.js?v=round-experience-d1b"></script>
     <script src="/static/ui/workspace.js?v=71e4c13edadc"></script>
-    <script src="/static/ui/delivery-editor-layout.js?v=0c2f6ee14499"></script>
+    <script src="/static/ui/delivery-editor-layout.js?v=3ce1f96d2bfa"></script>
     <script src="/static/ui/workflow-continuity.js?v=7ef70dee3ee7"></script>
     <link rel="stylesheet" href="/static/ui/workflow-continuity.css?v=431e9b0f41d3" />
     <script src="/static/ui/order-import-save-recovery.js?v=20261010-save1"></script>
@@ -3243,7 +3243,7 @@
     <script src="/static/js/unified-navigation.js?v=20261008-inventory-flow"></script>
     <script src="/static/js/frontend-reliability.js?v=20261009"></script>
     <script src="/static/js/frontend-shell-bridge.js?v=20261009-reliability"></script>
-    <link rel="stylesheet" href="/static/ui/delivery-editor-layout.css?v=c671c12584b5" />
+    <link rel="stylesheet" href="/static/ui/delivery-editor-layout.css?v=dbfe53eae3e9" />
   </head>
   <body>
     <div id="app" v-cloak>
@@ -3619,9 +3619,6 @@
                   <button v-if="canCreateProducts && productTab === 'products' && selectedProductCustomer" class="btn success" @click="openProduct()">新增产品</button>
                   <button v-if="canDeleteProducts && productTab === 'products'" class="btn" @click="toggleProductTrash()">产品垃圾站</button>
                   <a v-if="canAdmin && productTab === 'products'" class="btn" href="/frontend-v2/shared-stock" target="_blank" rel="noopener">库存共用</a>
-                  <button v-if="canAdmin && productTab === 'products' && selectedProductCustomer" class="btn" :disabled="productWorkbookImport.loading" @click="downloadProductWorkbookTemplate">下载样品 Excel</button>
-                  <button v-if="canAdmin && productTab === 'products' && selectedProductCustomer" class="btn primary" :disabled="productWorkbookImport.loading" @click="productWorkbookImport.visible=!productWorkbookImport.visible">样品 Excel 导入</button>
-                  <button v-if="canAdmin && productTab === 'products'" class="btn primary" :disabled="mixedSampleImport.loading" @click="mixedSampleImport.visible=!mixedSampleImport.visible">混合样品整理</button>
                 </div>
                 <div v-if="productTab === 'products' && selectedProductCustomer" class="toolbar-group">
                   <input class="input" style="min-width:180px" placeholder="存货编码 / 款号 / 图号" v-model.trim="filters.productCode" @input="queuePageSearch('products')" @keyup.enter="runExplicitPageListLoad('products',{resetPage:true})" />
@@ -3637,60 +3634,7 @@
                 </div>
               </div>
               <div v-if="productTab === 'products'">
-                <div v-if="mixedSampleImport.visible" class="panel" style="margin-bottom:10px;border-color:#8b5cf6">
-                  <div class="toolbar">
-                    <div><strong>YL / YKE / KEW 混合样品一键整理</strong><info-note>无需先选客户。选择三客户基础资料、样品 Excel 和照片，ERP 自动按客户分组；预检不写数据，确认后一次保存。</info-note></div>
-                    <button class="btn small" :disabled="mixedSampleImport.loading" @click="resetMixedSampleImport(false)">关闭</button>
-                  </div>
-                  <div class="toolbar" style="align-items:flex-start;flex-wrap:wrap;margin-top:8px">
-                    <button class="btn" :disabled="mixedSampleImport.loading" @click="downloadMixedSampleTemplate">下载简化现场模板</button>
-                    <label class="btn" style="cursor:pointer"><input type="file" accept=".xlsx" style="display:none" @change="selectMixedReferenceFile" />{{ mixedSampleImport.referenceFile ? `基础资料：${mixedSampleImport.referenceFile.name}` : '选择三客户基础资料' }}</label>
-                    <label class="btn" style="cursor:pointer"><input type="file" accept=".xlsx" multiple style="display:none" @change="selectMixedSampleFiles" />{{ mixedSampleImport.files.length ? `样品 Excel ${mixedSampleImport.files.length} 份` : '选择样品 Excel / 旧分卷' }}</label>
-                    <label class="btn" style="cursor:pointer"><input type="file" accept=".jpg,.jpeg,.png,.webp,.pdf" multiple style="display:none" @change="selectMixedSampleDrawings" />{{ mixedSampleImport.drawings.length ? `照片 ${mixedSampleImport.drawings.length} 张` : '选择照片（可不选）' }}</label>
-                    <button class="btn primary" :disabled="mixedSampleImport.loading || !mixedSampleImport.referenceFile || !mixedSampleImport.files.length" @click="previewMixedSampleImport">{{ mixedSampleImport.loading ? '正在整理…' : '自动分拣并预检' }}</button>
-                  </div>
-                  <info-note>新照片改名为“样品号_序号.jpg”即可自动匹配；旧分卷里的内嵌图片会直接读取，不再制作 CSV，也不用运行 BAT。</info-note>
-                  <div v-if="mixedSampleImport.preview" :class="['notice',mixedSampleImport.preview.valid ? 'success' : 'danger']" style="margin-top:10px">
-                    <div class="toolbar">
-                      <strong>{{ mixedSampleImport.preview.valid ? '三客户分拣预检通过' : '仍有待确认项，ERP 没有写入数据' }}</strong>
-                      <div class="toolbar-group">
-                        <button v-if="mixedSampleImport.preview.unresolved?.length" class="btn small" :disabled="mixedSampleImport.loading" @click="previewMixedSampleImport">按当前选择重新预检</button>
-                        <button v-if="mixedSampleImport.preview.valid" class="btn small success" :disabled="mixedSampleImport.loading" @click="applyMixedSampleImport">确认录入三家客户</button>
-                      </div>
-                    </div>
-                    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px">
-                      <span>样品 {{ mixedSampleImport.preview.summary?.samples || 0 }} 件</span><span>已分拣 {{ mixedSampleImport.preview.summary?.resolved_samples || 0 }} 件</span><span>目标常用箱 {{ mixedSampleImport.preview.summary?.resolved_products || 0 }} 款</span><span>待确认 {{ mixedSampleImport.preview.summary?.unresolved_samples || 0 }} 件</span><span>图片 {{ mixedSampleImport.preview.summary?.drawings || 0 }} 张</span><span>新增 {{ mixedSampleImport.preview.summary?.create_products || 0 }} 款</span><span>更新 {{ mixedSampleImport.preview.summary?.update_products || 0 }} 款</span><span>只补图 {{ mixedSampleImport.preview.summary?.drawing_only_products || 0 }} 款</span>
-                    </div>
-                    <div v-if="mixedSampleImport.preview.groups?.length" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-                      <span v-for="group in mixedSampleImport.preview.groups" :key="group.customer_code" class="status green"><strong>{{ group.customer_code }}</strong> {{ group.customer_name }}：{{ group.count }} 款（新增 {{ group.create_products }} / 更新 {{ group.update_products }} / 补图 {{ group.drawing_only_products }}）</span>
-                    </div>
-                    <div v-if="mixedSampleImport.preview.unresolved?.length" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;margin-top:10px">
-                      <div v-for="item in mixedSampleImport.preview.unresolved" :key="item.sample_id" class="panel" style="padding:8px;margin:0">
-                        <strong>{{ item.sample_id }}｜{{ item.product_code }}</strong><div class="muted">{{ item.reason }}</div>
-                        <div v-if="item.candidates?.length" style="display:grid;gap:6px;margin-top:7px">
-                          <div class="toolbar" style="align-items:flex-start">
-                            <info-note>请人工勾选正确资料；同一实物如为跨客户通用，可同时勾选不同客户。同一客户仍只能选一款，系统不会自动双选。</info-note>
-                            <button v-if="mixedSampleCanSelectAllCustomers(item)" class="btn small" @click="toggleAllMixedSampleCustomers(item)">{{ mixedSampleAllCustomersSelected(item) ? '取消全部通用' : (item.candidates.length === 2 ? '两个客户都通用' : '所列客户都通用') }}</button>
-                          </div>
-                          <label v-for="candidate in item.candidates" :key="candidate.key" class="panel" style="padding:7px;margin:0;cursor:pointer;display:flex;gap:7px;align-items:flex-start">
-                            <input type="checkbox" :checked="mixedSampleCandidateSelected(item.sample_id,candidate.key)" @change="toggleMixedSampleCandidate(item,candidate)" />
-                            <span><strong>{{ candidate.customer_code }}</strong>｜{{ candidate.product_name }}｜图号 {{ candidate.drawing_number || '-' }}｜{{ candidate.dimensions }}｜报料 {{ candidate.report_size }}</span>
-                          </label>
-                        </div>
-                        <div v-else class="muted" style="margin-top:6px">请在样品 Excel 修正手写型号，或先补入三客户基础资料后重新预检。</div>
-                      </div>
-                    </div>
-                    <div v-if="mixedSampleImport.preview.items?.length" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:6px;margin-top:8px">
-                      <div v-for="item in mixedSampleImport.preview.items.slice(0,160)" :key="`${item.customer_code}-${item.product_code}-${item.row_number}`" class="panel" style="padding:8px;margin:0">
-                        <div class="toolbar"><strong>{{ item.customer_code }}｜{{ item.product_code }}｜{{ item.product_name }}</strong><span :class="['status',item.action==='新增' ? 'green' : 'orange']">{{ item.action }}</span></div>
-                        <div v-if="item.missing_fields?.length" class="muted">待完善：{{ item.missing_fields.join('、') }}</div>
-                      </div>
-                    </div>
-                    <div v-if="mixedSampleImport.preview.errors?.length" style="display:grid;gap:5px;margin-top:8px">
-                      <div v-for="(error,index) in mixedSampleImport.preview.errors.slice(0,160)" :key="`${error.sheet}-${error.row_number}-${index}`">{{ error.sheet }} 第 {{ error.row_number }} 行：{{ error.message }}</div>
-                    </div>
-                  </div>
-                </div>
+
                 <div v-if="productTrashOpen" class="panel">
                   <div class="toolbar"><strong>产品垃圾站（保留 30 天）</strong><div class="toolbar-group"><button class="btn" :disabled="productLifecycleBusy() || productTrashLoading" @click="loadProductTrash()">{{ productTrashLoading ? "读取中…" : "刷新" }}</button><button class="btn danger" :disabled="productLifecycleBusy() || productTrashLoading || !productTrashItems.length" @click="emptyProductTrash()">{{ productLifecyclePending('empty') ? '处理中…' : '清空垃圾站' }}</button><button class="btn" :disabled="productLifecycleBusy()" @click="productTrashOpen=false">关闭</button></div></div>
                   <div v-if="productTrashLoading" class="empty">正在读取产品垃圾站…</div>
@@ -3713,49 +3657,7 @@
                     <div class="product-breadcrumb"><button class="btn" @click="backToProductCustomers()">返回客户列表</button><span>常用箱与材质 › {{ selectedProductCustomer.name }}</span></div>
                     <pager :page="pages.products" :total="productsTotal" :page-size="productListPageSize()" :always="true" :compact="true" @change="pages.products=$event; runExplicitPageListLoad('products')"></pager>
                   </div>
-                  <div v-if="productWorkbookImport.visible" class="panel" style="margin-bottom:10px;border-color:#60a5fa">
-                    <div class="toolbar">
-                      <div><strong>样品 Excel 多卷导入</strong><div class="muted">当前客户：{{ selectedProductCustomer.name }}。一次可选择多卷；ERP 自动合并重复产品行和跨卷图片，先预检，确认后才写入。</div></div>
-                      <button class="btn small" :disabled="productWorkbookImport.loading" @click="clearProductWorkbookImport">关闭</button>
-                    </div>
-                    <div class="toolbar" style="align-items:flex-start;flex-wrap:wrap;margin-top:8px">
-                      <label class="btn" style="cursor:pointer">
-                        <input type="file" accept=".xlsx" multiple style="display:none" @change="selectProductWorkbookFiles" />
-                        {{ productWorkbookImport.files.length ? `已选 ${productWorkbookImport.files.length} 卷 Excel` : '选择一卷或多卷 Excel' }}
-                      </label>
-                      <button class="btn primary" :disabled="productWorkbookImport.loading || !productWorkbookImport.files.length" @click="previewProductWorkbookImport">{{ productWorkbookImport.loading ? '正在校验…' : '上传并预检' }}</button>
-                      <details>
-                        <summary class="btn small" style="cursor:pointer">旧模板外部图纸兼容</summary>
-                        <label class="btn small" style="cursor:pointer;margin-top:6px"><input type="file" accept=".jpg,.jpeg,.png,.webp,.pdf" multiple style="display:none" @change="selectProductWorkbookDrawings" />{{ productWorkbookImport.drawings.length ? `已选 ${productWorkbookImport.drawings.length} 个外部图纸` : '选择外部图纸' }}</label>
-                      </details>
-                    </div>
-                    <div v-if="productWorkbookImport.files.length" class="muted" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><span v-for="file in productWorkbookImport.files" :key="`${file.name}-${file.size}`" class="status">{{ file.name }}</span></div>
-                    <div v-if="productWorkbookImport.preview" :class="['notice',productWorkbookImport.preview.valid ? 'success' : 'danger']" style="margin-top:10px">
-                      <div class="toolbar">
-                        <strong>{{ productWorkbookImport.preview.valid ? '预检通过，可直接确认录入' : '预检未通过，ERP 没有写入数据' }}</strong>
-                        <button v-if="productWorkbookImport.preview.valid" class="btn small success" :disabled="productWorkbookImport.loading" @click="applyProductWorkbookImport">确认录入</button>
-                      </div>
-                      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px">
-                        <span>Excel {{ productWorkbookImport.preview.summary?.workbooks || productWorkbookImport.files.length }} 卷</span>
-                        <span>新增 {{ productWorkbookImport.preview.summary?.create_products || 0 }} 款</span>
-                        <span>更新 {{ productWorkbookImport.preview.summary?.update_products || 0 }} 款</span>
-                        <span>只补图 {{ productWorkbookImport.preview.summary?.drawing_only_products || 0 }} 款</span>
-                        <span>图片 {{ productWorkbookImport.preview.summary?.drawings || 0 }} 张</span>
-                        <span>待完善 {{ productWorkbookImport.preview.summary?.needs_completion || 0 }} 款</span>
-                      </div>
-                      <div v-if="productWorkbookImport.preview.items?.length" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:6px;margin-top:8px">
-                        <div v-for="item in productWorkbookImport.preview.items.slice(0,120)" :key="`${item.product_code}-${item.row_number}`" class="panel" style="padding:8px;margin:0">
-                          <div class="toolbar"><strong>{{ item.product_code }}｜{{ item.product_name }}</strong><span :class="['status',item.action==='新增' ? 'green' : 'orange']">{{ item.action }}</span></div>
-                          <div class="muted">{{ item.changed_fields?.length ? `变化：${item.changed_fields.join('、')}` : '产品字段不变，仅处理图片' }}</div>
-                          <div v-if="item.missing_fields?.length" class="muted">待完善：{{ item.missing_fields.join('、') }}</div>
-                        </div>
-                      </div>
-                      <div v-if="productWorkbookImport.preview.errors?.length" style="display:grid;gap:5px;margin-top:8px">
-                        <div v-for="(error,index) in productWorkbookImport.preview.errors.slice(0,120)" :key="`${error.sheet}-${error.row_number}-${index}`">{{ error.sheet }} 第 {{ error.row_number }} 行：{{ error.message }}</div>
-                        <div v-if="productWorkbookImport.preview.errors.length > 120">另有 {{ productWorkbookImport.preview.errors.length - 120 }} 条错误，请分批修正。</div>
-                      </div>
-                    </div>
-                  </div>
+  
                   <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
                   <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="runExplicitPageListLoad('products')">重试</button></div>
                   <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
@@ -5139,7 +5041,7 @@
             </template>
 
             <template v-else-if="activePage === 'deliveries'">
-              <div class="page-head delivery-page-head"><div><h2>送货与回单</h2></div><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入预送货</button><button class="btn" @click="openDeliveryBacklogs">持续待补送</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button><button class="btn" @click="loadDeliveries">刷新</button></div></div>
+              <div class="page-head delivery-page-head"><div><h2>送货与回单</h2></div><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入预送货</button><button class="btn" @click="openDeliveryBacklogs">持续待补送</button><button class="btn" @click="loadDeliveries">刷新</button></div></div>
               <div v-if="deliveryDispatchStorageError" class="panel status orange">{{ deliveryDispatchStorageError }}</div>
               <div v-if="deliveryDispatchNotice && (deliveryDispatchNotice.record.state!=='confirmed' || deliveryDispatchNotice.auxiliary) && deliveryDispatchNotice.record.actor === Number(user?.id)" class="panel" data-delivery-dispatch-success><strong>{{ deliveryDispatchNotice.message }} · {{ deliveryDispatchNotice.record.display.delivery_number }}</strong><div>{{ deliveryDispatchCurrentText(deliveryDispatchNotice.record.current,deliveryDispatchNotice.record.state) }}</div><div v-if="deliveryDispatchNotice.record.state==='closed'">本次确认已结束，没有执行这次发货；新发货仍需重新核对数量。</div><div v-if="deliveryDispatchNotice.auxiliary">{{ deliveryDispatchNotice.auxiliary }}</div><button class="btn" :disabled="deliveryDispatchIsBusy()" @click="viewDeliveryDispatchOriginal(deliveryDispatchNotice.record)">查看送货单</button><button v-if="deliveryDispatchNotice.record.state==='closed'" class="btn primary" :disabled="deliveryDispatchIsBusy()" @click="dispatchDelivery({id:deliveryDispatchNotice.record.deliveryId})">重新核对发货</button><button v-else-if="deliveryDispatchNotice.record.state==='confirmed'" class="btn" :disabled="deliveryDispatchIsBusy()" @click="printDelivery({id:deliveryDispatchNotice.record.deliveryId,delivery_number:deliveryDispatchNotice.record.display.delivery_number})">打印送货单</button></div>
               <div v-for="record in deliveryDispatchRecords.filter(row => row.actor === Number(user?.id))" :key="record.key" class="panel" data-delivery-dispatch-recovery>
@@ -5195,7 +5097,7 @@
                     <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ row.total_amount == null ? "待核对" : money(row.total_amount) }}</td>
                     <td><button class="btn small delivery-list-detail-toggle" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${row.item_count ?? (row.items || []).length}）` }}</button></td>
                     <td><span v-if="row.status==='voided'" class="status gray">已删除（留痕）</span><status-tag v-else :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
-                    <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
+                    <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag><span v-if="deliveryLocationCountdown(row)" class="delivery-location-countdown">{{ deliveryLocationCountdown(row) }}</span></td>
                     <td class="delivery-list-actions"><div class="delivery-row-actions-inner">
                       <button v-if="deliveryPrimaryRowActionLabel(row)" class="btn small primary delivery-row-primary-action" :class="deliveryPrimaryRowActionClass(row)" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="runDeliveryPrimaryRowAction(row)">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '推送中…' : (deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (deliveryOperationState.action==='reprint' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '打开中…' : (receiptOperationState.action==='open' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '加载中…' : deliveryPrimaryRowActionLabel(row)))) }}</button>
                       <div v-if="deliveryHasSecondaryRowActions(row)" class="delivery-row-more">
@@ -5236,7 +5138,7 @@
                                 <td class="delivery-detail-code delivery-text-cell"><strong :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_code')}">{{ item.product_code || '未登记' }}</strong><span v-if="deliverySearchItemFieldMatched(row,item,'product_code')" class="delivery-search-hit-label">命中存货编码</span></td>
                                 <td class="delivery-detail-name delivery-text-cell"><span :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_name')}">{{ item.product_name || '未登记' }}</span><span v-if="deliverySearchItemFieldMatched(row,item,'product_name')" class="delivery-search-hit-label">命中产品名称</span></td>
                                 <td v-if="deliveryShowsCategory(row)" class="delivery-detail-category">{{ item.customer_category || "" }}</td>
-                                <td class="delivery-detail-drawing delivery-text-cell">{{ item.customer_drawing_number || "" }}</td><td class="delivery-detail-location"><button v-for="location in deliveryLineLocations(item)" :key="location.key" class="delivery-location-link" type="button" @click="openDeliveryLocation(location)">{{ location.label }}</button></td>
+                                <td class="delivery-detail-drawing delivery-text-cell">{{ item.customer_drawing_number || "" }}</td><td class="delivery-detail-location"><button v-for="location in deliveryVisibleLocations(row,item)" :key="location.key" class="delivery-location-link" type="button" @click="openDeliveryLocation(location)">{{ location.label }}</button></td>
                                 <td class="delivery-detail-quantity"><input v-if="deliveryInlineFor(row,item)" class="input" type="number" min="1" step="1" v-model="deliveryInlineEdit.delivered_quantity" :disabled="!deliveryInlineEdit.quantityEditable || deliveryInlineEdit.saving || deliveryInlineEdit.uncertain" @input="rebalanceInlineDeliveryAllocations" aria-label="送货数量" /><strong v-else>{{ item.display_quantity ?? item.delivered_quantity }}</strong></td><td v-if="canViewSalesAmounts" class="delivery-detail-price">{{ deliveryLinePriceText(item) }}</td><td v-if="canViewSalesAmounts" class="delivery-detail-amount">{{ deliveryLineAmount(item) }}</td>
                                 <td class="delivery-detail-action"><div class="delivery-detail-row-actions"><template v-if="deliveryInlineFor(row,item)"><button class="btn small primary" :disabled="deliveryInlineEdit.saving" @click="saveInlineDeliveryLine(row,item)">{{ deliveryInlineEdit.saving ? '保存中…' : (deliveryInlineEdit.uncertain ? '核对重试' : '保存') }}</button><button class="btn small" :disabled="deliveryInlineEdit.saving" @click="cancelInlineDeliveryLine">取消</button></template><template v-else><button v-if="canDelivery && ['pending','dispatched'].includes(row.status)" class="btn small" :disabled="!!deliveryInlineEdit || !!deliveryOperationState.action || !!receiptOperationState.action" @click="startInlineDeliveryLine(row,item)">编辑</button><button v-if="canEditDeliveryLineQuantity(row)" class="btn small danger" :disabled="!!deliveryInlineEdit || !!deliveryOperationState.action || !!receiptOperationState.action" @click="deleteDeliveryDetailLine(row,item)">删除</button></template></div></td>
                               </tr>
@@ -9538,18 +9440,7 @@
                 <p class="muted">本次总量上限 {{ deliveryBacklogs.preview.requested_quantity }}；未分配 {{ deliveryBacklogs.preview.unallocated_quantity }}。这里只建立原订单的送货草稿。</p><button class="btn primary" :disabled="deliveryBacklogs.loading" @click="applyDeliveryBacklogs">按以上分配填写补送草稿</button>
               </div>
             </div>
-            <div v-else-if="modal.type === 'deliveryRoute'">
-              <div class="status orange" style="display:block;white-space:normal;margin-bottom:10px">{{ deliveryRoutePlan.disclaimer }}</div>
-              <div v-if="!deliveryRoutePlan.disclaimer" class="muted" style="margin-bottom:10px">区域同车建议不是实时路况最优解；请打开地图分段导航后由司机确认最终顺序。</div>
-              <div class="panel" style="margin-bottom:10px"><strong>出发地址：</strong>{{ deliveryRoutePlan.origin_address || '公司地址未登记，请先在系统备份页完善公司信息' }}<span class="muted" style="margin-left:12px">待送客户 {{ deliveryRoutePlan.customer_count || 0 }} 家</span></div>
-              <div v-if="!(deliveryRoutePlan.groups || []).length" class="empty">当前没有可送货客户，或客户地址尚未登记。</div>
-              <div v-for="group in deliveryRoutePlan.groups || []" :key="group.area" class="order-group-detail-card" style="margin-bottom:12px">
-                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px"><strong>{{ group.area }}同车建议</strong><span v-if="group.same_as_origin_area" class="status green">与工厂同区域</span><span class="muted">{{ group.customer_count }} 家｜{{ group.pending_item_count }} 条｜待送 {{ group.pending_quantity }}</span></div>
-                <table style="font-size:12px"><thead><tr><th>顺序</th><th>客户</th><th>地址</th><th>交期 / 待送</th><th>涉及款号</th><th>分段导航</th></tr></thead><tbody>
-                  <tr v-for="customer in group.customers" :key="customer.customer_id"><td><strong>{{ customer.sequence }}</strong></td><td>{{ customer.customer_name }}<div class="muted">{{ customer.contact_person || '' }} {{ customerPhoneDisplay(customer.phone) }}</div></td><td style="white-space:normal;min-width:240px">{{ customer.address || '地址未登记' }}<div v-if="customer.subarea" class="muted">{{ customer.subarea }}</div></td><td>{{ customer.earliest_delivery_date || '-' }}<div class="muted">{{ customer.pending_item_count }} 条 / {{ customer.pending_quantity }}</div></td><td style="white-space:normal">{{ compactList(customer.product_codes,5).join(' / ') }}<span v-if="compactMore(customer.product_codes,5)" class="muted"> 等 {{ customer.product_codes.length }} 款</span></td><td><a v-if="customer.navigation_url" class="btn small primary" :href="customer.navigation_url" target="_blank" rel="noopener">从上一站导航到此</a><span v-else :class="['status', customer.same_as_previous_address ? 'green' : 'orange']">{{ customer.navigation_note || '缺少起点或地址' }}</span></td></tr>
-                </tbody></table>
-              </div>
-            </div>
+
             <div v-else-if="modal.type === 'deliveryDispatch'" data-delivery-dispatch-preview>
               <div v-if="deliveryDispatchPreview && deliveryDispatchPreview.packet.current_actor_id === Number(user?.id)">
                 <strong>{{ deliveryDispatchPreview.display.delivery_number }} · {{ deliveryDispatchPreview.display.customer_name }}</strong>
@@ -11151,8 +11042,6 @@
             masterVersionConflict: null,
             masterVersionHistory: blankMasterVersionHistory(),
             selectedProductCustomer: null, productCustomerSearch: "",
-            productWorkbookImport: { visible:false, loading:false, files:[], drawings:[], preview:null },
-            mixedSampleImport: { visible:false, loading:false, referenceFile:null, files:[], drawings:[], overrides:{}, preview:null },
             productsLoading: false, productsError: "",
             showProductMoreFilters: false,
             productTrashOpen: false, productTrashItems: [], productTrashLoading:false, productTrashError:"", productLifecycleAction:{action:"",productId:null}, customerLifecycleAction:{action:"",customerId:null}, materialLifecycleAction:{action:"",materialId:null},
@@ -11249,7 +11138,6 @@
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
             deliveryForm: { editingId: null, editing_status:"pending", delivery_number: "", source_mode: "order", source_tab: "order", customer_id: null, delivery_date: today(), historical_backfill:false, version:1, idempotency_key:null, vehicle_number: "", lines: [], saved_signature: "", pick_task: null },
-            deliveryRoutePlan: { origin_address:null, customer_count:0, groups:[], disclaimer:"" },
             deliveryBatchPicker: { visible: false, loading: false, keyword: "", items: [], selected: {}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message: "", error: false },
             unorderedFinishedPicker: { visible: false, loading: false, keyword:"", items: [], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message: "", error: false },
             tianhuaPreimport: { sourceMode:"image", files:[], preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"" },
@@ -23743,7 +23631,7 @@
             try {
               const { data } = await axios.get("/api/deliveries", { params });
               if (requestToken !== this.deliveryListState.request_token) return false;
-              this.deliveries = data.items || [];
+              this.deliveries = (data.items || []).map(row => this.receiveDeliveryLocationPolicy?.(row) || row);
               this.deliveriesTotal = Number(data.total || 0);
               this.expandedDeliveryRows = {};
               this.deliveryDetailState = {};
@@ -30371,247 +30259,7 @@
               this.showToast("产品图片/图纸记录已删除");
             } catch(error) { this.showToast(this.errorMessage(error), true); }
           },
-          productWorkbookImportError(error) {
-            const detail = error?.response?.data?.detail;
-            if (detail && typeof detail === "object" && detail.message) return detail.message;
-            return this.errorMessage(error);
-          },
-          resetMixedSampleImport(visible=false) {
-            this.mixedSampleImport = { visible, loading:false, referenceFile:null, files:[], drawings:[], overrides:{}, preview:null };
-          },
-          selectMixedReferenceFile(event) {
-            const input = event?.target;
-            this.mixedSampleImport.referenceFile = input?.files?.[0] || null;
-            this.mixedSampleImport.preview = null;
-            this.mixedSampleImport.overrides = {};
-            if (input) input.value = "";
-          },
-          selectMixedSampleFiles(event) {
-            const input = event?.target;
-            const seen = new Set();
-            this.mixedSampleImport.files = Array.from(input?.files || []).filter(file => {
-              const key = `${file.name}|${file.size}|${file.lastModified}`;
-              if (seen.has(key)) return false;
-              seen.add(key);
-              return true;
-            });
-            this.mixedSampleImport.preview = null;
-            this.mixedSampleImport.overrides = {};
-            if (input) input.value = "";
-          },
-          selectMixedSampleDrawings(event) {
-            const input = event?.target;
-            this.mixedSampleImport.drawings = Array.from(input?.files || []);
-            this.mixedSampleImport.preview = null;
-            if (input) input.value = "";
-          },
-          async downloadMixedSampleTemplate() {
-            if (this.mixedSampleImport.loading) return;
-            this.mixedSampleImport.loading = true;
-            try {
-              const response = await axios.get(
-                "/api/master/products/mixed-import-template.xlsx",
-                {responseType:"blob"},
-              );
-              const blob = response.data instanceof Blob
-                ? response.data
-                : new Blob([response.data],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
-              const url = URL.createObjectURL(blob);
-              const anchor = document.createElement("a");
-              anchor.href = url;
-              anchor.download = "混合客户样品现场登记与图片导入模板.xlsx";
-              document.body.appendChild(anchor);
-              anchor.click();
-              anchor.remove();
-              setTimeout(() => URL.revokeObjectURL(url),1000);
-              this.showToast("已下载简化模板；只填型号和目测工艺，照片按样品号改名即可");
-            } catch(error) {
-              this.showToast(this.productWorkbookImportError(error),true);
-            } finally {
-              this.mixedSampleImport.loading = false;
-            }
-          },
-          async previewMixedSampleImport() {
-            const state = this.mixedSampleImport;
-            if (state.loading || !state.referenceFile || !state.files.length) return;
-            state.loading = true;
-            try {
-              const form = new FormData();
-              form.append("reference_file",state.referenceFile);
-              state.files.forEach(file=>form.append("files",file));
-              state.drawings.forEach(file=>form.append("drawings",file));
-              form.append("overrides",JSON.stringify(state.overrides || {}));
-              const {data} = await axios.post("/api/master/products/mixed-import/preview",form);
-              state.preview = data;
-              this.showToast(
-                data.valid
-                  ? "混合样品已按客户分拣，请核对后一次确认录入"
-                  : `发现 ${data.unresolved?.length || 0} 项待确认、${data.errors?.length || 0} 项错误，ERP 尚未写入数据`,
-                !data.valid,
-              );
-            } catch(error) {
-              this.showToast(this.productWorkbookImportError(error),true);
-            } finally {
-              state.loading = false;
-            }
-          },
-          mixedSampleSelectedKeys(sampleId) {
-            const value = this.mixedSampleImport.overrides?.[sampleId];
-            if (Array.isArray(value)) return value;
-            return value ? [value] : [];
-          },
-          mixedSampleCandidateSelected(sampleId,candidateKey) {
-            return this.mixedSampleSelectedKeys(sampleId).includes(candidateKey);
-          },
-          mixedSampleCanSelectAllCustomers(item) {
-            const candidates = item?.candidates || [];
-            return candidates.length >= 2
-              && new Set(candidates.map(candidate=>candidate.customer_code)).size === candidates.length;
-          },
-          mixedSampleAllCustomersSelected(item) {
-            const selected = new Set(this.mixedSampleSelectedKeys(item.sample_id));
-            return this.mixedSampleCanSelectAllCustomers(item)
-              && item.candidates.every(candidate=>selected.has(candidate.key));
-          },
-          toggleAllMixedSampleCustomers(item) {
-            if (this.mixedSampleAllCustomersSelected(item)) {
-              delete this.mixedSampleImport.overrides[item.sample_id];
-              return;
-            }
-            this.mixedSampleImport.overrides[item.sample_id] = item.candidates.map(candidate=>candidate.key);
-          },
-          toggleMixedSampleCandidate(item,candidate) {
-            const sampleId = item.sample_id;
-            let selected = [...this.mixedSampleSelectedKeys(sampleId)];
-            if (selected.includes(candidate.key)) {
-              selected = selected.filter(key=>key !== candidate.key);
-            } else {
-              const sameCustomerKeys = new Set(
-                (item.candidates || [])
-                  .filter(option=>option.customer_code === candidate.customer_code)
-                  .map(option=>option.key),
-              );
-              const replaced = selected.some(key=>sameCustomerKeys.has(key));
-              selected = selected.filter(key=>!sameCustomerKeys.has(key));
-              selected.push(candidate.key);
-              if (replaced) this.showToast(`同一客户 ${candidate.customer_code} 只能选一款，已替换原选择`);
-            }
-            if (selected.length) this.mixedSampleImport.overrides[sampleId] = selected;
-            else delete this.mixedSampleImport.overrides[sampleId];
-          },
-          async applyMixedSampleImport() {
-            const state = this.mixedSampleImport;
-            if (state.loading || !state.preview?.valid || !state.preview?.preview_token) return;
-            state.loading = true;
-            try {
-              const {data} = await axios.post(
-                "/api/master/products/mixed-import/apply",
-                {preview_token:state.preview.preview_token},
-              );
-              if (this.selectedProductCustomer) await this.loadProducts();
-              this.resetMixedSampleImport(false);
-              this.showToast(data.message || "混合样品已按客户录入常用箱");
-            } catch(error) {
-              this.showToast(this.productWorkbookImportError(error),true);
-            } finally {
-              state.loading = false;
-            }
-          },
-          resetProductWorkbookImport(visible=false) {
-            this.productWorkbookImport = { visible, loading:false, files:[], drawings:[], preview:null };
-          },
-          clearProductWorkbookImport() {
-            this.resetProductWorkbookImport(false);
-          },
-          selectProductWorkbookFiles(event) {
-            const input = event?.target;
-            const selected = Array.from(input?.files || []);
-            const seen = new Set();
-            this.productWorkbookImport.files = selected.filter(file => {
-              const key = `${file.name}|${file.size}|${file.lastModified}`;
-              if (seen.has(key)) return false;
-              seen.add(key);
-              return true;
-            });
-            this.productWorkbookImport.preview = null;
-            if (input) input.value = "";
-          },
-          selectProductWorkbookDrawings(event) {
-            const input = event?.target;
-            this.productWorkbookImport.drawings = Array.from(input?.files || []);
-            this.productWorkbookImport.preview = null;
-            if (input) input.value = "";
-          },
-          async downloadProductWorkbookTemplate() {
-            if (!this.selectedProductCustomer || this.productWorkbookImport.loading) return;
-            this.productWorkbookImport.loading = true;
-            try {
-              const response = await axios.get(
-                "/api/master/products/import-template.xlsx",
-                { params:{customer_id:this.selectedProductCustomer.id}, responseType:"blob" },
-              );
-              const blob = response.data instanceof Blob
-                ? response.data
-                : new Blob([response.data],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
-              const url = URL.createObjectURL(blob);
-              const anchor = document.createElement("a");
-              anchor.href = url;
-              anchor.download = `样品常用箱导入模板_${this.selectedProductCustomer.name}.xlsx`;
-              document.body.appendChild(anchor);
-              anchor.click();
-              anchor.remove();
-              setTimeout(() => URL.revokeObjectURL(url),1000);
-              this.showToast("已下载当前客户模板；后续新增产品和图片后可直接回传 ERP");
-            } catch(error) {
-              this.showToast(this.productWorkbookImportError(error),true);
-            } finally {
-              this.productWorkbookImport.loading = false;
-            }
-          },
-          async previewProductWorkbookImport() {
-            const state = this.productWorkbookImport;
-            if (!this.selectedProductCustomer || !state.files.length || state.loading) return;
-            state.loading = true;
-            state.preview = null;
-            try {
-              const form = new FormData();
-              form.append("customer_id",String(this.selectedProductCustomer.id));
-              state.files.forEach(file=>form.append("files",file));
-              state.drawings.forEach(file=>form.append("drawings",file));
-              const {data} = await axios.post("/api/master/products/import/preview",form);
-              state.preview = data;
-              this.showToast(
-                data.valid
-                  ? "预检通过，请核对新增、更新和补图数量"
-                  : `发现 ${data.errors?.length || 0} 条错误，ERP 尚未写入任何数据`,
-                !data.valid,
-              );
-            } catch(error) {
-              this.showToast(this.productWorkbookImportError(error),true);
-            } finally {
-              state.loading = false;
-            }
-          },
-          async applyProductWorkbookImport() {
-            const state = this.productWorkbookImport;
-            if (state.loading || !state.preview?.valid || !state.preview?.preview_token) return;
-            state.loading = true;
-            try {
-              const {data} = await axios.post(
-                "/api/master/products/import/apply",
-                {preview_token:state.preview.preview_token},
-              );
-              await this.loadProducts();
-              this.resetProductWorkbookImport(false);
-              this.showToast(data.message || "样品常用箱和图片已录入");
-            } catch(error) {
-              this.showToast(this.productWorkbookImportError(error),true);
-            } finally {
-              state.loading = false;
-            }
-          },
           async selectProductCustomer(row) {
-            this.resetProductWorkbookImport(false);
             this.selectedProductCustomer = row;
             this.filters.productCustomer = row.id;
             this.filters.productKeyword = "";
@@ -30644,7 +30292,6 @@
           },
           backToProductCustomers() {
             this.cancelQueuedPageSearch("products");
-            this.resetProductWorkbookImport(false);
             this.selectedProductCustomer = null;
             this.pages.productCustomers = 1;
             this.filters.productCustomer = "";
@@ -32849,6 +32496,7 @@
             try {
               const { data } = await axios.get(`/api/deliveries/${deliveryId}`);
               if (requestToken !== this.deliveryDetailState[deliveryId]?.request_token) return false;
+              this.receiveDeliveryLocationPolicy?.(data);
               Object.assign(row, data, {
                 detail_loaded:true,
                 item_count:Array.isArray(data?.items) ? data.items.length : Number(row.item_count || 0),
@@ -39787,15 +39435,7 @@
             this.deliveryForm.saved_signature = this.deliveryFormSignature();
             if (this.deliveryForm.customer_id) { await this.loadDeliveryRemindersForCustomer(this.deliveryForm.customer_id); await this.loadDeliveryBatchItems(1); }
           },
-          async openDeliveryRoutePlan() {
-            try {
-              const { data } = await axios.get("/api/deliveries/route-suggestions");
-              this.deliveryRoutePlan = data;
-              this.modal = { type:"deliveryRoute", title:"送货路线辅助建议" };
-            } catch (error) {
-              this.showToast("路线建议加载失败：" + this.errorMessage(error), true);
-            }
-          },
+
           backlogStatusLabel(status) { return ({waiting:'等待下次送货',partial:'部分补送',fulfilled:'已补齐',cancelled:'管理员已取消'})[status] || status; },
           async loadDeliveryBacklogs(page=1,history=this.deliveryBacklogs.history) {
             const state=this.deliveryBacklogs, seq=++state.sequence;state.loading=true;state.error='';state.items=[];

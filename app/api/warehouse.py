@@ -26091,6 +26091,7 @@ class FinishedIdentityConfirmation(BaseModel):
 
 
 class SharedFinishedPreview(BaseModel):
+    auto_enroll: bool | None = None
     product_ids: list[int] = Field(min_length=2, max_length=20)
     lot_ids: list[int] = Field(default_factory=list, max_length=100)
 
@@ -26141,11 +26142,14 @@ def confirm_shared_finished(payload: SharedFinishedConfirmation, db: Session = D
 
 
 class SharedFinishedChange(BaseModel):
-    action: Literal["add_lots", "configure"]
+    action: Literal["add_lots", "configure", "members"]
     expected_version: int = Field(ge=1)
     lot_ids: list[int] = Field(default_factory=list, max_length=100)
     enabled: bool | None = None
     auto_enroll: bool | None = None
+
+    product_ids: list[int] = Field(default_factory=list, max_length=20)
+    disabled_product_ids: list[int] = Field(default_factory=list, max_length=20)
 
 
 class SharedFinishedChangeConfirmation(SharedFinishedChange):
@@ -26196,7 +26200,8 @@ def search_shared_products(keyword: str = "", db: Session = Depends(get_db), use
     products = db.scalars(select(Product).where(Product.is_active.is_(True),
         Product.deleted_at.is_(None), Product.purged_at.is_(None),
         or_(Product.product_code.contains(keyword.strip(), autoescape=True),
-            Product.product_name.contains(keyword.strip(), autoescape=True))).order_by(Product.id).limit(50)).all()
+            Product.product_name.contains(keyword.strip(), autoescape=True))).order_by(
+                (Product.product_code == keyword.strip()).desc(), Product.product_code, Product.customer_id, Product.id).limit(100)).all()
     items = []
     for product in products:
         try:
@@ -26205,10 +26210,65 @@ def search_shared_products(keyword: str = "", db: Session = Depends(get_db), use
             if error.status_code == 403:
                 continue
             raise
-        items.append(dict(id=product.id, customer_id=product.customer_id,
-            customer_name=product.customer.name if product.customer else "",
-            product_code=product.product_code, product_name=product.product_name))
+        from app.services.shared_finished_management import product_summary
+        from app.models.shared_finished_stock import SharedFinishedMember
+        from app.services.shared_member_policy import enabled
+        member = db.get(SharedFinishedMember, product.id)
+        items.append(dict(**product_summary(product), id=product.id,
+            product_code=product.product_code, product_name=product.product_name,
+            group_id=member.group_id if member else None,
+            member_enabled=enabled(db, member.group_id, product.id) if member else None))
     return dict(items=items)
+
+
+@router.get("/finished/shared-stock/products/{product_id}/customers")
+def shared_customer_choices(product_id: int, keyword: str = "", db: Session = Depends(get_db),
+        user: User = Depends(admin_only)):
+    from app.models.customer import Customer
+    from app.models.shared_finished_stock import SharedFinishedMember
+    from app.services.shared_finished_management import product_summary
+    from app.services import shared_finished_stock as shared
+    source = db.get(Product, product_id)
+    if source is None:
+        raise HTTPException(404, detail="产品不存在")
+    require_customer_access(source.customer_id, user, db)
+    source_member = db.get(SharedFinishedMember, product_id)
+    query = select(Customer).where(Customer.is_active.is_(True))
+    if keyword.strip():
+        query = query.where(or_(Customer.name.contains(keyword.strip(), autoescape=True),
+            Customer.chinese_short_name.contains(keyword.strip(), autoescape=True)))
+    items = []
+    for customer in db.scalars(query.order_by(Customer.name, Customer.id).limit(100)):
+        try:
+            require_customer_access(customer.id, user, db)
+        except HTTPException as error:
+            if error.status_code == 403:
+                continue
+            raise
+        products = db.scalars(select(Product).where(Product.customer_id == customer.id,
+            Product.product_code == source.product_code, Product.is_active.is_(True),
+            Product.deleted_at.is_(None), Product.purged_at.is_(None)).order_by(Product.id)).all()
+        choices = []
+        for product in products:
+            member = db.get(SharedFinishedMember, product.id)
+            reason = None
+            try:
+                ids = sorted(set([source.id, product.id]))
+                if product.id == source.id:
+                    pass
+                elif source_member:
+                    from app.services.shared_finished_management import member_ids
+                    shared.preview(db, product_ids=sorted(set(member_ids(db, source_member.group_id) + ids)),
+                        lot_ids=[], group_id=source_member.group_id, allow_new_members=True)
+                else:
+                    shared.preview(db, product_ids=ids, lot_ids=[])
+            except WarehouseInventoryError as error:
+                reason = str(error)
+            choices.append(dict(**product_summary(product), id=product.id,
+                group_id=member.group_id if member else None, reason=reason))
+        items.append(dict(customer_id=customer.id, customer_name=customer.name,
+            products=choices, missing=not products))
+    return dict(items=items, limit=100)
 
 
 @router.get("/finished/shared-stock/groups/{group_id}")
@@ -26238,6 +26298,7 @@ def preview_shared_finished_change(group_id: int, payload: SharedFinishedChange,
     from app.services.shared_finished_management import preview_change
     try:
         _require_shared_group_access(db, user, group_id, payload.lot_ids)
+        _require_shared_confirmation_access(db, user, payload)
         return preview_change(db, group_id=group_id, **payload.model_dump())
     except WarehouseInventoryError as error:
         _handle(error)
@@ -26249,6 +26310,7 @@ def confirm_shared_finished_change(group_id: int, payload: SharedFinishedChangeC
     from app.services.shared_finished_management import change
     try:
         _require_shared_group_access(db, user, group_id, payload.lot_ids)
+        _require_shared_confirmation_access(db, user, payload)
         result = change(db, actor=user, group_id=group_id,
             **payload.model_dump(exclude={"physical_match_confirmed"}))
         db.commit()

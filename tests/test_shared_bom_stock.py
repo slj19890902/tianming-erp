@@ -22,6 +22,11 @@ def seed_pair(factory):
     with factory() as db:
         db.add(Customer(id=2,customer_number=2,customer_code='FICTION-BOM-B',name='虚构共用乙客户',payment_term_days=0,credit_limit=0))
         db.flush()
+        # Explicit fixture destination: a new customer does not inherit the
+        # first customer's preferred area merely because products can share.
+        from app.models.customer_finished_storage_preference import CustomerFinishedStoragePreference
+        for preference in db.scalars(select(CustomerFinishedStoragePreference).where(CustomerFinishedStoragePreference.customer_id==1)):
+            db.add(CustomerFinishedStoragePreference(customer_id=2,warehouse_area_id=preference.warehouse_area_id,priority=preference.priority))
         for pid in (1,2,3):
             source=db.get(Product,pid)
             values={c.name:getattr(source,c.name) for c in Product.__table__.columns if c.name not in {'id','created_at','updated_at','customer_id'}}
@@ -222,6 +227,17 @@ def test_real_preparation_auto_enrollment_cross_customer_stock(base_stock_replen
             for pid in children:
                 p=db.get(Product,pid);p.is_internal_component=True;p.unit='片'
             db.flush()
+            # Give each product an explicit existing formal area; do not force
+            # unrelated components into one exclusive fixed cell.
+            from app.models.receipt_putaway import ProductStoragePreference
+            from app.models.warehouse_inventory import WarehouseLocation,WarehouseArea,WarehouseFloor
+            location=db.get(WarehouseLocation,7)
+            area=db.scalar(select(WarehouseArea).join(WarehouseFloor).where(
+                WarehouseArea.area_code=='F12',WarehouseFloor.floor_number==3))
+            assert area is not None
+            for pid in [parent,*children]:
+                if db.get(ProductStoragePreference,pid) is None:
+                    db.add(ProductStoragePreference(product_id=pid,area_id=area.id,version=1))
             replace_product_bom(db,parent_product_id=parent,expected_version=root.version,user=actor,inventory_mode='assembled',material_mode='expand_children',delivery_mode='parent',components=[dict(component_product_id=pid,quantity_per_set=ratios[pid],inventory_relation='assembly') for pid in children])
             customer=Customer(customer_number=9876,customer_code='BOM-TEST-B',name='虚构BOM乙客户',payment_term_days=0,credit_limit=0)
             db.add(customer);db.flush();mapping={}

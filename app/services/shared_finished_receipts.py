@@ -45,7 +45,8 @@ def capture_order(connection, item):
         SharedFinishedGroup.id==member["group_id"])).mappings().one()
     policy=connection.execute(select(SharedFinishedPolicy.auto_enroll).where(
         SharedFinishedPolicy.group_id==member["group_id"])).scalar()
-    if not group["enabled"] or not policy:
+    from app.services.shared_member_policy import enabled
+    if not group["enabled"] or not policy or not enabled(connection, group["id"], item.product_id):
         return
     if connection.execute(select(Order.customer_id).where(Order.id==item.order_id)).scalar()!=member["customer_id"]:
         return

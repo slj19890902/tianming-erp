@@ -72,3 +72,24 @@ def test_bom_reader_requires_signed_capability():
         write_json(manager.root/'releases'/old/'manifest.json',cached)
         assert not manager.compatible(old,'r1')
     finally:fixture.tearDown()
+
+
+def test_member_policy_receipt_blocks_old_reader_without_changing_state():
+    import json
+    fixture=recovery.RecoveryTests();fixture.setUp()
+    try:
+        manager=fixture.manager;ids={}
+        for name,extra in [('old-member',{}),('new-member',{'shared_customer_members_v1':1})]:
+            fixture.release(name,'r1');package=fixture.root/(name+'-cap.zip')
+            pack_tree(fixture.root/('source-'+name),package,dict(type='tianming.release.v1',version=name,revision='r1',
+                reader_capabilities={'shared_finished_management_v1':1,**extra}),fixture.key)
+            ids[name]=manager.stage_release(package)['id']
+        state=dict(current=ids['new-member'],previous=ids['old-member'],schema_authority=ids['new-member']);write_json(manager.root/'state.json',state)
+        with closing(sqlite3.connect(manager.root/'shared/data/carton_erp.sqlite3')) as db:
+            db.execute('CREATE TABLE shared_finished_mutations(id INTEGER PRIMARY KEY,result_json TEXT)')
+            db.execute('INSERT INTO shared_finished_mutations(result_json) VALUES (?)',(json.dumps({'member_states':{'42':False}}),))
+            db.commit()
+        assert not manager.compatible(ids['old-member'],'r1')
+        assert manager.compatible(ids['new-member'],'r1')
+        assert manager.state==state
+    finally:fixture.tearDown()

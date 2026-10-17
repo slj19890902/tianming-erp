@@ -32,7 +32,7 @@ def product_summary(product):
     basis = json.loads(shared.product_basis(product))
     return dict(product_id=product.id, customer_id=product.customer_id,
         customer_name=product.customer.name if product.customer else "",
-        code=product.product_code, name=product.product_name, unit=product_unit_label(product),
+        code=product.product_code, name=product.product_name, drawing_number=product.customer_drawing_number, unit=product_unit_label(product),
         spec=basis["spec"], material=basis["material"], mold_id=product.mold_tool_id,
         mold_label=(product.mold_tool.label_name or product.mold_tool.mold_code) if product.mold_tool else "不使用模具",
         process=product.production_process, version=product.version,
@@ -81,19 +81,39 @@ def detail(db, group_id):
         shared.preview(db, product_ids=ids, lot_ids=[], group_id=group_id)
     except WarehouseInventoryError as error:
         issue = str(error)
+    from app.services.shared_member_policy import states
+    member_states = states(db, group_id)
     return dict(group_id=group.id, version=group.version, enabled=group.enabled,
         auto_enroll=_policy(db, group.id), evidence=group.evidence, identity_issue=issue,
-        products=[product_summary(db.get(Product, pid)) for pid in ids],
+        products=[dict(**product_summary(db.get(Product, pid)), enabled=member_states.get(str(pid), True)) for pid in ids],
         lots=product_lots(db, ids, group_id=group.id))
 
 
 def preview_change(db, *, group_id, action, expected_version, lot_ids=(),
-                   enabled=None, auto_enroll=None):
+                   enabled=None, auto_enroll=None, product_ids=(), disabled_product_ids=()):
     ids = member_ids(db, group_id)
     group = db.get(SharedFinishedGroup, group_id)
     if group.version != expected_version:
         raise shared._error("共用组已变化，请刷新后重新预览")
-    if action == "add_lots":
+    if action == "members":
+        if lot_ids or enabled is not None or auto_enroll is not None:
+            raise shared._error("客户调整不能同时追加批次或改变全组设置", 422)
+        proposed = sorted(set(product_ids))
+        if not set(ids).issubset(proposed):
+            raise shared._error("已有客户身份需保留，请取消其启用勾选以停止新预占", 422)
+        if not set(disabled_product_ids).issubset(proposed):
+            raise shared._error("停用客户不属于本次共用成员", 422)
+        from app.services.shared_member_policy import states
+        prior = states(db, group_id)
+        # Pausing does not require accepting drift. New/resumed members do.
+        resumed = any(prior.get(str(pid), True) is False and pid not in disabled_product_ids for pid in ids)
+        if set(proposed) != set(ids) or resumed:
+            value = shared.preview(db, product_ids=proposed, lot_ids=[], group_id=group_id, allow_new_members=True)
+        else:
+            value = None
+    elif product_ids or disabled_product_ids:
+        raise shared._error("本操作不接受客户成员调整", 422)
+    elif action == "add_lots":
         if enabled is not None or auto_enroll is not None:
             raise shared._error("追加批次不能同时改变共用设置", 422)
         if not lot_ids:
@@ -110,20 +130,25 @@ def preview_change(db, *, group_id, action, expected_version, lot_ids=(),
         raise shared._error("不支持的共用维护操作", 422)
     result = dict(group_id=group_id, action=action, version=group.version,
         current_enabled=group.enabled, current_auto_enroll=_policy(db, group_id),
-        enabled=enabled, auto_enroll=auto_enroll, value=value)
+        enabled=enabled, auto_enroll=auto_enroll, value=value,
+        **(dict(product_ids=proposed, disabled_product_ids=sorted(set(disabled_product_ids))) if action == "members" else {}))
     result["preview_hash"] = hashlib.sha256(shared._json(result).encode()).hexdigest()
     return result
 
 
 def change(db, *, actor, source="web", group_id, action, expected_version,
-           operation_key, preview_hash, evidence, lot_ids=(), enabled=None, auto_enroll=None):
+           operation_key, preview_hash, evidence, lot_ids=(), enabled=None, auto_enroll=None,
+           product_ids=(), disabled_product_ids=()):
     if source not in {"web", "script"} or (source == "web" and (
             actor is None or not actor.is_active or actor.role != "admin")):
         raise shared._error("仅活动管理员可维护成品共用", 403)
     if not evidence or not evidence.strip() or len(evidence) > 1000:
         raise shared._error("请填写本次实物核实或调整依据", 422)
+    if action != "members" and (product_ids or disabled_product_ids):
+        raise shared._error("本操作不接受客户成员调整", 422)
     args = dict(group_id=group_id, action=action, expected_version=expected_version,
-        lot_ids=sorted(set(lot_ids)), enabled=enabled, auto_enroll=auto_enroll)
+        lot_ids=sorted(set(lot_ids)), enabled=enabled, auto_enroll=auto_enroll,
+        **(dict(product_ids=sorted(set(product_ids)), disabled_product_ids=sorted(set(disabled_product_ids))) if action == "members" else {}))
     request = shared._json(dict(**args, preview_hash=preview_hash,
         evidence=evidence.strip(), actor_id=actor.id if actor else None, source=source))
     with atomic_bom(db):
@@ -147,7 +172,16 @@ def change(db, *, actor, source="web", group_id, action, expected_version,
                     Product.version == product["version"]).values(version=Product.version, updated_at=Product.updated_at))
                 if claimed.rowcount != 1:
                     raise shared._error("产品已变化，请重新预览")
-        if action == "configure":
+        if action == "members":
+            from app.services.shared_bom_stock import persist_contract
+            for row in (value["value"] or {}).get("products", []):
+                if db.get(SharedFinishedMember, row["product_id"]) is None:
+                    db.add(SharedFinishedMember(group_id=group_id, product_id=row["product_id"],
+                        customer_id=row["customer_id"], identity_json=row["identity_json"],
+                        product_basis_json=row["product_basis_json"]))
+                    db.flush()
+                    persist_contract(db, row["product_id"], row["identity_json"])
+        elif action == "configure":
             policy = db.get(SharedFinishedPolicy, group_id)
             if policy is None:
                 db.add(SharedFinishedPolicy(group_id=group_id, auto_enroll=auto_enroll))
@@ -162,6 +196,8 @@ def change(db, *, actor, source="web", group_id, action, expected_version,
                     raise shared._error("库存已变化，请重新预览")
                 db.add(SharedFinishedLot(group_id=group_id, lot_id=row["lot_id"], identity_json=row["identity_json"]))
         result = dict(group_id=group_id, version=expected_version + 1, replayed=False)
+        if action == "members":
+            result["member_states"] = {str(pid): pid not in disabled_product_ids for pid in sorted(set(product_ids))}
         db.add(SharedFinishedMutation(group_id=group_id, operation_key=operation_key,
             request_json=request, result_json=shared._json(result)))
         append_audit_event(db, event_category="business", result="success", source=source,
@@ -187,7 +223,8 @@ def enroll_new_lot(db, lot, *, operator_id, production_verified=False):
             lot.source_type in {"manual", "stocktake"} and lot.source_ref_type is None):
         return False
     member = db.get(SharedFinishedMember, identity[0])
-    if not member or not _policy(db, member.group_id):
+    from app.services.shared_member_policy import enabled
+    if not member or not _policy(db, member.group_id) or not enabled(db, member.group_id, identity[0]):
         return False
     group = db.get(SharedFinishedGroup, member.group_id)
     if not group.enabled:
@@ -228,7 +265,8 @@ def enroll_production_receipt(db, lot, *, completion, item, operator_id):
     from app.services.production_workflow import _new_task_printing_snapshot, ProductionWorkflowError
     product = db.get(Product, item.product_id)
     member = db.get(SharedFinishedMember, item.product_id)
-    if not member or not _policy(db, member.group_id) or not shared._ordinary(db, product):
+    from app.services.shared_member_policy import enabled
+    if not member or not _policy(db, member.group_id) or not enabled(db, member.group_id, item.product_id) or not shared._ordinary(db, product):
         return False
     task = db.get(ProductionTask, completion.task_id)
     if (task is None or task.sales_order_item_bom_component_id is not None

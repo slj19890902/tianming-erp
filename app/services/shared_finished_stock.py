@@ -89,7 +89,7 @@ def _ordinary(db, product):
         and db.get(ProductBomProfile, product.id) is None)
 
 
-def preview(db, *, product_ids, lot_ids, group_id=None, confirmed_printed_lots=None, confirmed_lot_fields=None):
+def preview(db, *, product_ids, lot_ids, group_id=None, confirmed_printed_lots=None, confirmed_lot_fields=None, allow_new_members=False, auto_enroll=None):
     pids, lids = sorted(set(product_ids)), sorted(set(lot_ids))
     if len(pids) < 2 or len(pids) > 20 or len(lids) > 100:
         raise _error("请指定2至20个可互换产品，成品批次最多100个；无库存可先建组")
@@ -106,12 +106,15 @@ def preview(db, *, product_ids, lot_ids, group_id=None, confirmed_printed_lots=N
     if group_id is None:
         if any(members):
             raise _error("所选产品已有共用关联，请在原组追加批次")
-    elif (sorted(db.scalars(select(SharedFinishedMember.product_id).where(
-            SharedFinishedMember.group_id == group_id)).all()) != pids
-            or any(m is None or m.group_id != group_id or m.customer_id != p.customer_id
-                or m.identity_json != identity or m.product_basis_json != product_basis(p)
-                for m, p, identity in zip(members, products, identities))):
-        raise _error("共用成员资料已变化，须核实原实物身份，不能自动采用新资料")
+    else:
+        existing_ids = set(db.scalars(select(SharedFinishedMember.product_id).where(
+            SharedFinishedMember.group_id == group_id)).all())
+        if (not existing_ids.issubset(pids) or (not allow_new_members and existing_ids != set(pids))
+                or any((m is None and p.id in existing_ids) or (m is None and not allow_new_members)
+                    or (m is not None and (m.group_id != group_id or m.customer_id != p.customer_id
+                        or m.identity_json != identity or m.product_basis_json != product_basis(p)))
+                    for m, p, identity in zip(members, products, identities))):
+            raise _error("共用成员资料已变化或属于其他共用组，须核实原实物身份")
     if confirmed_printed_lots and not set(confirmed_printed_lots).issubset(set(lids)):
         raise _error("印刷实物确认必须对应本次选定批次")
     if confirmed_lot_fields and not set(confirmed_lot_fields).issubset(set(lids)):
@@ -121,6 +124,10 @@ def preview(db, *, product_ids, lot_ids, group_id=None, confirmed_printed_lots=N
         version=p.version, code=p.product_code, name=p.product_name,
         identity_json=identity, product_basis_json=product_basis(p))
         for p, identity in zip(products, identities)], lots=lots)
+    if auto_enroll is not None:
+        if type(auto_enroll) is not bool:
+            raise _error("请明确新入库是否自动加入", 422)
+        result["auto_enroll"] = auto_enroll
     result["preview_hash"] = hashlib.sha256(_json(result).encode()).hexdigest()
     return result
 
@@ -200,17 +207,17 @@ def _preview_lots(db, products, lids, *, automatic=False, confirmed_printed_lots
     return lots
 
 
-def confirm(db, *, product_ids, lot_ids, preview_hash, operation_key, evidence, actor):
+def confirm(db, *, product_ids, lot_ids, preview_hash, operation_key, evidence, actor, auto_enroll=None):
     """Only an authenticated active administrator can create a sharing fact."""
     if actor is None or not actor.is_active or actor.role != "admin":
         raise _error("仅活动管理员可确认成品共用", 403)
     return _apply_confirmed(db, product_ids=product_ids, lot_ids=lot_ids,
         preview_hash=preview_hash, operation_key=operation_key, evidence=evidence,
-        actor=actor, source="web")
+        actor=actor, source="web", auto_enroll=auto_enroll)
 
 
 def _apply_confirmed(db, *, product_ids, lot_ids, preview_hash, operation_key, evidence, actor, source,
-                     confirmed_printed_lots=None, confirmed_lot_fields=None):
+                     confirmed_printed_lots=None, confirmed_lot_fields=None, auto_enroll=None):
     """Internal transaction; web authorization or reviewed offline job owns entry."""
     from app.services.bom_transactions import atomic_bom
     from app.services.audit_log import append_audit_event
@@ -223,6 +230,7 @@ def _apply_confirmed(db, *, product_ids, lot_ids, preview_hash, operation_key, e
         raise _error("请记录现场确认依据")
     request = _json(dict(product_ids=sorted(set(product_ids)), lot_ids=sorted(set(lot_ids)),
         preview_hash=preview_hash, evidence=evidence.strip(), actor_id=actor_id, source=source,
+        **({"auto_enroll": auto_enroll} if auto_enroll is not None else {}),
         **({"confirmed_printed_lots": confirmed_printed_lots} if confirmed_printed_lots else {}),
         **({"confirmed_lot_fields": confirmed_lot_fields} if confirmed_lot_fields else {})))
     with atomic_bom(db):
@@ -231,7 +239,7 @@ def _apply_confirmed(db, *, product_ids, lot_ids, preview_hash, operation_key, e
             if previous.request_json != request:
                 raise _error("操作标识已用于另一组共用确认")
             return dict(group_id=previous.id, replayed=True)
-        value = preview(db, product_ids=product_ids, lot_ids=lot_ids, confirmed_printed_lots=confirmed_printed_lots, confirmed_lot_fields=confirmed_lot_fields)
+        value = preview(db, product_ids=product_ids, lot_ids=lot_ids, confirmed_printed_lots=confirmed_printed_lots, confirmed_lot_fields=confirmed_lot_fields, auto_enroll=auto_enroll)
         if value["preview_hash"] != preview_hash:
             raise _error("产品或库存已变化，请重新核对共用预览")
         for row in value["products"]:
@@ -250,6 +258,8 @@ def _apply_confirmed(db, *, product_ids, lot_ids, preview_hash, operation_key, e
             evidence=evidence.strip(), actor_id=actor_id)
         db.add(group)
         db.flush()
+        if auto_enroll is not None:
+            db.add(SharedFinishedPolicy(group_id=group.id, auto_enroll=auto_enroll))
         for row in value["products"]:
             db.add(SharedFinishedMember(group_id=group.id, product_id=row["product_id"],
                 customer_id=row["customer_id"], identity_json=row["identity_json"],
@@ -265,6 +275,7 @@ def _apply_confirmed(db, *, product_ids, lot_ids, preview_hash, operation_key, e
             actor=actor, entity_type="shared_finished_group", entity_id=group.id,
             operator_name="老板明确授权的发布维护任务" if source == "script" else None,
             details=dict(product_ids=sorted(set(product_ids)), lot_ids=sorted(set(lot_ids)),
+                         **({"auto_enroll": auto_enroll} if auto_enroll is not None else {}),
                          preview_hash=preview_hash, evidence=evidence.strip(),
                          **({"confirmed_printed_lots": confirmed_printed_lots} if confirmed_printed_lots else {}),
                          **({"confirmed_lot_fields": confirmed_lot_fields} if confirmed_lot_fields else {})))
@@ -279,7 +290,8 @@ def match(db, lot, *, product_id, customer_id, expected_basis=None, lock=False):
     if member is None or approved is None or member.customer_id != customer_id or member.group_id != approved.group_id:
         return None
     group = db.get(SharedFinishedGroup, member.group_id)
-    if group is None or not group.enabled:
+    from app.services.shared_member_policy import enabled
+    if group is None or not group.enabled or not enabled(db, group.id, product_id):
         return None
     product = db.get(Product, product_id)
     from app.services import shared_bom_stock as bom

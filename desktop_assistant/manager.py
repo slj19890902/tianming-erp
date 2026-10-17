@@ -93,6 +93,9 @@ class Manager:
                 shared_management_contract = db.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='shared_finished_policies'"
                 ).fetchone()
+                shared_member_contract = bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='shared_finished_mutations'").fetchone() and db.execute(
+                    "SELECT 1 FROM shared_finished_mutations WHERE json_valid(result_json) AND json_type(result_json, '$.member_states') = 'object' LIMIT 1"
+                ).fetchone())
                 contract_seal_contract = db.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='contract_seals'"
                 ).fetchone()
@@ -122,6 +125,8 @@ class Manager:
             if shared_stock_contract and not self._shared_finished_reader(release):
                 return False
             if shared_management_contract and not self._shared_finished_reader(release, "shared_finished_management_v1"):
+                return False
+            if shared_member_contract and not self._shared_finished_reader(release, "shared_customer_members_v1"):
                 return False
             if contract_seal_contract and not self._shared_finished_reader(release, "contract_seal_v1"):
                 return False

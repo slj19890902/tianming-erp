@@ -51,6 +51,9 @@ def target_readers(database, source, target, inventory_record, dispatch_record, 
         ):
             if any(row[1] == column for row in db.execute(f'PRAGMA table_info("{table}")')):
                 required.add(capability)
+        if 'shared_finished_mutations' in tables and db.execute(
+                "SELECT 1 FROM shared_finished_mutations WHERE json_valid(result_json) AND json_type(result_json, '$.member_states') = 'object' LIMIT 1").fetchone():
+            required.add('shared_customer_members_v1')
         if has_supplier_trim_facts(db): required.add('supplier_sheet_trim_v1')
         if physical_kit.has_facts(db): required.add(physical_kit.CAPABILITY)
     if inventory_record is not None: required.add(inventory.CAPABILITY)

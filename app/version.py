@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.666"
-APP_VERSION_NAME = "税务原生模板与开票尾差核对"
+APP_VERSION = "v0.22.667"
+APP_VERSION_NAME = "按产品选择多客户库存共用"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6544,3 +6544,18 @@ APP_VERIFICATION_STEPS = [
     "核对送货两级窗口、原数量单价与已确认对账金额保持不变。",
 ]
 APP_CHANGELOG = [*(f"v0.22.666：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.667：按产品管理多个客户及部门的库存共用。
+APP_CHANGES = [
+    "库存共用先搜索存货编码，再选择可取用的客户或部门；展示图号、类型和规格，资料缺失或实物不一致明确提示。",
+    "已有共用产品可追加客户、单独暂停和恢复客户；保留原产品身份和冻结预占，不复制库存或改写成本。",
+    "新建时可明确选择合格新入库自动加入；批次和可用余额沿用原台账、正式货位及先成功预占的规则。",
+    "新增成员策略保存不可改写操作回执，签名读取门禁阻止不理解新事实的旧程序；无数据库结构迁移。",
+    "包含已验收的税务原生模板及开票尾差修复，保留v665送货分页和撤回追加功能。",
+]
+APP_VERIFICATION_STEPS = [
+    "进入常用箱的库存共用，搜索实际存货编码，点击设置共用并选择客户，核对缺资料和不匹配提示。",
+    "查看现有共用产品，追加客户或暂停一个客户，核对其新预占状态及已有预占保留。",
+    "按真实业务核对共用库存余额和原货位；从开票任务重新下载总开票文件核对三项金额。",
+]
+APP_CHANGELOG = [*(f"v0.22.667：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

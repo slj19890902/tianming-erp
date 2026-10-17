@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.662"
-APP_VERSION_NAME = "Excel汇总精度与同客户合并开票"
+APP_VERSION = "v0.22.663"
+APP_VERSION_NAME = "送货两级界面与明细精简"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6503,3 +6503,17 @@ APP_VERIFICATION_STEPS = [
     "核对普通常用箱改价不改已确认对账，版本v0.22.662、数据库er1016pa。",
 ]
 APP_CHANGELOG = [*(f"v0.22.662：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.663：送货两级界面与紧凑明细。
+APP_CHANGES = [
+    "一级只显示已选明细，二级集中选品、数量与导入，底部分页、保存、打印保持可见。",
+    "跨页选择保留订单和库存数量、库存单价；导入失败整体撤回，不改变原发货事务和恢复凭据。",
+    "明细精简尺寸模具列，增加图号、单价、金额；客户单号、编码和类别按批准窄列显示，缺资料留空。",
+    "不改数据库结构或历史业务数据，保留v662财务显示修正及既有数量权限和打印发货保护。",
+]
+APP_VERIFICATION_STEPS = [
+    "打开送货录单，在二级跨页选择订单和库存，导入后核对一级明细、数量和单价。",
+    "缩小窗口核对分页、保存、打印可见，检查关闭时未保存内容的处理。",
+    "展开已有送货核对图号、位置、单价金额与缺失留空；实际发货继续由确认打印执行。",
+]
+APP_CHANGELOG = [*(f"v0.22.663：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

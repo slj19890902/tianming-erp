@@ -10,7 +10,7 @@ from app.models.delivery import DeliveryItem
 from app.models.order import OrderItem
 from app.models.product import Product
 from app.services.delivery_snapshots import read_sales_contract
-from app.services.product_specification import resolved_product_specification
+from app.services.product_specification import resolved_product_specification, delivery_specification
 
 
 def compact_layout(envelope):
@@ -63,7 +63,8 @@ def current_descriptions(db, delivery, records):
             continue
         result[record.id] = dict(
             product_name=product.product_name or '',
-            specification=resolved_product_specification(None, product) or '',
+            specification=delivery_specification(product),
+            delivery_specification=delivery_specification(product),
             customer_drawing_number=product.customer_drawing_number or '',
             customer_category=product.customer_category or '',
             customer_category_unresolved=not bool((product.customer_category or '').strip()),
@@ -111,9 +112,9 @@ def delivery_amounts(db, delivery_ids):
             if price is None or not Decimal(str(price)).is_finite() or Decimal(str(price)) < 0:
                 raise ValueError('missing frozen price')
             totals[item.delivery_id] += (Decimal(str(price)) * item.delivered_quantity).quantize(
-                Decimal('.01'), rounding=ROUND_HALF_UP)
+                Decimal('.001'), rounding=ROUND_HALF_UP)
         except (ValueError, TypeError, ArithmeticError):
             unknown.add(item.delivery_id)
-    return {i: dict(total_amount=None if i in unknown else str(total.quantize(Decimal('.01'))),
+    return {i: dict(total_amount=None if i in unknown else str(total.quantize(Decimal('.001'))),
                     amount_status='missing_frozen_price' if i in unknown else 'complete')
             for i, total in totals.items()}

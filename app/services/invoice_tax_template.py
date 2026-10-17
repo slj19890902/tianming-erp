@@ -21,7 +21,7 @@ import zipfile
 from openpyxl import load_workbook
 
 
-TAX_TEMPLATE_SHA256 = "FB02B3907C459FA2C43342AB7B0AF5B2F73E95CB1B5A7874C1E3A341FC785709"
+TAX_TEMPLATE_SHA256 = "45B6B21BE564D0FEFEC0E3324D319BE8F4AFF1FA0EFD23B1DB2F064D367BFA9A"
 TAX_TEMPLATE_SHEETS = ("1-明细模板", "excelVersion", "xzqhdm", "2-特定业务信息")
 DETAIL_SHEET = TAX_TEMPLATE_SHEETS[0]
 FIRST_DETAIL_ROW = 4
@@ -135,6 +135,8 @@ def _normalise_lines(lines: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str,
         line["_line_number"] = position
         amount = _decimal(line, "amount", "金额")
         tax_rate = _decimal(line, "tax_rate", "税率")
+        if amount != amount.quantize(Decimal("0.01")):
+            raise InvoiceTaxTemplateError("税局导入金额必须实际保留两位，不能只设置显示格式")
         normalised.append(
             {
                 "project_name": _required_text(line, "project_name", "项目名称"),
@@ -285,6 +287,12 @@ def _write_detail_rows(path: Path, lines: Sequence[Mapping[str, Any]]) -> None:
             sheet_data = detail_root.find(_qualified("sheetData"))
             if sheet_data is None:
                 raise InvoiceTaxTemplateError("导出副本缺少明细行数据")
+            for existing_row in list(sheet_data):
+                if int(existing_row.attrib.get("r", "0")) >= FIRST_DETAIL_ROW:
+                    sheet_data.remove(existing_row)
+            dimension = detail_root.find(_qualified("dimension"))
+            if dimension is not None:
+                dimension.set("ref", f"A1:V{FIRST_DETAIL_ROW + len(lines) - 1}")
             rows = {
                 int(row.attrib["r"]): row
                 for row in sheet_data.findall(_qualified("row"))
@@ -346,6 +354,14 @@ def _verify_export(path: Path, lines: Sequence[Mapping[str, Any]], helper_finger
             for column, key in (("A", "project_name"), ("B", "tax_classification_code")):
                 if sheet[f"{column}{row}"].value != line[key]:
                     raise InvoiceTaxTemplateError("导出文件明细回读校验失败")
+            for column, key in (("C", "specification"), ("D", "unit"), ("E", "quantity")):
+                actual = sheet[f"{column}{row}"].value
+                expected = line.get(key)
+                if key == "quantity" and expected is not None:
+                    if actual is None or Decimal(str(actual)) != Decimal(str(expected)):
+                        raise InvoiceTaxTemplateError("导出文件数量回读校验失败")
+                elif (actual or None) != (expected or None):
+                    raise InvoiceTaxTemplateError("导出文件规格或单位回读校验失败")
             for column, key in (("G", "amount"), ("H", "tax_rate")):
                 actual = sheet[f"{column}{row}"].value
                 if actual is None or Decimal(str(actual)) != line[key]:

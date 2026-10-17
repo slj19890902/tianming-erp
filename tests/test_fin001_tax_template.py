@@ -17,9 +17,7 @@ from app.services.invoice_tax_template import (
 )
 
 
-NAS_TEMPLATE = Path(
-    r"Z:\sata1-18015598002\天明ERP知识库\09_待整理收件箱\2026-07-27_月结对账开票任务导入与收款闭环计划_附件\发票开具项目信息导入模板.xlsx"
-)
+NAS_TEMPLATE = Path(__file__).parents[1] / "app/resources/invoice_tax_templates/发票开具项目信息导入模板.xlsx"
 
 
 @pytest.fixture(scope="module")

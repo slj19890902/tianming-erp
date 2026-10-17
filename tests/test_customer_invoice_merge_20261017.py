@@ -145,7 +145,7 @@ def test_customer_profile_mode_does_not_rewrite_historical_prices(fin001_app):
         assert before == history()
 
 
-def test_new_price_three_places_amount_two_places_invoice_file(fin001_app):
+def test_unbalanced_rounded_invoice_header_cannot_export_hidden_third_decimal(fin001_app):
     from test_fin001_invoice_tasks import _complete_invoice_profile
     from app.models.finance import Statement, StatementItem
     app, factory = fin001_app
@@ -172,12 +172,13 @@ def test_new_price_three_places_amount_two_places_invoice_file(fin001_app):
         confirmed = client.post(f"/api/finance/invoice-tasks/{task['id']}/confirm", json={'expected_version':task['version']})
         assert confirmed.status_code == 200, confirmed.text
         response = client.get(f"/api/finance/invoice-tasks/{task['id']}/tax-template.xlsx")
-        assert response.status_code == 200, response.text
-        sheet = load_workbook(BytesIO(response.content)).active
-        assert Decimal(str(sheet['F4'].value)) == Decimal('1.111')
-        assert Decimal(str(sheet['G4'].value)) == Decimal('3.333')
-        assert sheet['F4'].number_format == '0.000'
-        assert sheet['G4'].number_format == '0.00'
+        # 3.33 + 0.43 != 3.77: the previous export hid this impossible target
+        # in a three-decimal cell. Preserve the frozen task and block the file.
+        assert response.status_code == 409, response.text
+        assert "不平衡" in response.json()['detail']
+        detail = client.get(f"/api/finance/invoice-tasks/{task['id']}").json()
+        assert Decimal(detail['total_amount']) == Decimal('3.77')
+        assert '不平衡' in detail['tax_import_preview']['error']
 
 
 def test_pending_receivable_uses_frozen_delivery_terms(fin001_app):

@@ -1648,6 +1648,7 @@ def get_invoice_task(
     payload = _task_response(db, task)
     payload["buyer_snapshot"] = json.loads(task.buyer_snapshot_json)
     payload["seller_snapshot"] = json.loads(task.seller_snapshot_json)
+    items = db.scalars(select(FinanceInvoiceTaskItem).where(FinanceInvoiceTaskItem.task_id == task.id).order_by(FinanceInvoiceTaskItem.sequence_no)).all()
     payload["items"] = [
         {
             "id": item.id,
@@ -1668,8 +1669,13 @@ def get_invoice_task(
             "tax_rate": item.tax_rate,
             "tax_amount": item.tax_amount,
         }
-        for item in db.scalars(select(FinanceInvoiceTaskItem).where(FinanceInvoiceTaskItem.task_id == task.id).order_by(FinanceInvoiceTaskItem.sequence_no)).all()
+        for item in items
     ]
+    if task.status in {"draft", "ready", "exported"}:
+        try:
+            _, payload["tax_import_preview"] = _tax_export_plan(db, task, items)
+        except InvoiceTaxTemplateError as error:
+            payload["tax_import_preview"] = {"error": str(error)}
     payload["attachments"] = [
         {"id": item.id, "attachment_type": item.attachment_type, "original_name": item.original_name, "content_hash": item.content_hash, "file_size": item.file_size}
         for item in db.scalars(select(FinanceInvoiceAttachment).where(FinanceInvoiceAttachment.task_id == task.id).order_by(FinanceInvoiceAttachment.id)).all()
@@ -1950,6 +1956,32 @@ def confirm_invoice_task(
     return _task_response(db, task)
 
 
+def _tax_export_plan(db, task, items):
+    from app.services.invoice_export_identity import export_lines
+    from app.services.invoice_import_rounding import balance_invoice_lines, InvoiceRoundingError
+    try:
+        lines = export_lines(db, items)
+        if task.price_tax_mode == "tax_inclusive":
+            # Legacy inclusive templates are imported with the tax bureau's inclusive toggle.
+            # Preserve this contract; never reinterpret their gross amounts as net amounts.
+            from app.services.invoice_import_rounding import money, POLICY
+            output = [dict(line, amount=money(line["amount"])) for line in lines]
+            gross = sum((line["amount"] for line in output), Decimal(0))
+            net = sum((money(line["amount"] / (1 + Decimal(str(line["tax_rate"])))) for line in output), Decimal(0))
+            tax = gross - net
+            if (net, tax, gross) != (task.net_amount, task.tax_amount, task.total_amount):
+                raise InvoiceRoundingError("含税导入逐行金额与冻结任务不一致，请核对来源")
+            return output, {"policy": POLICY, "net": str(net), "tax": str(tax),
+                            "total": str(gross), "adjustments": [],
+                            "price_tax_mode": "tax_inclusive", "tax_system_import_verified": False}
+        if task.price_tax_mode != "tax_exclusive":
+            raise InvoiceRoundingError("开票任务税价口径无效")
+        return balance_invoice_lines(lines, target_net=task.net_amount,
+                                     target_tax=task.tax_amount, target_total=task.total_amount)
+    except InvoiceRoundingError as error:
+        raise InvoiceTaxTemplateError(str(error)) from error
+
+
 def _invoice_export_dir() -> Path:
     configured = os.getenv("ERP_INVOICE_EXPORT_DIR")
     if configured:
@@ -1994,18 +2026,20 @@ def download_tax_template(
         f"{short_name}{statement_month}导入模板.xlsx"
     )
     output = export_dir / (
-        f"{task.task_number}-{task.source_snapshot_hash[:12]}-code-drawing-excel-summary-v4-{download_name}"
+        f"{task.task_number}-{task.source_snapshot_hash[:12]}-code-drawing-tax-cent-balance-v5-{download_name}"
     )
     try:
-        from app.services.invoice_export_identity import export_lines
-        export = generate_invoice_tax_template(template_path=TAX_TEMPLATE_PATH, output_path=output, lines=export_lines(db, items))
+        balanced_lines, rounding_report = _tax_export_plan(db, task, items)
+        export = generate_invoice_tax_template(template_path=TAX_TEMPLATE_PATH, output_path=output, lines=balanced_lines)
+        if export.total_amount != (task.total_amount if task.price_tax_mode == "tax_inclusive" else task.net_amount):
+            raise InvoiceTaxTemplateError("导出文件回读未税金额与任务不一致")
     except InvoiceTaxTemplateError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     task.status = "exported"
     task.export_count += 1
     task.last_export_hash = export.sha256
     task.last_exported_at = datetime.now()
-    _audit(db, user=user, action="EXPORT_INVOICE_TAX_TEMPLATE", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number, "file_hash": export.sha256, "line_count": export.line_count, "warnings": list(export.warnings), "item_identity_policy": "code-drawing-excel-summary-v4"}, description="生成税局开票导入文件")
+    _audit(db, user=user, action="EXPORT_INVOICE_TAX_TEMPLATE", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number, "file_hash": export.sha256, "line_count": export.line_count, "warnings": list(export.warnings), "item_identity_policy": "code-drawing-tax-cent-balance-v5", "rounding_report": rounding_report, "template_sha256": export.template_sha256}, description="生成税局开票导入文件")
     db.commit()
     return FileResponse(export.path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=download_name)
 

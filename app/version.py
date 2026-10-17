@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.659"
-APP_VERSION_NAME = "同客户合并开票与三位金额"
+APP_VERSION = "v0.22.660"
+APP_VERSION_NAME = "旧补库成品闭环与冻结模具兼容"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6463,3 +6463,16 @@ APP_VERIFICATION_STEPS = [
     "核对页面、对账Excel/PDF与开票Excel金额三位；旧账单金额和既有库存数量成本保持原事实。",
 ]
 APP_CHANGELOG = [*(f"v0.22.659：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.660：历史补库沿用冻结模具证据完成成品入库。
+APP_CHANGES = [
+    "旧补库及旧采购的模切产品缺单片尺寸时，按原冻结模具与开料模数生成可追溯的成品依据，保留旧采购和任务快照。",
+    "已核实完工的历史补库按常用箱成品货位补做原料消耗与成品入账，缺位置单独列出；重复执行不重复增加库存。",
+    "无结构迁移，保留v659财务修复；数量、成本、权限、版本和事务校验继续生效。",
+]
+APP_VERIFICATION_STEPS = [
+    "核对8款已确认完工旧补库共11120只成品和常用箱货位，80040986缺货位单独待处理。",
+    "核对80012752、80011966成品依据显示原模具和单片尺寸未登记，原纸板投入已消耗，原始快照保持。",
+    "核对明确产品新收料自动成品、分批收料和重复请求；正式版本v0.22.660，数据库er1016pa。",
+]
+APP_CHANGELOG = [*(f"v0.22.660：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

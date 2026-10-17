@@ -26245,8 +26245,13 @@ def shared_customer_choices(product_id: int, keyword: str = "", db: Session = De
             if error.status_code == 403:
                 continue
             raise
+        # Codes identify customer sales records, not physical interchangeability.
+        same_tool_size = and_(Product.mold_tool_id == source.mold_tool_id,
+            Product.report_width_mm == source.report_width_mm,
+            Product.report_length_mm == source.report_length_mm,
+            Product.box_category == source.box_category) if source.mold_tool_id else Product.id == source.id
         products = db.scalars(select(Product).where(Product.customer_id == customer.id,
-            Product.product_code == source.product_code, Product.is_active.is_(True),
+            or_(Product.product_code == source.product_code,same_tool_size), Product.is_active.is_(True),
             Product.deleted_at.is_(None), Product.purged_at.is_(None)).order_by(Product.id)).all()
         choices = []
         for product in products:
@@ -26266,9 +26271,61 @@ def shared_customer_choices(product_id: int, keyword: str = "", db: Session = De
                 reason = str(error)
             choices.append(dict(**product_summary(product), id=product.id,
                 group_id=member.group_id if member else None, reason=reason))
+        from app.services.shared_customer_access import can_reference
+        can_create = not products and customer.id != source.customer_id and can_reference(db,source)
         items.append(dict(customer_id=customer.id, customer_name=customer.name,
-            products=choices, missing=not products))
+            products=choices, missing=not products,can_create_sales_reference=can_create,
+            missing_reason=None if can_create else 'BOM或非普通自制产品需先核对对应产品资料'))
     return dict(items=items, limit=100)
+
+
+class SharedCustomerAccessPreview(BaseModel):
+    source_product_id: int = Field(gt=0)
+    product_ids: list[int] = Field(min_length=1,max_length=20)
+    new_customer_ids: list[int] = Field(min_length=1,max_length=19)
+    lot_ids: list[int] = Field(default_factory=list,max_length=100)
+    expected_group_version: int | None = Field(default=None,ge=1)
+    auto_enroll: bool | None = None
+    disabled_product_ids: list[int] = Field(default_factory=list,max_length=20)
+
+
+class SharedCustomerAccessConfirmation(SharedCustomerAccessPreview):
+    preview_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operation_key: str = Field(min_length=1,max_length=100)
+    evidence: str = Field(min_length=1,max_length=1000)
+    physical_match_confirmed: Literal[True]
+
+
+def _require_shared_customer_access(db,user,payload):
+    _require_shared_confirmation_access(db,user,payload)
+    product=db.get(Product,payload.source_product_id)
+    if product is None:raise HTTPException(404,detail="源产品不存在")
+    require_customer_access(product.customer_id,user,db)
+    for cid in payload.new_customer_ids:require_customer_access(cid,user,db)
+    from app.models.shared_finished_stock import SharedFinishedMember
+    member=db.get(SharedFinishedMember,product.id)
+    if member:_require_shared_group_access(db,user,member.group_id)
+
+
+@router.post("/finished/shared-stock/customer-access/preview")
+def preview_shared_customer_access(payload:SharedCustomerAccessPreview,db:Session=Depends(get_db),user:User=Depends(admin_only)):
+    from app.services.shared_customer_access import preview
+    try:
+        _require_shared_customer_access(db,user,payload)
+        return preview(db,**payload.model_dump())
+    except WarehouseInventoryError as error:_handle(error)
+
+
+@router.post("/finished/shared-stock/customer-access/confirm")
+def confirm_shared_customer_access(payload:SharedCustomerAccessConfirmation,db:Session=Depends(get_db),user:User=Depends(admin_only)):
+    from app.services.shared_customer_access import confirm
+    try:
+        _require_shared_customer_access(db,user,payload)
+        result=confirm(db,actor=user,**payload.model_dump(exclude={'physical_match_confirmed'}));db.commit();return result
+    except WarehouseInventoryError as error:
+        db.rollback();_handle(error)
+    except Exception:
+        db.rollback();raise
 
 
 @router.get("/finished/shared-stock/groups/{group_id}")

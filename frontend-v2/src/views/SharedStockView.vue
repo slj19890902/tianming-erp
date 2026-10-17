@@ -8,9 +8,10 @@ type Member = { product_id:number; customer_name:string; code:string; name:strin
 type Lot = {lot_id:number;number:string;product_id:number;available:number;reserved:number;location:string;shared:boolean;eligible:boolean;reason:string|null}
 type Group = {group_id:number;version:number;enabled:boolean;auto_enroll:boolean;identity_issue:string|null;evidence:string;products:Member[];lots:Lot[];batch_count:number;pending_count:number}
 type SharedProduct = Product & { customer_id:number; code?:string; name?:string; group_id:number|null; drawing_number?:string|null; spec:string; material:string; role_label:string; reason?:string|null }
-type CustomerChoice = {customer_id:number;customer_name:string;missing:boolean;products:SharedProduct[]}
+type CustomerChoice = {customer_id:number;customer_name:string;missing:boolean;can_create_sales_reference?:boolean;missing_reason?:string;products:SharedProduct[]}
 const productResults = ref<SharedProduct[]>([])
 const customerChoices = ref<CustomerChoice[]>([])
+const newCustomerReferences = ref<{customer_id:number;customer_name:string}[]>([])
 const sourceProduct = ref<SharedProduct|null>(null)
 const editingMembers = ref(false)
 const customerKeyword = ref('')
@@ -28,7 +29,7 @@ const lots = ref<Lot[]>([])
 const selectedLots = ref<number[]>([])
 const enabled = ref(true)
 const automatic = ref(false)
-const preview = ref<{products:Member[];lot_count:number;hash:string;action:string}|null>(null)
+const preview = ref<{products:Member[];lot_count:number;hash:string;action:string;new_reference_names?:string[]}|null>(null)
 const evidence = ref('')
 const acknowledged = ref(false)
 let pending: {url:string;args:Record<string,unknown>;operation_key:string}|null = null
@@ -47,14 +48,14 @@ async function loadGroups() {
 }
 async function openGroup(id:number) {
   await run(async()=>{
-    customerSequence++;customerChoices.value=[];sourceProduct.value=null
+    customerSequence++;customerChoices.value=[];sourceProduct.value=null;newCustomerReferences.value=[]
     current.value = await request<Group>(prefix + '/groups/' + id)
     creating.value = false; editingMembers.value=false; selectedLots.value = []; lots.value = current.value.lots
     enabled.value = current.value.enabled; automatic.value = current.value.auto_enroll
   })
 }
 function newGroup() {
-  current.value = null; creating.value = true; editingMembers.value=false; sourceProduct.value=null; customerChoices.value=[]; selectedProducts.value = []
+  current.value = null; creating.value = true; editingMembers.value=false; sourceProduct.value=null; newCustomerReferences.value=[]; customerChoices.value=[]; selectedProducts.value = []
   lots.value = []; selectedLots.value = []; error.value = ''
 }
 let customerSequence = 0
@@ -122,16 +123,22 @@ async function prepare(action:'create'|'add_lots'|'configure'|'members') {
       : {action,expected_version:current.value!.version,
           ...(action==='add_lots'?{lot_ids:[...selectedLots.value]}:action==='members'?{product_ids:selectedProducts.value.map(p=>p.id),disabled_product_ids:[...disabledProducts.value]}:{enabled:enabled.value,auto_enroll:automatic.value})}
     const base = action==='create'?prefix:prefix+'/groups/'+current.value!.group_id
-    const value = await request<any>(base+'/preview',{method:'POST',body:JSON.stringify(args)})
-    const source = action==='create'?value:value.value
+    const withReferences=(action==='create'||action==='members') && newCustomerReferences.value.length>0
+    const finalArgs=withReferences?{source_product_id:sourceProduct.value!.id,product_ids:selectedProducts.value.map(p=>p.id),
+      new_customer_ids:newCustomerReferences.value.map(c=>c.customer_id),lot_ids:creating.value?[...selectedLots.value]:[],
+      expected_group_version:current.value?.version||null,auto_enroll:creating.value?automatic.value:null,
+      disabled_product_ids:editingMembers.value?[...disabledProducts.value]:[]}:args
+    const targetBase=withReferences?prefix+'/customer-access':base
+    const value = await request<any>(targetBase+'/preview',{method:'POST',body:JSON.stringify(finalArgs)})
+    const source = withReferences || action==='create'?value:value.value
     const products = source?.products.map((p:any)=>{
       const b = JSON.parse(p.identity_json).basis
-      return {product_id:p.product_id,customer_name:current.value?.products.find(x=>x.product_id===p.product_id)?.customer_name || selectedProducts.value.find(x=>x.id===p.product_id)?.customer_name,
+      return {product_id:p.product_id,customer_name:p.customer_name || current.value?.products.find(x=>x.product_id===p.product_id)?.customer_name || selectedProducts.value.find(x=>x.id===p.product_id)?.customer_name,
         code:p.code,name:p.name,unit:b.unit,spec:b.spec,material:b.material,mold_id:b.mold_tool_id,process:b.production_process,enabled:action==='members'?!disabledProducts.value.includes(p.product_id):true}
     }) || current.value!.products
     const reviewProducts=products.map((p:any)=>({...p,enabled:action==='members'?!disabledProducts.value.includes(p.product_id):p.enabled}))
-    preview.value = {products:reviewProducts,lot_count:source?.lots.length||0,hash:value.preview_hash,action}
-    pending={url:base+'/confirm',args,operation_key:'shared-'+(globalThis.crypto.randomUUID?.() || Date.now()+'-'+Math.random().toString(36).slice(2))}
+    preview.value = {products:reviewProducts,lot_count:source?.lots.length||0,hash:value.preview_hash,action:withReferences?'customer_access':action,new_reference_names:value.new_sales_references?.map((r:any)=>r.customer_name)}
+    pending={url:targetBase+'/confirm',args:finalArgs,operation_key:'shared-'+(globalThis.crypto.randomUUID?.() || Date.now()+'-'+Math.random().toString(36).slice(2))}
     evidence.value='';acknowledged.value=false
   })
 }
@@ -144,7 +151,7 @@ async function save() {
     })})
     preview.value=null;pending=null
     current.value=await request<Group>(prefix+'/groups/'+result.group_id)
-    editingMembers.value=false;customerChoices.value=[];sourceProduct.value=null
+    editingMembers.value=false;customerChoices.value=[];sourceProduct.value=null;newCustomerReferences.value=[]
     creating.value=false;lots.value=current.value.lots;selectedLots.value=[]
     enabled.value=current.value.enabled;automatic.value=current.value.auto_enroll
     await loadGroups();ElMessage.success('共用设置已保存并回读确认')
@@ -181,17 +188,18 @@ onMounted(()=>{if(auth.user?.role==='admin') void run(loadGroups)})
       <section v-if="current || creating" class="detail">
         <h2>{{creating?'设置共用客户':'共用产品 · '+current!.products.map(p=>p.code).join(' / ')}}</h2>
         <section v-if="creating || editingMembers">
-          <p>选择可取用此款实物的客户或部门。系统按同码查找各客户产品；同码的整套、子件及不同印刷不能混选。送货抬头和各客户价格继续按原单据取值。</p>
+          <p>选择可取用此款实物的客户或部门。系统查找同码或同尺寸同模具的产品，并校验材质、印刷与工艺；没有对应资料时可核对后补建。送货抬头和各客户价格继续按原单据取值。</p>
           <div class="selected" v-for="p in selectedProducts" :key="p.id">
             <span>{{p.customer_name}} · {{p.product_code}} · {{p.product_name}}</span>
             <el-checkbox v-if="editingMembers && current?.products.some(x=>x.product_id===p.id)" :model-value="!disabledProducts.includes(p.id)" :disabled="busy" @change="(value:any)=>{disabledProducts=value?disabledProducts.filter(id=>id!==p.id):[...disabledProducts,p.id]}">允许新增共用预占</el-checkbox>
             <el-button v-else-if="p.id!==sourceProduct?.id" link :disabled="busy" @click="removeProduct(p.id)">移除</el-button>
           </div>
+          <div v-for="customer in newCustomerReferences" :key="'new-'+customer.customer_id" class="selected"><span>{{customer.customer_name}} · 将补建此款销售资料，价格和客户图号留空，库存不新增</span><el-button link :disabled="busy" @click="newCustomerReferences=newCustomerReferences.filter(c=>c.customer_id!==customer.customer_id)">移除</el-button></div>
           <div class="toolbar"><el-input v-model="customerKeyword" placeholder="搜索客户或部门名称" clearable @keyup.enter="run(loadCustomers)"/><el-button :disabled="busy" @click="run(loadCustomers)">查找客户</el-button></div>
           <el-table :data="customerChoices" border empty-text="未找到可见客户">
             <el-table-column label="客户 / 部门" prop="customer_name" min-width="180"/>
-            <el-table-column label="同码产品 / 实物身份" min-width="350"><template #default="{row}">
-              <span v-if="row.missing" class="note">缺少此存货编码的产品资料，补齐后再选；不会自动创建产品。</span>
+            <el-table-column label="对应产品 / 实物身份" min-width="350"><template #default="{row}">
+              <template v-if="row.missing"><el-checkbox v-if="row.can_create_sales_reference" :model-value="newCustomerReferences.some(c=>c.customer_id===row.customer_id)" :disabled="busy" @change="(checked:any)=>{newCustomerReferences=checked?[...newCustomerReferences,{customer_id:row.customer_id,customer_name:row.customer_name}]:newCustomerReferences.filter(c=>c.customer_id!==row.customer_id)}">选用此产品；核对后补建客户销售资料</el-checkbox><span v-else class="note">{{row.missing_reason || '请先核对对应产品资料'}}</span></template>
               <el-select v-else :model-value="customerSelected(row)" :disabled="busy || row.products.some((p:any)=>current?.products.some(x=>x.product_id===p.id)) || row.products.some((p:any)=>p.id===sourceProduct?.id)" clearable placeholder="选择对应产品" style="width:100%" @change="(id:number)=>chooseCustomer(row,id)">
                 <el-option v-for="p in row.products" :key="p.id" :value="p.id" :disabled="!!p.reason" :label="p.role_label+' · '+p.name+' · '+p.spec+(p.reason?' · '+p.reason:'')"/>
               </el-select>
@@ -221,11 +229,11 @@ onMounted(()=>{if(auth.user?.role==='admin') void run(loadGroups)})
           <el-table-column label="货位" prop="location" min-width="190"/><el-table-column label="可用" prop="available" width="85"/><el-table-column label="已预占" prop="reserved" width="85"/>
           <el-table-column label="共用情况" min-width="220"><template #default="{row}">{{row.shared?'已加入本组':row.reason || '可选择加入'}}</template></el-table-column>
         </el-table>
-        <div class="toolbar"><el-button type="primary" :disabled="busy || (creating?selectedProducts.length<2:selectedLots.length===0 || !!current?.identity_issue)" @click="prepare(creating?'create':'add_lots')">{{creating?'预览并建立共用组':'预览追加所选批次'}}</el-button><span class="note">库存仍保留原归属、成本和历史，数量只记一份。</span></div>
+        <div class="toolbar"><el-button type="primary" :disabled="busy || (creating?selectedProducts.length+newCustomerReferences.length<2:selectedLots.length===0 || !!current?.identity_issue)" @click="prepare(creating?'create':'add_lots')">{{creating?'预览并建立共用组':'预览追加所选批次'}}</el-button><span class="note">库存仍保留原归属、成本和历史，数量只记一份。</span></div>
       </section>
       <el-dialog :model-value="!!preview" title="核对共用操作" width="min(920px, 94vw)" :close-on-click-modal="false" :before-close="(done:()=>void)=>{if(!busy){preview=null;pending=null;done()}}">
         <template v-if="preview">
-          <el-alert :closable="false" type="info" :title="preview.action==='members' ? '将保存所列客户的共用状态；已有预占保留，新加入客户不会复制库存' : preview.action==='configure' ? ('将'+(enabled?'启用':'暂停')+'共用；后续合格新入库'+(automatic?'自动加入':'逐批确认')) : ('本次'+(preview.action==='create'?'建立共用组':'追加库存')+'，选择 '+preview.lot_count+' 个批次')" />
+          <el-alert :closable="false" type="info" :title="preview.action==='customer_access' ? ('将为'+preview.new_reference_names?.join('、')+'补建销售资料并开放共用；价格/图号留空，库存不新增') : preview.action==='members' ? '将保存所列客户的共用状态；已有预占保留，新加入客户不会复制库存' : preview.action==='configure' ? ('将'+(enabled?'启用':'暂停')+'共用；后续合格新入库'+(automatic?'自动加入':'逐批确认')) : ('本次'+(preview.action==='create'?'建立共用组':'追加库存')+'，选择 '+preview.lot_count+' 个批次')" />
           <el-table :data="preview.products" border><el-table-column v-if="preview.action==='members'" label="新预占" width="100"><template #default="{row}">{{row.enabled===false?'暂停':'允许'}}</template></el-table-column><el-table-column label="客户" prop="customer_name" min-width="180"/><el-table-column label="编码" prop="code" width="115"/><el-table-column label="名称" prop="name"/><el-table-column label="规格" prop="spec" min-width="135"/><el-table-column label="材质" prop="material" width="90"/><el-table-column label="工艺" prop="process" min-width="130"/></el-table>
           <el-input v-model="evidence" type="textarea" :maxlength="1000" :disabled="busy" placeholder="记录现场核实或调整依据，例如：两客户确认无专用印刷，实物规格一致" class="evidence"/>
           <el-checkbox v-model="acknowledged" :disabled="busy">我已核对所列产品、实物批次和本次共用设置</el-checkbox>

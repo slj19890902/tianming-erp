@@ -6533,7 +6533,7 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.665：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 =======
-# v0.22.664：原生税务模板和开票金额联合校验。
+# v0.22.666：原生税务模板和开票金额联合校验。
 APP_CHANGES = [
     "开票文件保留税务原生模板结构，避免文件可打开但直接上传失败；项目名称使用存货编码、规格型号使用客户图号。",
     "开票明细实际输出两位金额，联合核对未税、逐行税额及含税合计；在限定范围处理尾差，并展示和审计调整行。",
@@ -6545,5 +6545,5 @@ APP_VERIFICATION_STEPS = [
     "重新下载研光总开票文件并直接导入预览，核对未税88971.12、税额11566.25、含税100537.37；不再手动复制模板。",
     "核对送货两级窗口、原数量单价与已确认对账金额保持不变。",
 ]
-APP_CHANGELOG = [*(f"v0.22.664：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.666：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 >>>>>>> 9f442773 (release: prepare v664 native invoice import on formal v663 baseline)

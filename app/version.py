@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.661"
-APP_VERSION_NAME = "送货录单精简与确认打印发货"
+APP_VERSION = "v0.22.662"
+APP_VERSION_NAME = "Excel汇总精度与同客户合并开票"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6490,3 +6490,16 @@ APP_VERIFICATION_STEPS = [
     "抽查模切及BOM子件规格显示、历史数量和库存；核对版本v0.22.661。",
 ]
 APP_CHANGELOG = [*(f"v0.22.661：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.662：对账与开票按Excel保留中间精度后汇总。
+APP_CHANGES = [
+    "对账与开票保留明细单价乘数量及税额的中间精度，只在汇总后将最终金额显示为两位；常用箱单价三位。",
+    "同客户合并开票从原始明细重新汇总，避免累加已取整小计；普通改价不覆盖已确认账单或送货冻结事实。",
+    "保留旧账单和开票任务版本，专项价税纠错按来源、权限、版本和审计校验；库存数量、成本与预占不变。",
+]
+APP_VERIFICATION_STEPS = [
+    "研光本次范围核对未税88971.12、税11566.25、含税100537.37，核对合并文件与原Excel一致。",
+    "确认开票列表只显示一个有效总任务，旧版本停用保留；金额两位、常用箱单价三位。",
+    "核对普通常用箱改价不改已确认对账，版本v0.22.662、数据库er1016pa。",
+]
+APP_CHANGELOG = [*(f"v0.22.662：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

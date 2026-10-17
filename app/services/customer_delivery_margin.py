@@ -132,14 +132,16 @@ def _sales_projection(
         else:
             base = quantity * Decimal(str(price))
             if order_item.price_tax_mode_snapshot == "tax_inclusive":
-                amount = base.quantize(sale_quantum, rounding=ROUND_HALF_UP)
+                amount = base if contract and frozen.get("calculation_policy") == "excel_full_precision_v1" else base.quantize(sale_quantum, rounding=ROUND_HALF_UP)
                 known_amount = amount
             elif (
                 order_item.price_tax_mode_snapshot == "tax_exclusive"
                 and order_item.tax_rate_snapshot is not None
             ):
                 rate = Decimal(str(order_item.tax_rate_snapshot))
-                if contract and "money_decimal_places" in frozen:
+                if contract and frozen.get('calculation_policy') == 'excel_full_precision_v1':
+                    amount = base + base * rate
+                elif contract and "money_decimal_places" in frozen:
                     net = base.quantize(sale_quantum, rounding=ROUND_HALF_UP)
                     amount = net + (net * rate).quantize(sale_quantum, rounding=ROUND_HALF_UP)
                 else:

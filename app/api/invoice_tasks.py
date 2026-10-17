@@ -858,6 +858,10 @@ def _frozen_exclusive_parts(quantity, price, rate, total):
 
     Never reinterpret an already confirmed receivable using today's precision.
     """
+    raw_net = quantity * price
+    raw_tax = raw_net * rate
+    if raw_net + raw_tax == total:
+        return raw_net, raw_tax
     for quantum in (MONEY, Decimal("0.001")):
         net = (quantity * price).quantize(quantum, rounding=ROUND_HALF_UP)
         tax = (net * rate).quantize(quantum, rounding=ROUND_HALF_UP)
@@ -951,9 +955,7 @@ def _snapshot_for_statement(
             if rate < 0 or rate > 1:
                 missing.append(f"附加收费 {charge.display_name} 的冻结税率无效")
                 continue
-            total = Decimal(str(statement_item.receivable_amount)).quantize(
-                MONEY, rounding=ROUND_HALF_UP
-            )
+            total = Decimal(str(statement_item.receivable_amount))
             quantity = Decimal(str(statement_item.charge_quantity_snapshot))
             if mode == "tax_exclusive":
                 raw_unit_price = Decimal(str(statement_item.unit_price_snapshot))
@@ -1046,9 +1048,7 @@ def _snapshot_for_statement(
         if rate < 0 or rate > 1:
             missing.append(f"对账明细 {statement_item.id} 的冻结税率无效")
             continue
-        total = Decimal(str(statement_item.receivable_amount)).quantize(
-            MONEY, rounding=ROUND_HALF_UP
-        )
+        total = Decimal(str(statement_item.receivable_amount))
         quantity = Decimal(str(statement_item.actual_received_quantity))
         if mode == "tax_exclusive":
             raw_unit_price = Decimal(str(statement_item.unit_price_snapshot))
@@ -1460,9 +1460,9 @@ def _create_invoice_task(statement_id, payload, db, user, *, commit=True):
         "bank_account": seller.bank_account,
         "seller_version": seller.version,
     }
-    total = sum((line["total_amount"] for line in lines), Decimal("0")).quantize(MONEY)
-    net = sum((line["net_amount"] for line in lines), Decimal("0")).quantize(MONEY)
-    tax = sum((line["tax_amount"] for line in lines), Decimal("0")).quantize(MONEY)
+    total = sum((line["total_amount"] for line in lines), Decimal("0")).quantize(MONEY, rounding=ROUND_HALF_UP)
+    net = sum((line["net_amount"] for line in lines), Decimal("0")).quantize(MONEY, rounding=ROUND_HALF_UP)
+    tax = sum((line["tax_amount"] for line in lines), Decimal("0")).quantize(MONEY, rounding=ROUND_HALF_UP)
     task_number = f"IT-{statement.statement_number}-V{statement.version}"
     if db.scalar(select(FinanceInvoiceTask.id).where(FinanceInvoiceTask.task_number == task_number)) is not None:
         task_number = f"{task_number[:48]}-R{request_idempotency_base[:8]}"
@@ -1994,7 +1994,7 @@ def download_tax_template(
         f"{short_name}{statement_month}导入模板.xlsx"
     )
     output = export_dir / (
-        f"{task.task_number}-{task.source_snapshot_hash[:12]}-code-drawing-price3-money2-v3-{download_name}"
+        f"{task.task_number}-{task.source_snapshot_hash[:12]}-code-drawing-excel-summary-v4-{download_name}"
     )
     try:
         from app.services.invoice_export_identity import export_lines
@@ -2005,7 +2005,7 @@ def download_tax_template(
     task.export_count += 1
     task.last_export_hash = export.sha256
     task.last_exported_at = datetime.now()
-    _audit(db, user=user, action="EXPORT_INVOICE_TAX_TEMPLATE", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number, "file_hash": export.sha256, "line_count": export.line_count, "warnings": list(export.warnings), "item_identity_policy": "code-drawing-price3-money2-v3"}, description="生成税局开票导入文件")
+    _audit(db, user=user, action="EXPORT_INVOICE_TAX_TEMPLATE", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number, "file_hash": export.sha256, "line_count": export.line_count, "warnings": list(export.warnings), "item_identity_policy": "code-drawing-excel-summary-v4"}, description="生成税局开票导入文件")
     db.commit()
     return FileResponse(export.path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=download_name)
 

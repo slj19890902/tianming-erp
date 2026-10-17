@@ -237,7 +237,8 @@ def test_five_decimal_sale_survives_delivery_receipt_and_statement(n029_delivery
         with factory() as db:
             row=db.query(StatementItem).filter_by(statement_id=statement.json()['id']).one()
             assert row.unit_price_snapshot==Decimal('2.14642')
-            assert row.receivable_amount==Decimal('107.32')
+            assert row.receivable_amount==Decimal('107.321')
+            assert Decimal(statement.json()['total_receivable'])==Decimal('107.32')
 
 
 def test_customer_field_editor_detects_explicit_blank_and_keeps_text_identifiers(tmp_path):

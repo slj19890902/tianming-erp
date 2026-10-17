@@ -30,7 +30,7 @@ def sales_contract(*, unit, price, tax_mode, tax_rate, source, money_decimal_pla
     if tax_rate is not None and (not Decimal(str(tax_rate)).is_finite() or not 0 <= Decimal(str(tax_rate)) <= 1):
         raise ValueError('销售税率无效')
     return json.dumps(dict(schema_version=1,currency='CNY',unit=_text(unit),unit_price=str(price),
-        tax_mode=tax_mode,tax_rate=str(tax_rate) if tax_rate is not None else None,source=source,money_decimal_places=money_decimal_places),ensure_ascii=False,sort_keys=True)
+        tax_mode=tax_mode,tax_rate=str(tax_rate) if tax_rate is not None else None,source=source,money_decimal_places=money_decimal_places,calculation_policy="excel_full_precision_v1"),ensure_ascii=False,sort_keys=True)
 
 
 def read_sales_contract(item):

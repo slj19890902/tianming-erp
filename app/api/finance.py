@@ -18,7 +18,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.services.invoice_statement_scope import StatementInvoice, task_statement_filter, task_statement_rows
 from app.services.reconciliation_cycle import default_receipt_month
-from sqlalchemy import BigInteger, Numeric, and_, case, cast, delete, func, or_, select, text, update
+from sqlalchemy import Numeric, and_, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased
 
@@ -2276,9 +2276,9 @@ def _customer_statement_export_data(
         quantity = Decimal(str(row.quantity or 0))
         unit_price = Decimal(str(row.unit_price or 0))
         amount = (
-            (quantity * unit_price).quantize(MONEY, rounding=ROUND_HALF_UP)
+            (quantity * unit_price)
             if mode == "tax_exclusive"
-            else Decimal(str(row.receivable_amount)).quantize(MONEY)
+            else Decimal(str(row.receivable_amount))
         )
         rows.append(
             {
@@ -2319,7 +2319,7 @@ def _customer_statement_export_data(
         modes.add(mode)
         quantity = Decimal(str(row.charge_quantity_snapshot or 0))
         unit_price = Decimal(str(row.unit_price_snapshot or 0))
-        amount = Decimal(str(row.receivable_amount)).quantize(MONEY)
+        amount = Decimal(str(row.receivable_amount))
         rows.append(
             {
                 "statement_item_id": row.statement_item_id,
@@ -2361,7 +2361,7 @@ def _customer_statement_export_data(
     return {
         "rows": rows,
         "quantity_total": sum((item["quantity"] for item in rows), Decimal("0")),
-        "amount_total": sum((item["amount"] for item in rows), Decimal("0")).quantize(MONEY),
+        "amount_total": sum((item["amount"] for item in rows), Decimal("0")).quantize(MONEY, rounding=ROUND_HALF_UP),
         "price_label": f"{label_prefix}单价",
         "amount_label": f"{label_prefix}金额",
         "customer_name": display_name,
@@ -3776,9 +3776,9 @@ def update_return_receipt(
             old_quantity = statement_line.actual_received_quantity
             statement_line.actual_received_quantity = receipt_line.actual_received_quantity
             quantity = Decimal(receipt_line.actual_received_quantity)
-            amount = (quantity * statement_line.unit_price_snapshot).quantize(MONEY, rounding=ROUND_HALF_UP)
+            amount = (quantity * statement_line.unit_price_snapshot)
             statement_line.receivable_amount = (
-                amount + (amount * statement_line.tax_rate_snapshot).quantize(MONEY, rounding=ROUND_HALF_UP)
+                amount + (amount * statement_line.tax_rate_snapshot)
                 if statement_line.price_tax_mode_snapshot == "tax_exclusive" else amount
             )
             statement_line.gross_profit_amount = (quantity * (statement_line.unit_price_snapshot - statement_line.unit_cost_snapshot)).quantize(MONEY, rounding=ROUND_HALF_UP)
@@ -4083,16 +4083,11 @@ def supplement_missing_delivery_price(
 
 
 def _pending_line_amount(unit_price):
-    # Frozen delivery terms own pending receivables; a later order/master
-    # price edit must not change an already dispatched line's value.
+    # Excel convention: retain detail precision; round only a final summary.
+    base = ReturnReceiptItem.actual_received_quantity * unit_price
     mode = func.coalesce(func.json_extract(DeliveryItem.sales_contract_json, "$.tax_mode"), OrderItem.price_tax_mode_snapshot)
     rate = func.coalesce(func.json_extract(DeliveryItem.sales_contract_json, "$.tax_rate"), OrderItem.tax_rate_snapshot)
-    # Integer micro-units avoid SQLite binary-float .005 rounding errors.
-    micros = ReturnReceiptItem.actual_received_quantity * cast(func.round(unit_price * 1000000), BigInteger)
-    cents = cast((micros + 5000).self_group().op("/", precedence=8)(10000), BigInteger)
-    rate_micros = cast(func.round(rate * 1000000), BigInteger)
-    tax_cents = cast((cents * rate_micros + 500000).self_group().op("/", precedence=8)(1000000), BigInteger)
-    return case((mode == "tax_exclusive", (cents + tax_cents) / 100), else_=cents / 100)
+    return cast(case((mode == "tax_exclusive", base + base * rate), else_=base), Numeric(24, 10))
 
 
 def _pending_statement_query(
@@ -4152,7 +4147,7 @@ def _pending_statement_query(
             DeliveryItem.over_delivery_quantity,
             ReturnReceiptItem.actual_received_quantity,
             effective_unit_price.label("unit_price"),
-            _pending_line_amount(effective_unit_price).label("receivable_amount"),
+            func.coalesce(StatementItem.receivable_amount, _pending_line_amount(effective_unit_price)).label("receivable_amount"),
             ReturnReceiptItem.difference_reason,
             StatementItem.id.label("statement_item_id"),
             StatementItem.statement_id,
@@ -4265,10 +4260,7 @@ def _pending_statement_groups(
             width_mm=data.pop("product_width_mm", None),
             height_mm=data.pop("product_height_mm", None),
         )
-        receivable = Decimal(str(data["receivable_amount"] or 0)).quantize(
-            MONEY,
-            rounding=ROUND_HALF_UP,
-        )
+        receivable = Decimal(str(data["receivable_amount"] or 0))
         data["missing_price"] = data["unit_price"] is None
         data["receivable_amount"] = None if data["missing_price"] else receivable
         data["is_reconciled"] = data["statement_item_id"] is not None
@@ -6611,15 +6603,9 @@ def create_statement(
             )
             from app.services.delivery_snapshots import statement_sales_terms
             unit_price,price_tax_mode,tax_rate=statement_sales_terms(delivery_item,unit_price,price_tax_mode,tax_rate)
-            line_price_amount = (quantity * unit_price).quantize(
-                MONEY,
-                rounding=ROUND_HALF_UP,
-            )
+            line_price_amount = (quantity * unit_price)
             if price_tax_mode == "tax_exclusive":
-                line_tax_amount = (line_price_amount * tax_rate).quantize(
-                    MONEY,
-                    rounding=ROUND_HALF_UP,
-                )
+                line_tax_amount = (line_price_amount * tax_rate)
                 receivable = line_price_amount + line_tax_amount
             else:
                 receivable = line_price_amount
@@ -6665,8 +6651,8 @@ def create_statement(
             total_receivable += Decimal(str(charge.amount))
             if charge.price_tax_mode in VALID_PRICE_TAX_MODES:
                 statement_price_tax_modes.add(charge.price_tax_mode)
-        statement.total_receivable = total_receivable.quantize(MONEY)
-        statement.total_gross_profit = total_profit.quantize(MONEY)
+        statement.total_receivable = total_receivable.quantize(MONEY, rounding=ROUND_HALF_UP)
+        statement.total_gross_profit = total_profit.quantize(MONEY, rounding=ROUND_HALF_UP)
         _audit(
             db,
             user=user,
@@ -7171,8 +7157,8 @@ def _recalculate_statement_totals(db: Session, statement: Statement) -> None:
             func.coalesce(func.sum(StatementItem.gross_profit_amount), 0),
         ).where(StatementItem.statement_id == statement.id)
     ).one()
-    statement.total_receivable = Decimal(str(totals[0])).quantize(MONEY)
-    statement.total_gross_profit = Decimal(str(totals[1])).quantize(MONEY)
+    statement.total_receivable = Decimal(str(totals[0])).quantize(MONEY, rounding=ROUND_HALF_UP)
+    statement.total_gross_profit = Decimal(str(totals[1])).quantize(MONEY, rounding=ROUND_HALF_UP)
 
 
 def _statement_adjustment_log(
@@ -7391,10 +7377,10 @@ def _new_statement_item_from_receipt(
     from app.services.delivery_snapshots import statement_sales_terms
     unit_price,price_tax_mode,tax_rate=statement_sales_terms(delivery_item,unit_price,price_tax_mode,tax_rate)
     quantity = Decimal(receipt_item.actual_received_quantity)
-    line_price = (quantity * unit_price).quantize(MONEY, rounding=ROUND_HALF_UP)
+    line_price = (quantity * unit_price)
     receivable = (
         line_price
-        + (line_price * tax_rate).quantize(MONEY, rounding=ROUND_HALF_UP)
+        + (line_price * tax_rate)
         if price_tax_mode == "tax_exclusive"
         else line_price
     )
@@ -7486,9 +7472,9 @@ def adjust_statement_dispute(
             before = {"quantity": line.actual_received_quantity, "unit_price": str(line.unit_price_snapshot), "amount": str(line.receivable_amount)}
             quantity = Decimal(line.actual_received_quantity)
             line.unit_price_snapshot = correction.unit_price
-            amount = (quantity * correction.unit_price).quantize(MONEY, rounding=ROUND_HALF_UP)
+            amount = (quantity * correction.unit_price)
             line.receivable_amount = (
-                amount + (amount * line.tax_rate_snapshot).quantize(MONEY, rounding=ROUND_HALF_UP)
+                amount + (amount * line.tax_rate_snapshot)
                 if line.price_tax_mode_snapshot == "tax_exclusive" else amount
             )
             line.gross_profit_amount = (quantity * (correction.unit_price - line.unit_cost_snapshot)).quantize(MONEY, rounding=ROUND_HALF_UP)
@@ -8174,12 +8160,12 @@ def finance_overview(
     return {
         "through_month": through,
         "trend": [
-            {key: (value.quantize(MONEY) if isinstance(value, Decimal) else value) for key, value in trend[month].items()}
+            {key: (value.quantize(MONEY, rounding=ROUND_HALF_UP) if isinstance(value, Decimal) else value) for key, value in trend[month].items()}
             for month in months
         ],
-        "payable_aging": {key: value.quantize(MONEY) for key, value in aging.items()},
+        "payable_aging": {key: value.quantize(MONEY, rounding=ROUND_HALF_UP) for key, value in aging.items()},
         "expense_structure": [
-            {"category": key, "amount": value.quantize(MONEY)}
+            {"category": key, "amount": value.quantize(MONEY, rounding=ROUND_HALF_UP)}
             for key, value in sorted(category_totals.items(), key=lambda item: item[1], reverse=True)
         ],
         "cost_coverage": cost_coverage,

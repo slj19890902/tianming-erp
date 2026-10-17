@@ -184,8 +184,15 @@ def merge_partner_tasks(statement_id: int, payload: MergePayload,
         db.flush()
         for share in shares:
             db.add(Share(task_id=merged.id, statement_id=share.statement_id, statement_version=share.statement_version,
-                net_amount=share.net_amount, tax_amount=share.tax_amount, total_amount=share.total_amount))
+                net_amount=share.net_amount, tax_amount=share.total_amount-share.net_amount, total_amount=share.total_amount))
         items = db.scalars(select(Item).where(Item.task_id.in_(tasks)).order_by(Item.task_id, Item.sequence_no)).all()
+        if first.price_tax_mode == "tax_exclusive":
+            # Recombine raw detail, not already rounded source-task subtotals.
+            merged.net_amount = sum((i.amount for i in items), Decimal(0)).quantize(api.MONEY, rounding=api.ROUND_HALF_UP)
+            merged.tax_amount = sum((i.tax_amount for i in items), Decimal(0)).quantize(api.MONEY, rounding=api.ROUND_HALF_UP)
+            raw_total = sum((i.amount + i.tax_amount for i in items), Decimal(0)).quantize(api.MONEY, rounding=api.ROUND_HALF_UP)
+            if raw_total != preview["total_amount"]:
+                raise HTTPException(409, "原账单分别汇总后的应收与合并明细汇总存在舍入差，请先按同一对账范围核对；已确认账单不会被合并操作改写")
         source_ids = {i.statement_item_id for i in items}
         expected_ids = set(db.scalars(select(StatementItem.id).where(StatementItem.statement_id.in_(ids))).all())
         if len(source_ids) != len(items) or source_ids != expected_ids:

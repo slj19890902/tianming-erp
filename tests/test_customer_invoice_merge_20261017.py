@@ -154,28 +154,28 @@ def test_new_price_three_places_amount_two_places_invoice_file(fin001_app):
         _complete_invoice_profile(client, price_tax_mode='tax_exclusive', fill_unit_price=True)
         with factory() as db:
             statement = db.get(Statement, 1)
-            statement.total_receivable = Decimal('3.76')
+            statement.total_receivable = Decimal('3.77')
             statement.confirmation_status = 'confirmed'
             statement.version = 2
             row = db.scalar(select(StatementItem))
             row.actual_received_quantity = 3
             row.unit_price_snapshot = Decimal('1.111')
             row.price_tax_mode_snapshot = 'tax_exclusive'
-            row.receivable_amount = Decimal('3.76')
+            row.receivable_amount = Decimal('3.76629')
             db.commit()
         created = client.post('/api/finance/statements/1/invoice-tasks', json={'expected_version':2,'idempotency_key':'third-decimal-invoice'})
         assert created.status_code == 201, created.text
         task = created.json()
         assert Decimal(task['net_amount']) == Decimal('3.33')
         assert Decimal(task['tax_amount']) == Decimal('.43')
-        assert Decimal(task['total_amount']) == Decimal('3.76')
+        assert Decimal(task['total_amount']) == Decimal('3.77')
         confirmed = client.post(f"/api/finance/invoice-tasks/{task['id']}/confirm", json={'expected_version':task['version']})
         assert confirmed.status_code == 200, confirmed.text
         response = client.get(f"/api/finance/invoice-tasks/{task['id']}/tax-template.xlsx")
         assert response.status_code == 200, response.text
         sheet = load_workbook(BytesIO(response.content)).active
         assert Decimal(str(sheet['F4'].value)) == Decimal('1.111')
-        assert Decimal(str(sheet['G4'].value)) == Decimal('3.33')
+        assert Decimal(str(sheet['G4'].value)) == Decimal('3.333')
         assert sheet['F4'].number_format == '0.000'
         assert sheet['G4'].number_format == '0.00'
 
@@ -190,9 +190,11 @@ def test_pending_receivable_uses_frozen_delivery_terms(fin001_app):
     with factory() as db:
         line = db.get(DeliveryItem, 1)
         line.sales_contract_json = sales_contract(unit="只", price=Decimal("1.115"), tax_mode="tax_exclusive", tax_rate=Decimal(".13"), source={"kind":"test"})
+        from app.models.finance import StatementItem
+        db.delete(db.scalar(select(StatementItem)))
         db.get(ReturnReceiptItem, 1).actual_received_quantity = 3
         db.get(OrderItem, 1).unit_price = Decimal("555")
         db.flush()
         rows = [dict(v) for v in db.execute(_pending_statement_query(1)).mappings()]
         assert rows and Decimal(str(rows[0]["unit_price"])) == Decimal("1.115")
-        assert Decimal(str(rows[0]["receivable_amount"])) == Decimal("3.79")
+        assert Decimal(str(rows[0]["receivable_amount"])) == Decimal("3.77985")

@@ -439,7 +439,7 @@ class StatementItem(Base):
         nullable=False,
     )
     receivable_amount: Mapped[Decimal] = mapped_column(
-        Numeric(14, 3),
+        Numeric(24, 10),
         nullable=False,
     )
     gross_profit_amount: Mapped[Decimal] = mapped_column(

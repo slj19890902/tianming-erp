@@ -376,9 +376,9 @@ class FinanceInvoiceTaskItem(Base):
     unit: Mapped[str] = mapped_column(String(40), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     unit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 6), nullable=True)
-    amount: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(24, 10), nullable=False)
     tax_rate: Mapped[Decimal] = mapped_column(Numeric(6, 4), nullable=False)
-    tax_amount: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    tax_amount: Mapped[Decimal] = mapped_column(Numeric(24, 10), nullable=False)
     rule_version: Mapped[int] = mapped_column(Integer, nullable=False)
 
 

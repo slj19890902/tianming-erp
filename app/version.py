@@ -12,7 +12,7 @@ from typing import Any
 
 
 APP_VERSION = "v0.22.669"
-APP_VERSION_NAME = "送货验收返修与停用功能精简"
+APP_VERSION_NAME = "缺资料客户共用库存修复"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 

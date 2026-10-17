@@ -197,13 +197,13 @@ from app.services.product_import import (
     parse_dimensions,
     resolve_or_create_product,
 )
-from app.services.product_specification import resolved_product_specification
+from app.services.product_specification import resolved_product_specification, resolved_order_specification
 from app.services.manual_size_product import (
     ManualSizeProductError,
     ManualSizeProductInput,
     resolve_or_create_manual_size_product,
 )
-from app.services.mold_location import describe_mold_location
+from app.services.mold_location import order_mold_location
 from app.services.production_workflow import (
     ProductionWorkflowError,
     cutting_output_factor,
@@ -2693,7 +2693,7 @@ def _order_response(
                 ),
                 "snapshot_product_code": item.snapshot_product_code,
                 "snapshot_product_name": item.snapshot_product_name,
-                "snapshot_spec": resolved_product_specification(
+                "snapshot_spec": resolved_order_specification(
                     item.snapshot_spec,
                     item.product,
                 ),
@@ -2748,7 +2748,7 @@ def _order_response(
                 "mold_name": mold_tool.mold_name if mold_tool else None,
                 "mold_location": mold_tool.rack_location if mold_tool else None,
                 "mold_location_display": (
-                    describe_mold_location(mold_tool.rack_location)["prompt"]
+                    order_mold_location(mold_tool.rack_location)
                     if mold_tool
                     else None
                 ),
@@ -7942,7 +7942,7 @@ def _create_order_impl(
                         validated_quantities[index],
                         str(Decimal(str(item.unit_price)).quantize(Decimal("0.000001"))),
                         (
-                            resolved_product_specification(
+                            resolved_order_specification(
                                 item.specification,
                                 resolved_products[index],
                             )
@@ -7963,7 +7963,7 @@ def _create_order_impl(
                             item.product_id,
                             item.quantity,
                             str(Decimal(str(item.unit_price)).quantize(Decimal("0.000001"))),
-                            (item.snapshot_spec or "").strip(),
+                            (resolved_order_specification(item.snapshot_spec, item.product) or "").strip(),
                             str(item.external_packaging_order_quantity_basis_snapshot or ""),
                             str(item.external_packaging_purchase_quantity_basis_snapshot or ""),
                         )
@@ -8109,7 +8109,7 @@ def _create_order_impl(
                 snapshot_product_name=(
                     (item_payload.product_name or "").strip() or product.product_name
                 ),
-                snapshot_spec=resolved_product_specification(
+                snapshot_spec=resolved_order_specification(
                     item_payload.specification,
                     product,
                 ),
@@ -9670,7 +9670,7 @@ def update_order_item(
         if selected_material is not None
         else ((payload.material or "").strip() or None)
     )
-    item.snapshot_spec = resolved_product_specification(
+    item.snapshot_spec = resolved_order_specification(
         payload.specification,
         current_product,
     )
@@ -9942,7 +9942,7 @@ def update_order_item(
         "snapshot_product_name": item.snapshot_product_name,
         "snapshot_material": item.snapshot_material,
         "snapshot_original_material_code": item.snapshot_original_material_code,
-        "snapshot_spec": resolved_product_specification(
+        "snapshot_spec": resolved_order_specification(
             item.snapshot_spec,
             current_product,
         ),

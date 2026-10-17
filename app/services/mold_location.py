@@ -517,6 +517,15 @@ def _rack_prompt(floor: str, rack: int) -> str:
     return f"第{rack}号货架"
 
 
+def order_mold_location(value: str | None) -> str:
+    """Order rows need the location label, never the workshop guidance text."""
+    raw = str(value or '').strip()
+    if not raw:
+        return ''
+    guide = describe_mold_location(raw)
+    return str(guide.get('short_label') or raw).strip()
+
+
 def describe_mold_location(value: str) -> dict:
     """Turn a stable rack code into a prompt a workshop worker can follow."""
 

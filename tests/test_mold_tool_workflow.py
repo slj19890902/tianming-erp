@@ -2858,7 +2858,8 @@ def test_mold_frontend_connects_location_common_box_and_order_display() -> None:
     assert "productUsesMold(productForm)" in index
     assert "productMoldError" in index
     assert "moldLocationText(item)" in index
-    assert "模具：{{ moldLocationText(item) }}" in index
+    assert "{{ moldLocationText(item) }}" in index
+    assert "模具：{{ moldLocationText(item) }}" not in index
 
 
 def test_desktop_mold_form_builds_confirmed_one_floor_location_codes() -> None:

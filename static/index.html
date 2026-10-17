@@ -4236,7 +4236,7 @@
                                   <tr v-for="(item,itemIndex) in row.items" :key="item.id">
                                     <td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_code))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></span></td>
-                                    <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span><div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasExternalPackagingRequirements(item)" :class="['status', row.external_packaging_purchase_summary?.status==='confirmed' ? 'green' : (row.external_packaging_purchase_summary?.status==='cancelled' ? 'red' : 'orange')]" style="margin-top:3px;white-space:normal">{{ row.external_packaging_purchase_summary?.status==='confirmed' ? `外购包装已确认 ${row.external_packaging_purchase_summary.purchase_numbers.join('、')}` : (row.external_packaging_purchase_summary?.status==='cancelled' ? '原外购包装采购已作废，请新建正确订单' : `下一步：核对外购包装 ${item.external_packaging_requirements.length} 项`) }}</div><div v-if="item.mold_location" class="muted" style="font-size:11px">模具：{{ moldLocationText(item) }}</div></td>
+                                    <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span><div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasExternalPackagingRequirements(item)" :class="['status', row.external_packaging_purchase_summary?.status==='confirmed' ? 'green' : (row.external_packaging_purchase_summary?.status==='cancelled' ? 'red' : 'orange')]" style="margin-top:3px;white-space:normal">{{ row.external_packaging_purchase_summary?.status==='confirmed' ? `外购包装已确认 ${row.external_packaging_purchase_summary.purchase_numbers.join('、')}` : (row.external_packaging_purchase_summary?.status==='cancelled' ? '原外购包装采购已作废，请新建正确订单' : `下一步：核对外购包装 ${item.external_packaging_requirements.length} 项`) }}</div><div v-if="item.mold_location" class="muted" style="font-size:11px">{{ moldLocationText(item) }}</div></td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(orderSpecificationText(item.snapshot_spec))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></span></td>
                                     <td style="white-space:normal;word-break:break-all;max-width:140px;font-size:12px"><span v-for="(part,index) in orderSearchHighlightParts(orderItemMaterialText(item, false))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></span></td>
                                     <td class="cell-right"><strong>订单 {{ item.quantity }}</strong><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div><span class="workflow-remaining">未交 {{ Math.max(0,Number(item.quantity || 0)-Number(item.business_delivered_quantity || 0)) }}</span></td>
@@ -8628,7 +8628,7 @@
                     </td>
                     <td>{{ orderSpecificationText(item.snapshot_spec) }}</td>
                     <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
-                    <td>{{ item.snapshot_production_notes || "-" }}<div v-if="item.mold_location" class="status blue" style="margin-top:4px;white-space:normal">模具：{{ moldLocationText(item) }}</div></td>
+                    <td>{{ item.snapshot_production_notes || "-" }}<div v-if="item.mold_location" class="status blue" style="margin-top:4px;white-space:normal">{{ moldLocationText(item) }}</div></td>
                     <td>{{ item.quantity }}</td>
                     <td>{{ item.finished_inventory_reserved_qty || 0 }}</td>
                     <td><strong>{{ item.production_required_qty }}</strong></td>
@@ -8832,7 +8832,7 @@
                 </td>
                 <td>{{ orderSpecificationText(item.snapshot_spec) }}</td>
                 <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
-                <td>{{ item.snapshot_production_notes || "-" }}<div v-if="item.mold_location" class="status blue" style="margin-top:4px;white-space:normal">模具：{{ moldLocationText(item) }}</div></td>
+                <td>{{ item.snapshot_production_notes || "-" }}<div v-if="item.mold_location" class="status blue" style="margin-top:4px;white-space:normal">{{ moldLocationText(item) }}</div></td>
                 <td>{{ item.quantity }}</td>
                 <td>{{ item.finished_inventory_reserved_qty || 0 }}</td>
                 <td><strong>{{ item.production_required_qty }}</strong></td>
@@ -31784,7 +31784,7 @@
             return ct === '净料' ? '净' : ct === '毛片' ? '毛' : ct;
           },
           moldLocationText(item) {
-            return String(item.mold_location_display || item.mold_location || '').trim() || "未登记位置";
+            return String(item.mold_location_display || item.mold_location || '').trim();
           },
           // ===== 常用箱采购报料/压线推荐（只推荐，不强制覆盖人工值） =====
           normalizeMmInteger(value) {

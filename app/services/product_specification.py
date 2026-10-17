@@ -170,3 +170,16 @@ def delivery_specification(product):
             return ''
         return text
     return product_dimension_specification(product) or ''
+
+
+def resolved_order_specification(snapshot: Any, product: Product | None = None) -> str | None:
+    """Preserve genuine order specs without importing warehouse die identities.
+
+    Older order writes used the warehouse resolver. Suppress its recognizable
+    generated description in the response, leaving stored evidence unchanged.
+    """
+    text = normalized_specification_text(snapshot)
+    generated = bool(text and re.fullmatch(r"模切成品 .+；模具 .+；[1-9]\d*模", text))
+    if text and not generated and text not in {'待完善', '规格待完善', '成品规格待完善'}:
+        return text
+    return delivery_specification(product) or None

@@ -1,9 +1,8 @@
 {
-  "source_filename": "发票开具项目信息导入模板.xlsx",
-  "source_sha256": "67e5df6bb720485565e1afae75b1364a665ca3d1371d662c53b9a5aae6d73564",
-  "empty_template_sha256": "45B6B21BE564D0FEFEC0E3324D319BE8F4AFF1FA0EFD23B1DB2F064D367BFA9A",
+  "source_sha256": "9a37316fcb651d578e54ee65e4a5e4aa1040dcf32d295b92de667c83aa2e57ff",
+  "empty_template_sha256": "7FA373E248E48FCAA00B9732606F8B653E53EEC86B6D2A49A0A69D070FB78C73",
   "version": "mx;20250501",
-  "transform": "Remove detail rows >=4; preserve every other ZIP member byte-for-byte. No customer detail rows shipped in template. Unreferenced shared strings cleared; helper sheet XML remains byte-identical.",
+  "transform": "Native XML byte patch only: remove detail rows, clear unused shared-string text, update dimension/reference counts. All other ZIP members unchanged. No ElementTree serialization.",
   "import_amount_decimals": 2,
-  "unit_price_decimals": 3
+  "unit_price_numeric_precision": 3
 }

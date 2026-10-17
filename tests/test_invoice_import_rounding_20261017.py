@@ -38,7 +38,7 @@ def test_joint_cent_balance_preserves_prices_quantities_source_and_is_determinis
     assert s['C4'].value is None and s.max_row==7
     with zipfile.ZipFile(TEMPLATE) as a,zipfile.ZipFile(export.path) as b:
         for name in a.namelist():
-            if name not in ('xl/worksheets/sheet1.xml','xl/styles.xml'):
+            if name not in ('xl/worksheets/sheet1.xml','xl/sharedStrings.xml'):
                 assert a.read(name)==b.read(name)
 
 

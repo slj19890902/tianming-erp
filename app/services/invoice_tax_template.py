@@ -10,9 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import hashlib
-from io import BytesIO
 import re
-from xml.sax.saxutils import quoteattr
 import json
 import os
 from pathlib import Path
@@ -24,7 +22,7 @@ import zipfile
 from openpyxl import load_workbook
 
 
-TAX_TEMPLATE_SHA256 = "45B6B21BE564D0FEFEC0E3324D319BE8F4AFF1FA0EFD23B1DB2F064D367BFA9A"
+TAX_TEMPLATE_SHA256 = "7FA373E248E48FCAA00B9732606F8B653E53EEC86B6D2A49A0A69D070FB78C73"
 TAX_TEMPLATE_SHEETS = ("1-明细模板", "excelVersion", "xzqhdm", "2-特定业务信息")
 DETAIL_SHEET = TAX_TEMPLATE_SHEETS[0]
 FIRST_DETAIL_ROW = 4
@@ -202,175 +200,74 @@ def _detail_sheet_archive_name(archive: zipfile.ZipFile) -> str:
     return f"xl/{target.lstrip('/')}".replace("xl/xl/", "xl/")
 
 
-def _set_cell_value(cell: ElementTree.Element, value: Any) -> None:
-    for child in list(cell):
-        cell.remove(child)
-    if isinstance(value, Decimal):
-        cell.attrib.pop("t", None)
-        ElementTree.SubElement(cell, _qualified("v")).text = format(value, "f")
-        return
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        cell.attrib.pop("t", None)
-        ElementTree.SubElement(cell, _qualified("v")).text = str(value)
-        return
-    cell.attrib["t"] = "inlineStr"
-    inline = ElementTree.SubElement(cell, _qualified("is"))
-    text = ElementTree.SubElement(inline, _qualified("t"))
-    text.text = str(value)
-
-
-
-def _serialize_preserving_namespace_aliases(root: ElementTree.Element, original: bytes) -> bytes:
-    """Keep namespace aliases referenced as attribute values (e.g. mc:Ignorable).
-
-    ElementTree rewrites tag prefixes but does not rewrite QName-valued attributes.
-    Without these original aliases, Excel may recover the file while strict importers
-    reject it. Keep the aliases in addition to the serializer's namespace bindings.
-    """
-    aliases = {}
-    for _, (prefix, uri) in ElementTree.iterparse(BytesIO(original), events=("start-ns",)):
-        if prefix in aliases and aliases[prefix] != uri:
-            raise InvoiceTaxTemplateError("模板包含重绑定的命名空间，不能安全改写")
-        aliases[prefix] = uri
-    encoded = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
-    start = encoded.index(b"<", encoded.index(b"?>") + 2)
-    end = encoded.index(b">", start)
-    opening = encoded[start:end]
-    existing = {match[0].decode(): match[1].decode() for match in
-                re.findall(rb'xmlns(?::([^=\s]+))?="([^"]*)"', opening)}
-    additions = []
-    for prefix, uri in aliases.items():
-        if prefix == "xml":
-            continue
-        if prefix in existing:
-            if existing[prefix] != uri:
-                raise InvoiceTaxTemplateError("模板命名空间别名冲突，已停止导出")
-            continue
-        name = "xmlns:" + prefix if prefix else "xmlns"
-        additions.append(f" {name}={quoteattr(uri)}".encode("utf-8"))
-    insertion = end - 1 if encoded[end - 1:end] == b"/" else end
-    return encoded[:insertion] + b"".join(additions) + encoded[insertion:]
-
-
-def _three_decimal_style_xml(archive: zipfile.ZipFile) -> tuple[bytes, int, int]:
-    """Append a minimal custom ``0.000`` cell style and return its index."""
-
-    styles_root = ElementTree.fromstring(archive.read("xl/styles.xml"))
-    cell_xfs = styles_root.find(_qualified("cellXfs"))
-    if cell_xfs is None:
-        raise InvoiceTaxTemplateError("导出副本缺少单元格样式")
-    formats = styles_root.find(_qualified("numFmts"))
-    if formats is None:
-        formats = ElementTree.Element(_qualified("numFmts"), {"count": "0"})
-        styles_root.insert(0, formats)
-    num_id = max([163] + [int(n.attrib["numFmtId"]) for n in formats]) + 1
-    ElementTree.SubElement(formats, _qualified("numFmt"), {"numFmtId": str(num_id), "formatCode": "0.000"})
-    formats.attrib["count"] = str(len(formats))
-    style_id = len(cell_xfs.findall(_qualified("xf")))
-    ElementTree.SubElement(
-        cell_xfs,
-        _qualified("xf"),
-        {
-            "numFmtId": str(num_id),
-            "fontId": "0",
-            "fillId": "0",
-            "borderId": "0",
-            "xfId": "0",
-            "applyNumberFormat": "true",
-        },
-    )
-    amount_style_id = style_id + 1
-    ElementTree.SubElement(cell_xfs, _qualified("xf"), {"numFmtId": "2", "fontId": "0", "fillId": "0", "borderId": "0", "xfId": "0", "applyNumberFormat": "true"})
-    cell_xfs.attrib["count"] = str(style_id + 2)
-    return (
-        _serialize_preserving_namespace_aliases(styles_root, archive.read("xl/styles.xml")),
-        style_id,
-        amount_style_id,
-    )
-
-
 def _write_detail_rows(path: Path, lines: Sequence[Mapping[str, Any]]) -> None:
-    """Update only the detail-sheet XML; helper worksheets stay byte-identical."""
+    """Patch native sheetData and shared strings; never reserialize the workbook.
 
-    column_map = {
-        "A": "project_name",
-        "B": "tax_classification_code",
-        "C": "specification",
-        "D": "unit",
-        "E": "quantity",
-        "F": "unit_price",
-        "G": "amount",
-        "H": "tax_rate",
-        "I": "discount_amount",
-        "J": "preferential_policy_type",
-        "K": "coal_type",
-        "U": "professional_service_invoice",
-        "V": "professional_service_agreement_no",
-    }
+    Tax importers may reject a spreadsheet that Excel can recover. Preserve the
+    vendor's namespaces, style XML, relationships and helper parts byte for byte.
+    Text uses the template's shared-string representation, not inlineStr.
+    """
+    from xml.sax.saxutils import escape
+    fields = {"A": "project_name", "B": "tax_classification_code", "C": "specification",
+              "D": "unit", "E": "quantity", "F": "unit_price", "G": "amount",
+              "H": "tax_rate", "I": "discount_amount", "J": "preferential_policy_type",
+              "K": "coal_type", "U": "professional_service_invoice", "V": "professional_service_agreement_no"}
     temporary = path.with_name(f".{path.name}.writing")
     try:
-        with zipfile.ZipFile(path, "r") as source_archive:
-            detail_name = _detail_sheet_archive_name(source_archive)
-            detail_root = ElementTree.fromstring(source_archive.read(detail_name))
-            use_three_decimal_unit_price = bool(lines)
-            styles_xml: bytes | None = None
-            three_decimal_style_id: int | None = None
-            amount_style_id: int | None = None
-            if use_three_decimal_unit_price:
-                styles_xml, three_decimal_style_id, amount_style_id = _three_decimal_style_xml(
-                    source_archive
-                )
-            sheet_data = detail_root.find(_qualified("sheetData"))
-            if sheet_data is None:
-                raise InvoiceTaxTemplateError("导出副本缺少明细行数据")
-            for existing_row in list(sheet_data):
-                if int(existing_row.attrib.get("r", "0")) >= FIRST_DETAIL_ROW:
-                    sheet_data.remove(existing_row)
-            dimension = detail_root.find(_qualified("dimension"))
-            if dimension is not None:
-                dimension.set("ref", f"A1:V{FIRST_DETAIL_ROW + len(lines) - 1}")
-            rows = {
-                int(row.attrib["r"]): row
-                for row in sheet_data.findall(_qualified("row"))
-                if row.attrib.get("r", "").isdigit()
-            }
-            for offset, line in enumerate(lines):
-                row_number = FIRST_DETAIL_ROW + offset
-                row = rows.get(row_number)
-                if row is None:
-                    row = ElementTree.SubElement(sheet_data, _qualified("row"), {"r": str(row_number)})
-                    rows[row_number] = row
-                cells = {cell.attrib.get("r"): cell for cell in row.findall(_qualified("c"))}
-                for column, key in column_map.items():
-                    value = line[key]
-                    if value is None:
+        with zipfile.ZipFile(path) as archive:
+            name = _detail_sheet_archive_name(archive)
+            sheet = archive.read(name).decode("utf-8")
+            shared = archive.read("xl/sharedStrings.xml").decode("utf-8")
+            if "<worksheet " not in sheet or "<sst " not in shared:
+                raise InvoiceTaxTemplateError("模板不是已验证的原生结构，请更新税务模板")
+            block = re.search(r"(<sheetData\b[^>]*>)(.*?)(</sheetData>)", sheet, re.S)
+            if block is None:
+                raise InvoiceTaxTemplateError("税务模板缺少明细区")
+            header_rows = []
+            for row in re.findall(r"<row\b[^>]*(?:/>|>.*?</row>)", block[2], re.S):
+                number = re.search(r'\br="(\d+)"', row)
+                if number and int(number[1]) < FIRST_DETAIL_ROW:
+                    header_rows.append(row)
+            root = ElementTree.fromstring(shared)
+            strings = ["".join(node.itertext()) for node in root]
+            lookup = {}
+            for i, value in enumerate(strings):
+                lookup.setdefault(value, i)
+            additions = []
+            rows = []
+            for i, line in enumerate(lines, FIRST_DETAIL_ROW):
+                cells = []
+                for column, key in fields.items():
+                    value = line.get(key)
+                    if value is None or value == "":
                         continue
-                    reference = f"{column}{row_number}"
-                    cell = cells.get(reference)
-                    if cell is None:
-                        cell = ElementTree.SubElement(row, _qualified("c"), {"r": reference})
-                        cells[reference] = cell
-                    if column == "F" and three_decimal_style_id is not None:
-                        cell.attrib["s"] = str(three_decimal_style_id)
-                    elif column in ("G", "I") and amount_style_id is not None:
-                        cell.attrib["s"] = str(amount_style_id)
-                    _set_cell_value(cell, value)
-            detail_xml = _serialize_preserving_namespace_aliases(
-                detail_root, source_archive.read(detail_name)
-            )
-            with zipfile.ZipFile(temporary, "w") as destination_archive:
-                for member in source_archive.infolist():
-                    replacement = None
-                    if member.filename == detail_name:
-                        replacement = detail_xml
-                    elif member.filename == "xl/styles.xml" and styles_xml is not None:
-                        replacement = styles_xml
-                    destination_archive.writestr(
-                        member,
-                        replacement
-                        if replacement is not None
-                        else source_archive.read(member.filename),
-                    )
+                    ref = f"{column}{i}"
+                    if column in {"E", "F", "G", "H", "I"}:
+                        number = Decimal(str(value))
+                        if not number.is_finite():
+                            raise InvoiceTaxTemplateError("导出数字无效")
+                        cells.append(f'<c r="{ref}"><v>{format(number, "f")}</v></c>')
+                    else:
+                        value = str(value)
+                        if value not in lookup:
+                            lookup[value] = len(strings) + len(additions)
+                            additions.append('<si><t xml:space="preserve">' + escape(value) + '</t></si>')
+                        cells.append(f'<c r="{ref}" t="s"><v>{lookup[value]}</v></c>')
+                rows.append(f'<row r="{i}">' + ''.join(cells) + '</row>')
+            sheet = sheet[:block.start(2)] + ''.join(header_rows + rows) + sheet[block.end(2):]
+            sheet = re.sub(r'(<dimension\b[^>]*\bref=")[^"]*',
+                           lambda m: m[1] + f'A1:V{FIRST_DETAIL_ROW + len(lines) - 1}', sheet, count=1)
+            shared = shared.replace('</sst>', ''.join(additions) + '</sst>')
+            count = len(re.findall(r'<c\b[^>]*\bt="s"', sheet))
+            for member in archive.namelist():
+                if member.startswith('xl/worksheets/') and member.endswith('.xml') and member != name:
+                    count += len(re.findall(rb'<(?:\w+:)?c\b[^>]*\bt="s"', archive.read(member)))
+            shared = re.sub(r'(<sst\b[^>]*\bcount=")[^"]*', lambda m: m[1] + str(count), shared, count=1)
+            shared = re.sub(r'(<sst\b[^>]*\buniqueCount=")[^"]*', lambda m: m[1] + str(len(strings) + len(additions)), shared, count=1)
+            with zipfile.ZipFile(temporary, 'w') as out:
+                for info in archive.infolist():
+                    data = sheet.encode('utf-8') if info.filename == name else shared.encode('utf-8') if info.filename == 'xl/sharedStrings.xml' else archive.read(info.filename)
+                    out.writestr(info, data)
         temporary.replace(path)
     except Exception:
         temporary.unlink(missing_ok=True)
@@ -407,9 +304,8 @@ def _verify_export(path: Path, lines: Sequence[Mapping[str, Any]], helper_finger
                 if (
                     actual_price is None
                     or Decimal(str(actual_price)) != Decimal(str(line["unit_price"]))
-                    or sheet[f"F{row}"].number_format not in {"0.000", "#,##0.000"}
                 ):
-                    raise InvoiceTaxTemplateError("导出文件未税单价三位显示校验失败")
+                    raise InvoiceTaxTemplateError("导出文件未税单价回读校验失败")
     finally:
         workbook.close()
 

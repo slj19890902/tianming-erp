@@ -9620,7 +9620,7 @@
                     <td>{{ line.product_code || line.inventory_code }}</td>
                     <td><input class="input" v-model.trim="line.customer_po" maxlength="200" aria-label="客户订单号" /></td>
                     <td><button v-for="location in deliveryLineLocations(line)" :key="location.key" class="delivery-location-link" type="button" @click="openDeliveryLocation(location)">{{ location.label }}</button></td>
-                    <td><input class="input" type="number" min="1" :max="line.deliverable_quantity || undefined" v-model.number="line.delivered_quantity" @input="onDeliveryQuantityChanged(line)" aria-label="送货数" /></td>
+                    <td><input class="input" type="number" min="1" :max="deliveryLineStockQuantity(line) || undefined" v-model.number="line.delivered_quantity" @input="onDeliveryQuantityChanged(line)" aria-label="送货数" /></td>
                     <td>{{ deliveryLineStockQuantity(line) }}</td>
                     <td v-if="canViewSalesAmounts"><input v-if="line.source_type==='unordered_finished'" class="input" type="number" min="0" step="0.000001" v-model.number="line.unit_price" aria-label="单价" /><span v-else>{{ deliveryLinePriceText(line) }}</span></td>
                     <td v-if="canViewSalesAmounts">{{ deliveryLineAmount(line) }}</td>
@@ -38781,7 +38781,7 @@
             return line.unit_price == null || line.unit_price === '' ? '' : String(line.unit_price).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
           },
           deliveryLineAmount(line) {
-            if (line.unit_price == null || line.unit_price === '') return '';
+            if (line.unit_price == null || line.unit_price === '' || (line.source_type === 'unordered_finished' && Number(line.unit_price) <= 0)) return '';
             const price = String(line.unit_price).match(/^(\d+)(?:\.(\d{0,6}))?$/);
             const quantity = Number(line.delivered_quantity);
             if (!price || !Number.isSafeInteger(quantity) || quantity < 0) return '';

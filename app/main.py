@@ -59,7 +59,6 @@ from app.api.products import (
     box_type_rules_router,
     router as products_router,
 )
-from app.api.product_import import router as product_import_router
 from app.api.requisition import router as requisition_router
 from app.api.quotations import router as quotations_router
 from app.api.contracts import router as contracts_router
@@ -857,7 +856,6 @@ def create_app() -> FastAPI:
             external_packaging_prices_router,
             "external-packaging-prices",
         ),
-        ("/api/master/products", product_import_router, "master-product-import"),
         (
             "/api/master/products",
             external_packaging_components_router,

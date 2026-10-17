@@ -11362,11 +11362,12 @@ def get_delivery(
 ) -> dict:
     delivery = _delivery_for_user(db, delivery_id, user)
     result = _delivery_response(db, delivery_id)
-    from app.services.delivery_current_presentation import current_descriptions, delivery_amounts
+    from app.services.delivery_current_presentation import current_descriptions, delivery_amounts, present_component_descriptions
     records = list(db.scalars(select(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id, DeliveryItem.is_current.is_(True))))
     descriptions = current_descriptions(db, delivery, records)
     for item in result["items"]:
         item.update(descriptions.get(item["id"], {}))
+    present_component_descriptions(db, delivery, result['items'])
     from app.api.orders import _can_view_order_sales_amount
     if _can_view_order_sales_amount(user):
         result.update(delivery_amounts(db, [delivery_id])[delivery_id])

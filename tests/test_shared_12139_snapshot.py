@@ -21,6 +21,7 @@ def test_reviewed_12139_snapshot_in_memory():
         value,_=plan(db)
         result=apply(db,expected_hash=value['preview_hash'],backup_receipt={'verified':True,'sha256':'a'*64})
         db.commit()
+        assert apply(db,expected_hash=value['preview_hash'],backup_receipt={'verified':True,'sha256':'a'*64})['replayed']
         assert not db.execute(text('PRAGMA foreign_key_check')).fetchall()
         out=Path('/Users/kimiyf/ERP-Migration/evidence/shared-stock-12139-20261017')
         (out/'reviewed-data-plan.json').write_text(access.canonical(value))

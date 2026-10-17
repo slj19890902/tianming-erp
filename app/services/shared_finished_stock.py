@@ -66,7 +66,19 @@ def _interchangeability_key(identity):
     if 'bom' in value:
         from app.services.shared_bom_stock import comparison
         return comparison(identity)
-    value["basis"]["production_process"] = _process_key(value["basis"].get("production_process"))
+    basis = value["basis"]
+    # The editor already derives a flat die-cut piece's display unit from its
+    # no-joining route. Compare the same unambiguous name here, while retaining
+    # every member/lot/order's original unit in its immutable identity. This is
+    # one finished piece, never a sheet, set, BOM or multi-piece conversion.
+    from app.services.product_unit_labels import unit_name
+    label, review = unit_name(basis.get("unit"), process=basis.get("production_process"))
+    if (basis.get("box_category") == "die_cut" and basis.get("mold_tool_id")
+            and basis.get("pieces_per_box") == "1" and basis.get("splice_mode") == "single"
+            and not basis.get("assembly") and basis.get("unit") in {"只", "片"}
+            and label == "片" and not review):
+        basis["unit"] = label
+    basis["production_process"] = _process_key(basis.get("production_process"))
     return _json(value)
 
 

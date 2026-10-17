@@ -63,9 +63,12 @@ def freeze_snapshot(db, item, lot):
     contract = frozen_bom_plan(item)
     from app.services.stock_purchase_identity import resolve
     identity = resolve(db, item, product)
+    from app.services.stock_completion_basis import completion_basis
+    output_basis, basis_proof = completion_basis(db, item, dict(
+        physical_basis=identity['physical_basis'], product_id=product.id, purchase_identity=identity))
     return dict(product_id=product.id, code=item.product_code_snapshot or product.product_code,
         name=item.product_name_snapshot or product.product_name, factor=item.stock_yield_per_sheet,
-        pieces_per_box=item.pieces_per_box, physical_basis=identity['physical_basis'],
+        pieces_per_box=item.pieces_per_box, physical_basis=output_basis, completion_basis_proof=basis_proof,
         purchase_identity=identity, product_version=identity['product_version'], planned_location=None, preparation_group=None,
         frozen_bom_plan=contract, sheet_cutting_snapshot=item.sheet_cutting_snapshot,
         bom_parent_basis=(identity.get('bom_parent_basis') or product_basis(db.get(Product,contract['parent_product_id']))) if contract else None,

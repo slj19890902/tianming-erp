@@ -371,12 +371,16 @@ def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='
                 from app.services.stock_preparation_disposition import semi_output
                 output = semi_output(db,job,lot,item,actual,destination,payload,actor)
             else:
+                from app.services.stock_completion_basis import completion_basis
+                output_basis, basis_proof = completion_basis(db, item, json.loads(job.product_snapshot))
+                if basis_proof:
+                    result['completion_basis_proof'] = basis_proof
                 output = manual_finished_in(db, customer_id=item.customer_id, product_id=job.product_id,
                 location_id=destination.id, quantity=actual, stock_date=beijing_today(), source_type="transfer",
                 remarks=f"备库生产；来源 {lot.lot_number}",operator_id=actor.id,
                 idempotency_key=f"prep-out:{job.id}",source_ref_type="stock_preparation",source_ref_id=job.id,
                 expected_layout_version=payload["layout_version"], movement_reason="备库生产确认入库",
-                physical_basis_json=json.loads(job.product_snapshot)["physical_basis"])
+                physical_basis_json=output_basis)
             snapshot=json.loads(job.product_snapshot)
             if output.finished_detail:
                 output.finished_detail.inventory_code_snapshot=snapshot["code"]

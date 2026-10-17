@@ -621,7 +621,8 @@ def test_fin002a_tax_exclusive_statement_task_and_export_are_frozen(fin001_app) 
             assert workbook.sheetnames == ["1-明细模板", "excelVersion", "xzqhdm", "2-特定业务信息"]
             sheet = workbook["1-明细模板"]
             assert sheet["B4"].value == "1060105010000000000"
-            assert sheet["C4"].value == "FIN-BOX-001"
+            assert sheet["A4"].value == "FIN-BOX-001"
+            assert sheet["C4"].value is None
             assert sheet["D4"].value == "PCS"
             assert Decimal(str(sheet["E4"].value)) == Decimal("100")
             assert Decimal(str(sheet["F4"].value)) == Decimal("10.00")

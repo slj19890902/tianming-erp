@@ -1982,17 +1982,18 @@ def download_tax_template(
         f"{short_name}{statement_month}导入模板.xlsx"
     )
     output = export_dir / (
-        f"{task.task_number}-{task.source_snapshot_hash[:12]}-{download_name}"
+        f"{task.task_number}-{task.source_snapshot_hash[:12]}-code-drawing-v1-{download_name}"
     )
     try:
-        export = generate_invoice_tax_template(template_path=TAX_TEMPLATE_PATH, output_path=output, lines=[{"project_name": item.project_name, "tax_classification_code": item.tax_classification_code, "specification": item.specification, "unit": item.unit, "quantity": item.quantity, "unit_price": item.unit_price, "amount": item.amount, "tax_rate": item.tax_rate} for item in items])
+        from app.services.invoice_export_identity import export_lines
+        export = generate_invoice_tax_template(template_path=TAX_TEMPLATE_PATH, output_path=output, lines=export_lines(db, items))
     except InvoiceTaxTemplateError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     task.status = "exported"
     task.export_count += 1
     task.last_export_hash = export.sha256
     task.last_exported_at = datetime.now()
-    _audit(db, user=user, action="EXPORT_INVOICE_TAX_TEMPLATE", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number, "file_hash": export.sha256, "line_count": export.line_count, "warnings": list(export.warnings)}, description="生成税局开票导入文件")
+    _audit(db, user=user, action="EXPORT_INVOICE_TAX_TEMPLATE", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number, "file_hash": export.sha256, "line_count": export.line_count, "warnings": list(export.warnings), "item_identity_policy": "code-drawing-v1"}, description="生成税局开票导入文件")
     db.commit()
     return FileResponse(export.path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=download_name)
 

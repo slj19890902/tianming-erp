@@ -168,3 +168,15 @@ def test_installed_pair_proof_is_bound_and_contains_no_business_counts(scene):
     assert answer['point_name'].endswith('.tmdb')
     assert answer['program_sha256']==case.manager.state['current']
     assert 'database' not in answer
+
+
+def test_public_plan_remains_readable_under_launchd_umask_and_private_receipt_stays_private(scene):
+    import os,stat
+    case,native,now=scene
+    old=os.umask(0o027)
+    try:
+        native.write(case.root/'public-plan.json',{'metadata':True},mode=0o644)
+        native.write(case.root/'private-receipt.json',{'metadata':True})
+    finally:os.umask(old)
+    assert stat.S_IMODE((case.root/'public-plan.json').stat().st_mode)==0o644
+    assert stat.S_IMODE((case.root/'private-receipt.json').stat().st_mode)==0o600

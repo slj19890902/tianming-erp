@@ -57,7 +57,9 @@ def test_cross_month_merge_export_one_invoice_replay_and_visibility(fin001_app):
         exported = client.get(f"/api/finance/invoice-tasks/{task['id']}/tax-template.xlsx")
         assert exported.status_code == 200, exported.text
         sheet = load_workbook(BytesIO(exported.content)).active
-        assert sheet['G4'].number_format == '0.00'
+        assert sheet['G4'].number_format == 'General'  # preserve the accepted native template styles
+        amount = Decimal(str(sheet['G4'].value))
+        assert amount == amount.quantize(Decimal('0.01'))
         task = client.get(f"/api/finance/invoice-tasks/{task['id']}").json()
         issued = client.post(f"/api/finance/invoice-tasks/{task['id']}/result", json=issue_payload(task))
         assert issued.status_code == 200, issued.text

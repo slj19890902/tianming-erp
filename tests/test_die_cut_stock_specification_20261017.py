@@ -26,7 +26,7 @@ def test_registered_multimold_stock_keeps_piece_count_without_inventing_dimensio
     db.add_all([product,location]); db.commit()
     assert product.length_mm is None and product.width_mm is None
     assert "4模" in product_stock_specification(product)
-    assert "单片尺寸未登记" in product_stock_specification(product)
+    assert "单片尺寸未登记" not in product_stock_specification(product)
     assert resolved_product_specification(None,product) == product_stock_specification(product)
     assert resolved_product_specification("旧单冻结规格",product) == "旧单冻结规格"
     args = dict(customer_id=customer.id,product_id=product.id,location_id=location.id,quantity=8,

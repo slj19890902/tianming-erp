@@ -252,7 +252,7 @@
   <div class="toolbar no-print">
     <button id="printButton" disabled type="button">确认打印</button>
     <button id="retryButton" class="secondary hidden" type="button">重新读取</button>
-    <a href="/" aria-label="返回系统">返回系统</a>
+    <a id="returnDelivery" href="/frontend-v2/deliveries" aria-label="返回送货单">返回送货单</a>
     <details class="print-guide no-print">
       <summary aria-label="打印设置帮助">ⓘ</summary>
       <div class="print-guide-content"><strong id="printProfileSummary"></strong><br>
@@ -334,6 +334,8 @@
 
   <link rel="stylesheet" href="/customer-delivery-print.css?v=656">
   <script src="/operation-key.js"></script>
+  <script src="/static/ui/delivery-dispatch-recovery.js?v=workflow-20261017"></script>
+  <script src="/static/ui/delivery-print-dispatch.js?v=workflow-20261017"></script>
   <script src="/customer-delivery-print.js?v=656"></script>
   <script>
     const escapeHtml = (value) => String(value ?? "")
@@ -724,6 +726,8 @@
         if (document.fonts?.ready) await document.fonts.ready;
         if (generation !== loadGeneration || controller.signal.aborted) return false;
         renderDelivery(data);
+        window.customerPrintData = data;
+        await TmDeliveryPrintDispatch.prepare(data);
         showReady();
         return true;
       } catch (error) {
@@ -776,13 +780,22 @@
           if (document.fonts?.ready) await document.fonts.ready;
           CustomerDeliveryPrint.validate(sheets);
           await CustomerDeliveryPrint.recordPrint();
+          await TmDeliveryPrintDispatch.confirm(window.customerPrintData);
           fitCustomerOrderNumbers();
           window.print();
         } catch (error) { showError(error.message); }
         finally { printButton.disabled = !errorBox.hidden; }
       }
     });
-    window.addEventListener('beforeprint', () => {
+    const deliveryReturnKey = new URLSearchParams(location.search).get('return_key');
+    if (deliveryReturnKey) document.getElementById('returnDelivery').href += '?return_key='+encodeURIComponent(deliveryReturnKey);
+    document.getElementById('returnDelivery').addEventListener('click', () => {
+      const key = new URLSearchParams(location.search).get('return_key');
+      const channel = new BroadcastChannel('tm-delivery-return');
+      channel.postMessage({key,deliveryId:window.customerPrintData?.id,actor:window.customerPrintData?.current_actor_id});
+      setTimeout(()=>channel.close(),500);
+    });
+    window.addEventListener('beforeprint' , () => {
       try { fitCustomerOrderNumbers(); CustomerDeliveryPrint.validate(sheets); }
       catch (error) { showError(error.message); }
     });

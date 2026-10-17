@@ -3,7 +3,7 @@ import json
 import hashlib
 from decimal import Decimal
 
-from app.services.product_specification import product_stock_specification, normalized_specification_text
+from app.services.product_specification import product_stock_specification, normalized_specification_text, strip_unregistered_size_note
 
 FIELDS = ("box_category", "box_style", "production_process", "production_notes", "layer_count",
           "splice_mode", "pieces_per_box", "crease_type", "crease_left_mm",
@@ -52,6 +52,14 @@ def _with_assembly(document, children):
 
 
 def _child_basis(pid, quantity, document):
+    # Preserve existing assembly hashes when removing the retired descriptive
+    # suffix. The legacy spelling is reconstructed only for hashing, not stored.
+    import re
+    value = json.loads(document)
+    spec = value.get('spec')
+    if isinstance(spec, str) and re.fullmatch(r'模切成品 .+；模具 .+；[0-9]+模', spec):
+        value['spec'] = spec + '（单片尺寸未登记）'
+        document = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     return dict(product_id=pid, quantity=quantity,
                 basis_hash=hashlib.sha256(document.encode()).hexdigest())
 
@@ -86,7 +94,11 @@ def matches_stock_identity(actual, expected):
     try:
         value = json.loads(actual or '{}')
         value.pop('quantity_basis', None)
-        return value == json.loads(expected)
+        wanted = json.loads(expected)
+        for document in (value, wanted):
+            if isinstance(document, dict) and isinstance(document.get('spec'), str):
+                document['spec'] = strip_unregistered_size_note(document['spec'])
+        return value == wanted
     except (ValueError, TypeError, AttributeError):
         return False
 

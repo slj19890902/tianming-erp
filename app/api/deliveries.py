@@ -8406,6 +8406,11 @@ class _PendingDeliveryReadContext:
         return max(int(self.remaining_by_item.get(order_item.id, 0)), 0)
 
 
+def _can_view_delivery_prices(user):
+    from app.api.orders import _can_view_order_sales_amount
+    return _can_view_order_sales_amount(user)
+
+
 def _pending_delivery_item_payload(
     db: Session,
     *,
@@ -8413,6 +8418,7 @@ def _pending_delivery_item_payload(
     registry,
     context: _PendingDeliveryReadContext,
     include_material_display: bool = False,
+    include_price: bool = False,
 ) -> dict | None:
     """Build the legacy response, avoiding duplicate SQL for the safe path."""
 
@@ -8498,6 +8504,8 @@ def _pending_delivery_item_payload(
         **kit_metadata,
         "inventory_sources": inventory_sources,
     }
+    if include_price:
+        payload['unit_price'] = str(order_item.unit_price) if order_item.unit_price is not None else None
     if include_material_display:
         material = (mapping["material"] or "").strip()
         flute_type = (mapping["flute_type"] or "").strip()
@@ -8523,7 +8531,8 @@ def pending_delivery_items(
     items = []
     for row in rows:
         payload = _pending_delivery_item_payload(
-            db, row=row, registry=registry, context=context
+            db, row=row, registry=registry, context=context,
+            include_price=_can_view_delivery_prices(user),
         )
         if payload is not None:
             items.append(payload)
@@ -8723,6 +8732,7 @@ def search_pending_delivery_items(
             registry=registry,
             context=context,
             include_material_display=True,
+            include_price=_can_view_delivery_prices(_user),
         )
         if payload is not None:
             items.append(payload)
@@ -8778,6 +8788,11 @@ def unified_delivery_selection_items(
                 )
                 stock_items += following["items"][:needed - len(stock_items)]
             items += [{**item, "source_type": "unordered_finished"} for item in stock_items]
+    from app.api.orders import _can_view_order_sales_amount
+    allowed_prices = _can_view_order_sales_amount(user)
+    if not allowed_prices:
+        for item in items:
+            item.pop('unit_price', None)
     total = len(orders) + stock_total
     return {"items": items, "total": total, "order_total": len(orders),
             "inventory_total": stock_total, "page": page, "page_size": page_size,
@@ -11355,6 +11370,14 @@ def get_delivery(
     from app.api.orders import _can_view_order_sales_amount
     if _can_view_order_sales_amount(user):
         result.update(delivery_amounts(db, [delivery_id])[delivery_id])
+        from app.services.delivery_snapshots import read_sales_contract
+        by_id = {r.id: r for r in records}
+        for item in result["items"]:
+            contract = read_sales_contract(by_id[item['id']])
+            item['unit_price'] = contract['unit_price'] if contract else None
+    else:
+        for item in result["items"]:
+            item.pop("unit_price", None)
     return result
 
 
@@ -11814,6 +11837,7 @@ def get_delivery_print_data(
         "items": print_items,
     }
 
+    result.update(current_actor_id=user.id, delivery_version=int(delivery.version or 1))
     from app.services.customer_delivery_print import enrich_customer_print
     if description_mode == "current":
         from app.services.delivery_current_presentation import prepare_current_print

@@ -99,13 +99,17 @@ def product_stock_specification(product: Product | None) -> str | None:
             or getattr(mold, "archive_status", "active") != "active"
             or getattr(product, "mold_tool_id", None) != mold.id):
         return None
-    return f"模切成品 {code}；模具 {mold_code}；{setting.mold_count}模（单片尺寸未登记）"
+    return f"模切成品 {code}；模具 {mold_code}；{setting.mold_count}模"
+
+
+def strip_unregistered_size_note(value: str) -> str:
+    return re.sub(r"[（(]\s*单片尺寸未登记\s*[）)]|单片尺寸未登记", "", value)
 
 
 def normalized_specification_text(value: Any) -> str | None:
     """Normalize a pure 2D/3D size while preserving non-dimensional text."""
 
-    text = str(value or "").strip()
+    text = strip_unregistered_size_note(str(value or "")).strip()
     if text in _MISSING_SPECIFICATIONS:
         return None
     match = _DIMENSION_SPECIFICATION.fullmatch(text)
@@ -150,3 +154,20 @@ def resolved_product_specification(
     if product is not None:
         return product_stock_specification(product)
     return dimension_specification(length_mm, width_mm, height_mm)
+
+
+def delivery_specification(product):
+    """Employee delivery display uses the registered die location and mold count."""
+    from app.services.sheet_cutting_settings import component_settings
+    from app.services.sheet_cutting_contract import SheetCuttingContractError
+    try:
+        setting = component_settings(getattr(product, 'sheet_cutting_settings', None))
+    except SheetCuttingContractError:
+        setting = None
+    if setting and setting.is_die_cut:
+        mold = getattr(product, 'mold_tool', None)
+        valid = (mold is not None and mold.is_active and mold.deleted_at is None
+                 and mold.archive_status == 'active' and product.mold_tool_id == mold.id)
+        location = str(mold.rack_location or '').strip() if valid else ''
+        return ' · '.join(filter(None, [location, f'{setting.mold_count}模']))
+    return product_dimension_specification(product) or ''

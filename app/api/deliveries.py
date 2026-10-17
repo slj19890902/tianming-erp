@@ -11835,6 +11835,9 @@ class CustomerPrintRequest(BaseModel):
 def record_customer_print_request(delivery_id: int, payload: CustomerPrintRequest,
                                   db: Session = Depends(get_db), user: User = Depends(can_read)):
     _delivery_for_user(db, delivery_id, user)
+    from app.api.orders import _can_view_order_sales_amount
+    if payload.show_prices and not _can_view_order_sales_amount(user):
+        raise HTTPException(403, '没有销售金额查看权限，不能打印有价送货单')
     action = 'delivery.customer_print_requested'
     request_hash = hashlib.sha256(json.dumps({'delivery_id': delivery_id, **payload.model_dump(exclude={'idempotency_key'})},
                                             sort_keys=True, ensure_ascii=False).encode()).hexdigest()

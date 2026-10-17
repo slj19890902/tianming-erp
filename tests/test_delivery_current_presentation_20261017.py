@@ -81,6 +81,8 @@ def test_old_delivery_refreshes_descriptions_keeps_sale_and_tracks_print(n029_de
             assert db.query(DeliveryItem).filter_by(delivery_id=did, is_current=True).one().customer_document_snapshot_json == frozen
             audit = db.query(FinanceIdempotencyRecord).filter_by(idempotency_key=event['idempotency_key']).one()
             saved = json.loads(audit.response_json)['printed_document']
+            assert 'unit_price' not in saved['customer_document_rows'][0]
+            assert 'amount' not in saved['customer_document_rows'][0]
             assert saved['customer_document_rows'][0]['customer_drawing_number'] == '0007942511'
         monkeypatch.setattr('app.api.orders._can_view_order_sales_amount', lambda user: False)
         hidden = client.get('/api/deliveries?view=summary').json()['items']
@@ -88,9 +90,7 @@ def test_old_delivery_refreshes_descriptions_keeps_sale_and_tracks_print(n029_de
         assert client.get(f'/api/deliveries/{did}/print?show_prices=true').status_code == 403
         assert 'unit_price' not in client.get(f'/api/deliveries/{did}/print?show_prices=false').json()['customer_document_rows'][0]
         replay = client.post(f'/api/deliveries/{did}/customer-print-events', json=event)
-        assert replay.status_code == 200, replay.text
-        assert 'unit_price' not in replay.json()['printed_document']['customer_document_rows'][0]
-        assert 'amount' not in replay.json()['printed_document']['customer_document_rows'][0]
+        assert replay.status_code == 403, replay.text
 
 
 def test_current_description_never_uses_another_customer_or_legacy_candidates():

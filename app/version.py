@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.668"
+APP_VERSION = "v0.22.669"
 APP_VERSION_NAME = "送货验收返修与停用功能精简"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -6573,3 +6573,16 @@ APP_VERIFICATION_STEPS = [
     "确认路线辅助和指定样品功能已移除；正常常用箱、工程附件、税务及共享库存仍可使用。",
 ]
 APP_CHANGELOG = [*(f"v0.22.668：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.669：缺销售资料客户可核对后共用同一实物库存。
+APP_CHANGES = [
+    "库存共用可选择尚无本款常用箱的客户，明确核对后一次补建销售资料并建立共用；售价、图号、类别和型番不猜填。",
+    "已有产品按同码或相同报料尺寸及同一模具查找，并继续校验材质、印刷、单位和工艺；库存沿用原批次与一份余额。",
+    "保留v668送货客户选择修复、退役功能移除及位置显示保留规则；无数据库结构迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "库存共用搜索80012139，查看研光和海外订单共用客户与原库存货位。",
+    "海外订单录单选中80012139，核对共用库存可抵扣；售价为空时按实际报价维护，不能借用研光售价。",
+    "核对先成功预占的订单先占用，同一批库存不得双算。",
+]
+APP_CHANGELOG = [*(f"v0.22.669：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

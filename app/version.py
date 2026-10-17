@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.656"
-APP_VERSION_NAME = "送货单资料同步与打印金额权限保护"
+APP_VERSION = "v0.22.657"
+APP_VERSION_NAME = "开票文件使用存货编码与客户图号"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6440,3 +6440,7 @@ APP_CHANGES = [*APP_CHANGES, "打印回执保留描述资料与版本，销售�
 APP_CHANGELOG = ["v0.22.656：打印记录重试金额权限保护，包含本轮全部送货排版与常用箱同步优化。", *APP_CHANGELOG]
 
 APP_VERIFICATION_STEPS = [step.replace("v0.22.655", "v0.22.656") for step in APP_VERIFICATION_STEPS]
+
+# v0.22.657：仅更改开票文件产品行的名称与规格投影。
+APP_CHANGELOG = ["v0.22.657：开票文件项目名称使用存货编码，规格型号使用冻结客户图号，缺图号留空；金额税率及附加收费保持。", *APP_CHANGELOG]
+APP_VERIFICATION_STEPS = ["对账与开票下载开票文件，核对项目名称为存货编码、规格型号为图号；缺图号为空，数量金额税率不变。"]

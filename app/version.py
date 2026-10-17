@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.660"
-APP_VERSION_NAME = "旧补库成品闭环与冻结模具兼容"
+APP_VERSION = "v0.22.661"
+APP_VERSION_NAME = "送货录单精简与确认打印发货"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6476,3 +6476,17 @@ APP_VERIFICATION_STEPS = [
     "核对明确产品新收料自动成品、分批收料和重复请求；正式版本v0.22.660，数据库er1016pa。",
 ]
 APP_CHANGELOG = [*(f"v0.22.660：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.661：送货操作精简，确认打印复用原发货事务。
+APP_CHANGES = [
+    "送货录单采用九列单行，订单价格只读、库存价格可改，按真实库存位置定位并保留数量和三位金额口径。",
+    "预览不发货；确认打印复用原发货事务，丢失响应沿原凭据恢复，补打不重复扣库存，已撤销单不能冒充已发货打印。",
+    "模切与BOM子件显示真实模具位置及模数，去除指定资料后缀；保留冻结原始证据和身份保护。",
+    "无结构迁移，完整保留v660历史补库修复及v659财务能力。",
+]
+APP_VERIFICATION_STEPS = [
+    "新建送货选择订单及库存产品，核对单行列、真实位置、数量与单价精度。",
+    "打开预览确认状态未发货，确认打印后只发货一次；补打与返回保留原筛选。",
+    "抽查模切及BOM子件规格显示、历史数量和库存；核对版本v0.22.661。",
+]
+APP_CHANGELOG = [*(f"v0.22.661：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

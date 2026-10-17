@@ -8992,6 +8992,9 @@ def list_deliveries(
         product_code=product_code,
         product_name=product_name,
     )
+    from app.api.orders import _can_view_order_sales_amount
+    from app.services.delivery_current_presentation import delivery_amounts
+    amount_map = delivery_amounts(db, list(delivery_ids)) if _can_view_order_sales_amount(user) else {}
     if view == "summary":
         summary_context = _delivery_list_summary_context(db, list(delivery_ids))
         summary_context["search_matches"] = search_matches
@@ -9001,7 +9004,8 @@ def list_deliveries(
             "page_size": page_size,
             "view": "summary",
             "items": [
-                _delivery_summary_response(delivery_id, context=summary_context)
+                {**_delivery_summary_response(delivery_id, context=summary_context),
+                 **amount_map.get(delivery_id, {})}
                 for delivery_id in delivery_ids
             ],
         }
@@ -9012,6 +9016,7 @@ def list_deliveries(
         response["search_matches"] = search_matches.get(
             int(delivery_id), _empty_delivery_search_matches()
         )
+        response.update(amount_map.get(delivery_id, {}))
         response_items.append(response)
     return {
         "total": total,
@@ -11340,8 +11345,17 @@ def get_delivery(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    _delivery_for_user(db, delivery_id, user)
-    return _delivery_response(db, delivery_id)
+    delivery = _delivery_for_user(db, delivery_id, user)
+    result = _delivery_response(db, delivery_id)
+    from app.services.delivery_current_presentation import current_descriptions, delivery_amounts
+    records = list(db.scalars(select(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id, DeliveryItem.is_current.is_(True))))
+    descriptions = current_descriptions(db, delivery, records)
+    for item in result["items"]:
+        item.update(descriptions.get(item["id"], {}))
+    from app.api.orders import _can_view_order_sales_amount
+    if _can_view_order_sales_amount(user):
+        result.update(delivery_amounts(db, [delivery_id])[delivery_id])
+    return result
 
 
 @router.get("/{delivery_id}/stock-warnings")
@@ -11536,6 +11550,7 @@ def get_delivery_print_data(
     delivery_id: int,
     show_prices: bool | None = None,
     order_context: str | None = None,
+    description_mode: Literal["current", "original"] = "current",
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
@@ -11800,6 +11815,11 @@ def get_delivery_print_data(
     }
 
     from app.services.customer_delivery_print import enrich_customer_print
+    if description_mode == "current":
+        from app.services.delivery_current_presentation import prepare_current_print
+        result = prepare_current_print(db, delivery, result)
+    else:
+        result["description_mode"] = "original"
     return enrich_customer_print(db, delivery, result, user, show_prices=show_prices, order_context=order_context)
 
 
@@ -11808,6 +11828,7 @@ class CustomerPrintRequest(BaseModel):
     document_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
     show_prices: bool
     order_context: Literal['', '海外订单'] = ''
+    description_mode: Literal['current', 'original'] = 'current'
 
 
 @router.post('/{delivery_id}/customer-print-events')
@@ -11822,12 +11843,16 @@ def record_customer_print_request(delivery_id: int, payload: CustomerPrintReques
     if replay is not None:
         return replay
     current = get_delivery_print_data(delivery_id, db=db, user=user,
-                                     show_prices=payload.show_prices, order_context=payload.order_context)
+                                     show_prices=payload.show_prices, order_context=payload.order_context,
+                                     description_mode=payload.description_mode)
     if current.get('document_hash') != payload.document_hash:
         raise HTTPException(409, '送货单内容已变化，请重新读取后打印')
     response = {'delivery_id': delivery_id, 'document_hash': payload.document_hash,
         'show_prices': current['price_display']['shown'], 'order_context': current['order_context'],
-        'template_hash': current['print_template']['layout_hash'], 'status': 'print_requested'}
+        'template_hash': current['print_template']['layout_hash'], 'status': 'print_requested',
+        'description_mode': payload.description_mode,
+        'printed_document': {key: current[key] for key in ('sender', 'customer', 'print_template',
+            'customer_document_rows', 'description_versions', 'commercial_quantities', 'price_display')}}
     _write_audit(db, user=user, action=action, resource='Delivery', entity_id=delivery_id,
         details=response, description='登记客户送货单打印请求及本次价格模式（不代表实体打印完成）')
     _record_delivery_idempotency(db, idempotency_key=payload.idempotency_key, request_hash=request_hash,

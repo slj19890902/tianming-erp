@@ -72,9 +72,9 @@ def test_order_to_delivery_detail_and_print_share_category_without_rewriting_ord
             db.get(Product, product_id).customer_category = 'LATER'
             db.commit()
         printed = client.get(f'/api/deliveries/{did}/print?show_prices=false').json()
-        assert printed['customer_document_rows'][0]['customer_category'] == 'BT'
-        assert printed['customer_document_rows'][0]['customer_drawing_number'] == '7942511'
+        assert printed['customer_document_rows'][0]['customer_category'] == 'LATER'
+        assert printed['customer_document_rows'][0]['customer_drawing_number'] == ''
         updated = client.put(f'/api/deliveries/{did}', json={'items': [
             {'order_item_id': ids['task_completed'], 'delivered_quantity': 49}]})
         assert updated.status_code == 200, updated.text
-        assert client.get(f'/api/deliveries/{did}').json()['items'][0]['customer_category'] == 'BT'
+        assert client.get(f'/api/deliveries/{did}').json()['items'][0]['customer_category'] == 'LATER'

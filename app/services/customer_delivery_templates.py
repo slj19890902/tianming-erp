@@ -8,7 +8,7 @@ COLUMN_LABELS = {
     'sequence':'序号', 'customer_po':'订单号码', 'product_code':'存货编码',
     'product_name':'产品名称', 'specification':'尺寸', 'unit':'单位', 'quantity':'数量',
     'remarks':'备注', 'customer_material_code':'品目号', 'customer_drawing_number':'图号',
-    'customer_category':'类别', 'customer_model':'使用型番', 'customer_product_name':'用途',
+    'customer_category':'类别', 'customer_model':'型番', 'customer_product_name':'用途',
     'unit_price':'单价', 'amount':'金额',
 }
 PRESETS = {'yke':'研光', 'kew':'光洋', 'yl':'驿力'}

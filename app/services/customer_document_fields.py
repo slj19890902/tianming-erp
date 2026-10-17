@@ -13,7 +13,7 @@ FIELDS = (
 )
 # Retain validation of old snapshots, but never create new values for retired fields.
 RETIRED_FIELDS = ('customer_product_name', 'customer_drawing_display')
-LABELS = dict(zip(FIELDS, ('客户图号', '客户类别', '使用型番')))
+LABELS = dict(zip(FIELDS, ('客户图号', '客户类别', '型番')))
 SOURCE_KEYS = {
     'customer_drawing_number': 'C图号', 'customer_category': 'E箱型',
     'customer_model': 'B使用型番',
@@ -78,14 +78,14 @@ def source_candidates(product) -> dict:
             'conflicts': [field for field, choices in values.items() if len(choices) > 1]}
 
 
-def document_snapshot(product, *, basis: str | None = None) -> dict[str, Any]:
+def document_snapshot(product, *, basis: str | None = None, allow_source_reference: bool = True) -> dict[str, Any]:
     evidence = source_candidates(product)
     resolved = {}
     references = []
     for field in FIELDS:
         value = _get(product, field)
         # NULL means not maintained. An explicit empty string means confirmed blank.
-        if value is None and len(evidence['values'][field]) == 1:
+        if allow_source_reference and value is None and len(evidence['values'][field]) == 1:
             value = evidence['values'][field][0]
             references.append(field)
         resolved[field] = value

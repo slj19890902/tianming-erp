@@ -1492,7 +1492,7 @@ def _response(product: Product, user: User, *, bom_profiles: dict | None = None)
         **_product_payload_snapshot(product),
         **product_unit_info(product),
         "classification": classification(product),
-        "customer_document": document_snapshot(product),
+        "customer_document": document_snapshot(product, allow_source_reference=False),
         "customer_document_candidates": source_candidates(product),
         "id": product.id,
         "manual_modified": product.manual_modified,

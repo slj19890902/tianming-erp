@@ -34,16 +34,28 @@
   function makeSheet(data, columns, entries, pageNumber, pageCount) {
     const layout = data.print_template.layout;
     const sheet = node('main', undefined, 'cd-sheet');
+    const compact = layout.presentation_version === 'compact-20261017';
+    if (compact) sheet.classList.add('cd-compact');
     sheet.style.setProperty('--cd-font', `${layout.font_size_pt}pt`);
     const body = node('div', undefined, 'cd-body'); sheet.append(body);
     const header = node('header', undefined, 'cd-header');
-    header.append(node('h1', data.sender.company_name), node('p', [data.sender.address, data.sender.phone].filter(Boolean).join('　')),
-      node('h2', data.order_context ? `送货单（${data.order_context}）` : '送货单'));
+    const title = node('h2', data.order_context ? `送货单（${data.order_context}）` : '送货单');
+    const company = node('h1', data.sender.company_name);
+    const contact = node('p', [data.sender.address, data.sender.phone].filter(Boolean).join('　'));
+    if (compact) {
+      header.append(title, company, contact);
+      const documentMeta = node('div', undefined, 'cd-document-meta');
+      documentMeta.append(node('div', `单号：${data.delivery_number || ''}`, 'cd-document-number'),
+        node('div', `日期：${String(data.delivery_date || '').slice(0,10)}`, 'cd-document-date'));
+      header.append(documentMeta);
+    } else header.append(company, contact, title);
     body.append(header);
     const meta = node('section', undefined, 'cd-meta');
+    (compact ? [`客户名称：${data.customer.name || ''}`, `联系人：${data.customer.contact_person || ''}`,
+      `交货地点：${data.customer.address || ''}`, `电话：${data.customer.phone || ''}`] :
     [`客户名称：${data.customer.name || ''}`, `送货日期：${String(data.delivery_date || '').slice(0,10)}`,
       `交货地点：${data.customer.address || ''}`, `送货单号：${data.delivery_number || ''}`,
-      `联系人：${data.customer.contact_person || ''}　电话：${data.customer.phone || ''}`, `车牌号码：${data.vehicle_number || ''}`]
+      `联系人：${data.customer.contact_person || ''}　电话：${data.customer.phone || ''}`, `车牌号码：${data.vehicle_number || ''}`])
       .forEach(text => meta.append(node('div', text)));
     body.append(meta);
     const table = node('table', undefined, 'cd-table'), group = node('colgroup');
@@ -66,6 +78,8 @@
       } else {
         columns.forEach((col, index) => {
           const td = node('td', entry.values[index], numericKeys.has(col.key) ? 'cd-numeric' : '');
+          if (compact && ['product_code','customer_material_code','quantity'].includes(col.key))
+            td.classList.add(col.key === 'quantity' ? 'cd-large-quantity' : 'cd-large-code');
           if (col.key === 'customer_po') {
             td.className = 'customer-order-cell';
             td.replaceChildren(node('span', entry.values[index], 'customer-order-text'));
@@ -83,6 +97,19 @@
       const unit=e.row.unit||'';pageQuantities[unit]=(pageQuantities[unit]||0)+Number(e.row.quantity||0);
     });
     const quantityText = quantities => Object.entries(quantities).map(([unit,quantity])=>`${quantity}${unit}`).join('、') || '0';
+    if (compact) {
+      const copies = node('div', undefined, 'cd-copies');
+      copies.append(node('div', `${pageNumber}/${pageCount}页`), node('div', '白联存档　红联客户　黄联回单'));
+      const sign = node('div', '收货单位（签章）：', 'cd-signature');
+      sign.append(node('span', '', 'cd-signature-line'));
+      const totals = node('div', undefined, 'cd-compact-totals');
+      totals.append(node('div', `本页数量：${quantityText(pageQuantities)}`));
+      if (pageNumber === pageCount) {
+        totals.append(node('div', `整单数量：${quantityText(data.commercial_quantities || {'':data.commercial_quantity})}`));
+        if (data.price_display.shown) totals.append(node('div', `金额合计：${decimal(data.total_amount, layout.amount_decimals)} 元`));
+      }
+      footer.append(copies, sign, totals); body.append(footer); return sheet;
+    }
     footer.append(node('div', `本页数量：${quantityText(pageQuantities)}${pageNumber === pageCount ? `　整单数量：${quantityText(data.commercial_quantities || {'':data.commercial_quantity})}` : ''}`, 'cd-totals'));
     if (pageNumber === pageCount) {
       const total = node('div', data.price_display.shown
@@ -171,7 +198,12 @@
     global.customerPrintData = data;
     document.getElementById('customerPrintControls')?.remove();
     document.getElementById('customerPrintWarnings')?.remove();
-    if (data.print_template?.layout?.catalog_version !== 'delivery-print-v2') return;
+    if (data.print_template?.layout?.catalog_version !== 'delivery-print-v2') {
+      const bar=node('span',undefined,'cd-print-controls');bar.id='customerPrintControls';
+      const latest=node('button','使用最新常用箱资料','button secondary');
+      latest.onclick=()=>{const url=new URL(location.href);url.searchParams.set('description_mode','current');history.replaceState(null,'',url);reload();};
+      bar.append(latest);document.querySelector('.toolbar').append(bar);return;
+    }
     const bar = node('span', undefined, 'cd-print-controls'); bar.id = 'customerPrintControls';
     const select = node('select'); select.setAttribute('aria-label', '价格显示');
     [['false','不显示价格'],['true','显示价格']].forEach(([value,label]) => {
@@ -181,6 +213,13 @@
     }); select.value = String(data.price_display.shown);
     const change = (key, value) => { const url = new URL(location.href); url.searchParams.set(key,value); history.replaceState(null,'',url); reload(); };
     select.onchange = () => change('show_prices',select.value); bar.append(select);
+    if (!data.print_template.layout.columns.some(col => col.key === 'unit_price')) select.hidden = true;
+    const description = node('select'); description.setAttribute('aria-label','资料与版式');
+    [['current','最新常用箱资料'],['original','原冻结资料与版式']].forEach(([value,label]) => {
+      const option=node('option',label); option.value=value; description.append(option);
+    });
+    description.value=data.description_mode || 'original';
+    description.onchange=()=>change('description_mode',description.value);bar.append(description);
     if (data.print_template.layout.preset === 'yke') {
       const context = node('select'); context.setAttribute('aria-label','送货场景');
       [['','普通订单'],['海外订单','海外订单']].forEach(([value,label]) => {const o=node('option',label);o.value=value;context.append(o);});
@@ -198,7 +237,8 @@
     let attempt = pendingPrints.get(identity);
     if (!attempt) {
       attempt = {body: {idempotency_key:global.TmOperationKey.create(), document_hash:data.document_hash,
-        show_prices:data.price_display.shown, order_context:data.order_context}, promise:null};
+        show_prices:data.price_display.shown, order_context:data.order_context,
+        description_mode:data.description_mode || 'current'}, promise:null};
       pendingPrints.set(identity, attempt);
     }
     if (attempt.promise) return attempt.promise;

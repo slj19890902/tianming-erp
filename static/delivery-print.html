@@ -332,9 +332,9 @@
   </template>
   <div id="sheets" class="sheets" hidden></div>
 
-  <link rel="stylesheet" href="/customer-delivery-print.css">
+  <link rel="stylesheet" href="/customer-delivery-print.css?v=655">
   <script src="/operation-key.js"></script>
-  <script src="/customer-delivery-print.js"></script>
+  <script src="/customer-delivery-print.js?v=655"></script>
   <script>
     const escapeHtml = (value) => String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -641,12 +641,15 @@
     async function requestDeliveryPrint(id, signal) {
       const params = new URLSearchParams(window.location.search);
       const mode = params.get("show_prices"), context = params.get("order_context");
+      const descriptionMode = params.get("description_mode");
       const query = new URLSearchParams();
       if (mode !== null) query.set("show_prices", mode);
       if (context !== null) query.set("order_context", context);
+      if (descriptionMode !== null) query.set("description_mode", descriptionMode);
       const response = await fetch(`/api/deliveries/${id}/print?${query}`, {
         credentials: "same-origin",
         signal,
+        cache: "no-store",
       });
       const raw = await response.text();
       let body = null;
@@ -768,6 +771,8 @@
       if (!printButton.disabled) {
         printButton.disabled = true;
         try {
+          if (!await loadDelivery()) return;
+          printButton.disabled = true;
           if (document.fonts?.ready) await document.fonts.ready;
           CustomerDeliveryPrint.validate(sheets);
           await CustomerDeliveryPrint.recordPrint();

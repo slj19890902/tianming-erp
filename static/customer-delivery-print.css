@@ -10,3 +10,21 @@
 .cd-sign{gap:4mm}.cd-sign span{min-width:0}
 @media screen{.cd-body{outline:1px dashed #94a3b8}}
 @media print{.cd-sheet{margin:0;box-shadow:none;print-color-adjust:exact;-webkit-print-color-adjust:exact}.cd-warning,.cd-print-controls{display:none!important}}
+/* Current compact layout, kept separate from original frozen reprints. */
+.cd-compact{padding:3mm 0}
+.cd-compact .cd-header{position:relative;min-height:14mm;padding:0 48mm;flex-shrink:0}
+.cd-compact .cd-header h2{font-size:18pt;line-height:1.03;margin:0;font-weight:700}
+.cd-compact .cd-header h1{font-size:10.5pt;line-height:1.1;margin:0;font-weight:400}
+.cd-compact .cd-header p{font-size:9.5pt;line-height:1.1;margin:0 -24mm;overflow-wrap:anywhere}
+.cd-document-meta{position:absolute;right:0;top:0;max-width:48mm;text-align:left;line-height:1.2;overflow-wrap:anywhere}
+.cd-document-number{font-size:12pt}.cd-document-date{font-size:11pt}
+.cd-compact .cd-meta{font-size:11pt;line-height:1.12;margin:0 0 .5mm;gap:0 3mm;grid-template-columns:minmax(0,1fr) minmax(0,48mm)}
+.cd-compact .cd-table{font-size:11pt;line-height:1.12}
+.cd-compact .cd-table th,.cd-compact .cd-table td{padding:.35mm .6mm;height:5.5mm;border-width:.2mm;overflow-wrap:anywhere}
+.cd-compact .cd-table td.cd-large-code{font-size:13pt;font-weight:400;line-height:1.06;word-break:break-all}
+.cd-compact .cd-table td.cd-large-quantity{font-size:14pt;font-weight:400;line-height:1.06}
+.cd-compact .cd-footer{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr) minmax(0,1fr);gap:2mm;align-items:end;padding-top:1mm;line-height:1.2;font-size:10.5pt;min-height:13mm}
+.cd-copies{font-size:9.5pt;line-height:1.35;overflow-wrap:anywhere}
+.cd-signature{font-size:12pt;font-weight:700;text-align:center;line-height:1.4;overflow-wrap:anywhere}
+.cd-signature-line{display:inline-block;border-bottom:.2mm solid #000;max-width:100%;width:24mm;height:5mm;vertical-align:bottom}
+.cd-compact-totals{text-align:right;font-size:11pt;overflow-wrap:anywhere}

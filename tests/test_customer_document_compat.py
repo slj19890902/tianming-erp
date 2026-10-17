@@ -136,7 +136,9 @@ def test_customer_print_freezes_identity_price_and_keeps_legacy(n029_delivery_ap
         assert printed.status_code==200, printed.text
         data=printed.json()
         row=data['customer_document_rows'][0]
-        assert row['customer_drawing_number']=='0631965-1'
+        assert row['customer_drawing_number']=='NEW-DRAWING'
+        original=client.get(f'/api/deliveries/{did}/print?show_prices=false&description_mode=original').json()
+        assert original['customer_document_rows'][0]['customer_drawing_number']=='0631965-1'
         assert row['customer_category']=='AT'
         assert Decimal(row['unit_price'])==Decimal('2.14642')
         assert Decimal(row['amount'])==Decimal('107.32')
@@ -211,7 +213,8 @@ def test_five_decimal_sale_survives_delivery_receipt_and_statement(n029_delivery
             'items':[{'order_item_id':ids['task_completed'],'delivered_quantity':50}]})
         assert created.status_code==201,created.text
         did=created.json()['id'];line_id=created.json()['items'][0]['id']
-        response=client.put(f'/api/deliveries/{did}/dispatch');assert response.status_code==200,response.text
+        from tests.test_delivery_dispatch_commands import command
+        response=client.put(f'/api/deliveries/{did}/dispatch',json=command(client,did,'precision-sale-dispatch'));assert response.status_code==200,response.text
         receipt=client.post('/api/finance/return_receipts',json={'delivery_id':did,'actual_received_date':date.today().isoformat(),
             'items':[{'delivery_item_id':line_id,'actual_received_quantity':50}]})
         assert receipt.status_code==201,receipt.text

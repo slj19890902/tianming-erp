@@ -609,12 +609,12 @@
         .delivery-list-table .delivery-col-number { width: 13%; }
         .delivery-list-table .delivery-col-customer { width: 12%; }
         .delivery-list-table .delivery-col-date { width: 10%; }
-        .delivery-list-table .delivery-col-vehicle { width: 7%; }
+        .delivery-list-table .delivery-col-amount { width: 10%; }
         .delivery-list-table .delivery-col-quantity { width: 6%; }
         .delivery-list-table .delivery-col-status { width: 12%; }
         .delivery-list-table .delivery-col-receipt { width: 9%; }
         .delivery-list-table .delivery-col-detail { width: 10%; }
-        .delivery-list-table .delivery-col-actions { width: 21%; }
+        .delivery-list-table .delivery-col-actions { width: 18%; }
         .delivery-list-table .delivery-list-detail-toggle,
         .delivery-list-table .delivery-list-actions .btn,
         .delivery-list-table .delivery-list-actions .select {
@@ -5182,18 +5182,18 @@
                 <div v-if="deliveryListState.refreshing" class="muted" style="margin-bottom:8px">正在刷新送货单</div>
                 <div v-if="deliveryListState.error" class="notice warning" style="margin-bottom:8px">送货单加载失败：{{ deliveryListState.error }}；已保留上次列表结果。</div>
                 <div v-if="deliveryListState.loaded && !deliveries.length" class="empty">当前没有符合条件的送货单</div>
-                <div v-else class="table-wrap"><table class="delivery-list-table"><colgroup><col class="delivery-col-number" /><col class="delivery-col-customer" /><col class="delivery-col-date" /><col class="delivery-col-vehicle" /><col class="delivery-col-quantity" /><col class="delivery-col-status" /><col class="delivery-col-receipt" /><col class="delivery-col-detail" /><col class="delivery-col-actions" /></colgroup><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>车号</th><th>数量</th><th>状态</th><th>回单</th><th>明细</th><th>操作</th></tr></thead>
+                <div v-else class="table-wrap"><table class="delivery-list-table"><colgroup><col class="delivery-col-number" /><col class="delivery-col-customer" /><col class="delivery-col-date" /><col class="delivery-col-quantity" /><col v-if="canViewSalesAmounts" class="delivery-col-amount" /><col class="delivery-col-detail" /><col class="delivery-col-status" /><col class="delivery-col-receipt" /><col class="delivery-col-actions" /></colgroup><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>数量</th><th v-if="canViewSalesAmounts" class="sensitive-price cell-right">总金额</th><th>明细</th><th>状态</th><th>回单</th><th>操作</th></tr></thead>
                 <tbody>
                   <template v-for="row in deliveries" :key="row.id">
                   <tr :data-workflow-row="'delivery:'+row.id" :class="{'workflow-current':workflowRowSelected('delivery:'+row.id)}" tabindex="0">
                     <td>{{ row.delivery_number }}<div v-if="row.search_matches?.matched_fields?.length" class="delivery-search-match-summary"><span v-for="field in row.search_matches.matched_fields" :key="field" class="status orange">命中{{ deliverySearchFieldLabel(field) }}：{{ (row.search_matches.matched_values?.[field] || []).join('、') }}</span></div></td>
                     <td>{{ row.customer_name }}</td>
                     <td>{{ row.delivery_date }}<div v-if="row.is_historical_backfill" class="status blue" style="margin-top:4px">历史补录</div><div v-if="row.created_at" class="muted">ERP录入 {{ formatDateTime(row.created_at) }}</div></td>
-                    <td>{{ row.vehicle_number || "-" }}</td>
                     <td>{{ deliveryDisplayQuantity(row) }}</td>
+                    <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ row.total_amount == null ? "待核对" : money(row.total_amount) }}</td>
+                    <td><button class="btn small delivery-list-detail-toggle" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${row.item_count ?? (row.items || []).length}）` }}</button></td>
                     <td><span v-if="row.status==='voided'" class="status gray">已删除（留痕）</span><status-tag v-else :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
-                    <td><button class="btn small delivery-list-detail-toggle" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${row.item_count ?? (row.items || []).length}）` }}</button></td>
                     <td class="delivery-list-actions"><div class="delivery-row-actions-inner">
                       <button v-if="deliveryPrimaryRowActionLabel(row)" class="btn small primary delivery-row-primary-action" :class="deliveryPrimaryRowActionClass(row)" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="runDeliveryPrimaryRowAction(row)">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '推送中…' : (deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (deliveryOperationState.action==='reprint' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '打开中…' : (receiptOperationState.action==='open' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '加载中…' : deliveryPrimaryRowActionLabel(row)))) }}</button>
                       <div v-if="deliveryHasSecondaryRowActions(row)" class="delivery-row-more">
@@ -5221,7 +5221,7 @@
                     </td>
                   </tr>
                   <tr v-if="expandedDeliveryRows[row.id]" class="delivery-list-detail-row">
-                    <td colspan="9">
+                    <td :colspan="canViewSalesAmounts ? 9 : 8">
                       <div v-if="deliveryDetailState[row.id]?.loading" class="empty">正在读取这张送货单的明细…</div>
                       <div v-else-if="deliveryDetailState[row.id]?.error" class="notice warning">明细读取失败：{{ deliveryDetailState[row.id].error }} <button class="btn small" @click="loadDeliveryListDetail(row,{force:true})">重试</button></div>
                       <div v-else class="delivery-list-detail">
@@ -6922,16 +6922,14 @@
                 <div v-if="!['其他','BOM组合'].includes(productForm.box_style)" class="field product-supply-compact"><label>结构</label><select class="select" v-model="productForm.supply_mode"><option value="corrugated_production">纸板生产</option><option value="mixed_bom">纸板＋外购组件</option></select></div>
               </div>
               <details class="panel" style="grid-column:1/-1;padding:10px" :open="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">
-                <summary>客户送货资料 · 图号／类别／使用型番</summary>
-                <p class="muted">这里只维护客户图号、客户类别、使用型番。送货单图号直接使用客户图号，编号前的0会保留；图片附件仍在“图片/图纸”维护。旧单保留建单时资料，后续修改不会自动改写旧单。</p>
+                <summary>客户送货资料 · 图号／类别／型番</summary>
+                <p class="muted">维护客户图号、类别和型番，保存后刷新送货单即可显示最新资料。编号前的0会保留；图片附件在“图片/图纸”维护。</p>
                 <div class="product-form-row" style="display:grid;grid-template-columns:repeat(3,minmax(150px,1fr));gap:10px">
-                  <div class="field" v-for="entry in [['customer_drawing_number','客户图号'],['customer_category','客户类别'],['customer_model','使用型番']]" :key="entry[0]">
-                    <label>{{ entry[1] }}</label><input class="input" v-model="productForm[entry[0]]" :placeholder="productForm.customer_document?.[entry[0]] || '未维护'" :maxlength="entry[0]==='customer_category' ? 100 : entry[0]==='customer_drawing_number' ? 150 : 500" />
-                    <div v-if="productForm.customer_document_candidates?.values?.[entry[0]]?.length" class="muted">原资料：{{ productForm.customer_document_candidates.values[entry[0]].join(' ／ ') }}<button type="button" class="btn small" v-if="productForm.customer_document_candidates.values[entry[0]].length===1" @click="productForm[entry[0]]=productForm.customer_document_candidates.values[entry[0]][0]">采用</button></div>
+                  <div class="field" v-for="entry in [['customer_drawing_number','客户图号'],['customer_category','客户类别'],['customer_model','型番']]" :key="entry[0]">
+                    <label>{{ entry[1] }}</label><input class="input" v-model="productForm[entry[0]]" placeholder="未维护" :maxlength="entry[0]==='customer_category' ? 100 : entry[0]==='customer_drawing_number' ? 150 : 500" />
                     <button type="button" class="btn small" @click="productForm[entry[0]]=''">明确留空</button>
                   </div>
                 </div>
-                <p v-if="productForm.customer_document?.conflicts?.length" class="notice">原资料含不同版本，请根据客户确认的图纸维护；系统不会自动选择其中一个版本。</p><div class="muted" v-if="productForm.customer_document_candidates?.sources?.length">参考来源：{{ [...new Set(productForm.customer_document_candidates.sources.map(s=>(s.file || '基础资料原始行')+' · '+s.sheet+' 第'+s.row+'行'))].join('；') }}</div>
               </details>
               <div class="muted" style="font-size:12px;margin:4px 0">直接外购成品：选“其他”并绑定供应商产品；外购彩印纸板、本厂模切粘合：选实际箱型＋“纸板生产”，填写本厂加工资料。</div>
 
@@ -13179,7 +13177,7 @@
                 label:"常用箱", api:"products", formKey:"productForm", collection:"products",
                 fields:[
                   ["customer_id","客户"], ["product_code","存货编码"], ["customer_material_code","客户料号"],
-                  ["customer_drawing_number","客户图号"], ["customer_category","客户类别"], ["customer_model","使用型番"],
+                  ["customer_drawing_number","客户图号"], ["customer_category","客户类别"], ["customer_model","型番"],
                   ["product_name","产品名称"], ["box_style","箱型"], ["supply_mode","供货方式"],
                   ["external_packaging_category_code","外购包材类别"],
                   ["external_packaging_specification_summary","外购客户规格"],
@@ -13264,7 +13262,7 @@
             return String(value).trim();
           },
           masterDisplayValue(entity, field, value) {
-            if (entity === "product" && ["customer_drawing_number","customer_category","customer_model","customer_product_name","customer_drawing_display"].includes(field) && (value == null || value === "")) return value == null ? "未维护（保留来源参考）" : "已明确留空";
+            if (entity === "product" && ["customer_drawing_number","customer_category","customer_model","customer_product_name","customer_drawing_display"].includes(field) && (value == null || value === "")) return value == null ? "未维护" : "已明确留空";
             if (value === null || value === undefined || value === "") return "（空）";
             if (Array.isArray(value)) return value.length ? value.join("、") : "（空）";
             if (typeof value === "object") return JSON.stringify(value);

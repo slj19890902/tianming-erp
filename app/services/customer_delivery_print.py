@@ -40,11 +40,13 @@ def enrich_customer_print(db, delivery, result, user, *, show_prices=None, order
             identity = decode_snapshot(record.customer_document_snapshot_json)
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
+        current_mode = result.get('description_mode') == 'current'
         if identity is None:
             # Do not replace missing historical identity with today's product master.
             identity = {}
-            warnings.append(f'第{index}行没有冻结客户资料，请核对原始送货依据')
-        if identity.get('conflicts'):
+            if not current_mode:
+                warnings.append(f'第{index}行没有冻结客户资料，请核对原始送货依据')
+        if identity.get('conflicts') and not current_mode:
             warnings.append(f'第{index}行客户资料存在不同来源版本，请在常用箱核对后新建单据')
         row = {key: item.get(key, '') for key in (
             'delivery_item_id', 'customer_po', 'product_code', 'product_name',
@@ -52,13 +54,21 @@ def enrich_customer_print(db, delivery, result, user, *, show_prices=None, order
         row.update({key: identity.get(key) or '' for key in (
             'customer_material_code', 'customer_drawing_number', 'customer_category',
             'customer_model')})
+        if current_mode:
+            if 'description_product_id' in item:
+                row.update({key: item[key] for key in (
+                    'customer_drawing_number', 'customer_category', 'customer_model',
+                    'description_product_id', 'description_product_version')})
+            else:
+                warnings.append(f'第{index}行当前常用箱资料不可用，保留本单原资料，请核对产品归属')
         # The owner retired both alternate identity fields. Keep the legacy YL
         # column key compatible, using only the delivery's frozen product name.
         row['customer_product_name'] = row['product_name']
         if any(column['key'] == 'customer_drawing_number' for column in layout['columns']) and not row['customer_drawing_number'].strip():
-            warnings.append(f'第{index}行（{row["customer_material_code"] or row["product_code"]}）客户图号未填写，请核对原单据')
+            action = '请在常用箱维护' if current_mode else '请核对原单据'
+            warnings.append(f'第{index}行（{row["customer_material_code"] or row["product_code"]}）客户图号未填写，{action}')
         row['sequence'] = index
-        row['identity_basis'] = identity.get('basis', 'missing_snapshot')
+        row['identity_basis'] = 'maintained_product' if current_mode and 'description_product_id' in item else identity.get('basis', 'missing_snapshot')
         # A commercial parent is counted/priced once. Visible components remain
         # explicit supporting rows and never contribute to the commercial total.
         row['pricing_included'] = True
@@ -80,6 +90,7 @@ def enrich_customer_print(db, delivery, result, user, *, show_prices=None, order
                 continue
             rows.append(dict(sequence=f'{index}附', customer_po=row['customer_po'],
                 customer_material_code=component.get('product_code', ''),
+                product_code=component.get('product_code', ''),
                 customer_product_name=component.get('product_name', ''),
                 product_name=component.get('product_name', ''),
                 specification=component.get('specification', ''),
@@ -96,8 +107,11 @@ def enrich_customer_print(db, delivery, result, user, *, show_prices=None, order
             unit = str(row.get('unit') or '')
             quantities[unit] = quantities.get(unit, 0) + int(row['quantity'] or 0)
     result['commercial_quantities'] = quantities
+    result.setdefault('description_mode', 'original')
+    result.setdefault('description_versions', [])
     result['document_hash'] = hashlib.sha256(json.dumps(jsonable_encoder({
         key: result[key] for key in ('id', 'delivery_number', 'delivery_date', 'vehicle_number',
-        'sender', 'customer', 'print_template', 'customer_document_rows', 'price_display', 'order_context')
+        'sender', 'customer', 'print_template', 'customer_document_rows', 'price_display', 'order_context',
+        'description_mode', 'description_versions')
     }), sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
     return result

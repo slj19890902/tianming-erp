@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.654"
-APP_VERSION_NAME = "普通产品送货单组件误列修复"
-APP_BUILD_DATE = "2026-10-16"
+APP_VERSION = "v0.22.655"
+APP_VERSION_NAME = "送货单紧凑排版与常用箱资料同步"
+APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -6421,3 +6421,16 @@ APP_VERIFICATION_STEPS = [
     "抽查真实 BOM 送货单的父件和子件仍按冻结交付方式显示；核对正式版本 v0.22.654，数据库 revision 仍为 er1016pa。",
 ]
 APP_CHANGELOG = [*(f"v0.22.654：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.655：正常送货打印采用当前已保存描述资料，商业事实保留。
+APP_CHANGES = [
+    "送货单采用三行紧凑抬头、右上单号日期、两行客户信息和底部签章；编码及数量放大不加粗，完整换行分页。",
+    "常用箱图号、类别、型番、名称和规格保存后刷新已有送货单同步；保留原冻结版，打印核对内容并记录实际资料版本。",
+    "送货列表取消车号，增加受权限保护的本单总金额，明细移到金额右侧；常用箱去除旧资料来源提示。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新送货与回单核对数量/总金额/明细/状态/回单顺序，打开光洋预览检查表头、公司全称及编码数量清晰度。",
+    "保存常用箱图号或型番后刷新已有送货单，核对最新资料及原冻结版；用针式打印机人工核对三联完整显示。",
+    "核对正式版本v0.22.655、数据库revision仍er1016pa；已有数量、单价、出库及财务事实保持原记录。",
+]
+APP_CHANGELOG = [*(f"v0.22.655：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

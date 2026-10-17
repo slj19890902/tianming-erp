@@ -214,19 +214,26 @@ def _set_cell_value(cell: ElementTree.Element, value: Any) -> None:
     text.text = str(value)
 
 
-def _two_decimal_style_xml(archive: zipfile.ZipFile) -> tuple[bytes, int]:
-    """Append a minimal built-in ``0.00`` cell style and return its index."""
+def _three_decimal_style_xml(archive: zipfile.ZipFile) -> tuple[bytes, int]:
+    """Append a minimal custom ``0.000`` cell style and return its index."""
 
     styles_root = ElementTree.fromstring(archive.read("xl/styles.xml"))
     cell_xfs = styles_root.find(_qualified("cellXfs"))
     if cell_xfs is None:
         raise InvoiceTaxTemplateError("导出副本缺少单元格样式")
+    formats = styles_root.find(_qualified("numFmts"))
+    if formats is None:
+        formats = ElementTree.Element(_qualified("numFmts"), {"count": "0"})
+        styles_root.insert(0, formats)
+    num_id = max([163] + [int(n.attrib["numFmtId"]) for n in formats]) + 1
+    ElementTree.SubElement(formats, _qualified("numFmt"), {"numFmtId": str(num_id), "formatCode": "0.000"})
+    formats.attrib["count"] = str(len(formats))
     style_id = len(cell_xfs.findall(_qualified("xf")))
     ElementTree.SubElement(
         cell_xfs,
         _qualified("xf"),
         {
-            "numFmtId": "2",
+            "numFmtId": str(num_id),
             "fontId": "0",
             "fillId": "0",
             "borderId": "0",
@@ -264,13 +271,11 @@ def _write_detail_rows(path: Path, lines: Sequence[Mapping[str, Any]]) -> None:
         with zipfile.ZipFile(path, "r") as source_archive:
             detail_name = _detail_sheet_archive_name(source_archive)
             detail_root = ElementTree.fromstring(source_archive.read(detail_name))
-            use_two_decimal_unit_price = any(
-                line.get("unit_price") is not None for line in lines
-            )
+            use_three_decimal_unit_price = bool(lines)
             styles_xml: bytes | None = None
-            two_decimal_style_id: int | None = None
-            if use_two_decimal_unit_price:
-                styles_xml, two_decimal_style_id = _two_decimal_style_xml(
+            three_decimal_style_id: int | None = None
+            if use_three_decimal_unit_price:
+                styles_xml, three_decimal_style_id = _three_decimal_style_xml(
                     source_archive
                 )
             sheet_data = detail_root.find(_qualified("sheetData"))
@@ -297,8 +302,8 @@ def _write_detail_rows(path: Path, lines: Sequence[Mapping[str, Any]]) -> None:
                     if cell is None:
                         cell = ElementTree.SubElement(row, _qualified("c"), {"r": reference})
                         cells[reference] = cell
-                    if column == "F" and two_decimal_style_id is not None:
-                        cell.attrib["s"] = str(two_decimal_style_id)
+                    if column in ("F", "G", "I") and three_decimal_style_id is not None:
+                        cell.attrib["s"] = str(three_decimal_style_id)
                     _set_cell_value(cell, value)
             detail_xml = ElementTree.tostring(
                 detail_root, encoding="utf-8", xml_declaration=True
@@ -344,9 +349,9 @@ def _verify_export(path: Path, lines: Sequence[Mapping[str, Any]], helper_finger
                 if (
                     actual_price is None
                     or Decimal(str(actual_price)) != Decimal(str(line["unit_price"]))
-                    or sheet[f"F{row}"].number_format not in {"0.00", "#,##0.00"}
+                    or sheet[f"F{row}"].number_format not in {"0.000", "#,##0.000"}
                 ):
-                    raise InvoiceTaxTemplateError("导出文件未税单价两位显示校验失败")
+                    raise InvoiceTaxTemplateError("导出文件未税单价三位显示校验失败")
     finally:
         workbook.close()
 

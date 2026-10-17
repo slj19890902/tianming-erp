@@ -51,11 +51,11 @@ def render_customer_statement_pdf(
                 Paragraph(escape(str(row.get("product_code") or "")), normal),
                 Paragraph(escape(str(row.get("product_name") or "")), normal),
                 str(row.get("quantity") or 0),
-                f"{row.get('unit_price', 0):.4f}",
-                f"{row.get('amount', 0):.2f}",
+                f"{row.get('unit_price', 0):.3f}",
+                f"{row.get('amount', 0):.3f}",
             ]
         )
-    data.append(["", "", "", "", "合计", str(quantity_total), "", f"{amount_total:.2f}"])
+    data.append(["", "", "", "", "合计", str(quantity_total), "", f"{amount_total:.3f}"])
     table = Table(
         data,
         repeatRows=1,

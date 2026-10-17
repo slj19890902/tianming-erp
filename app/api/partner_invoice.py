@@ -23,16 +23,27 @@ def _active_tasks(db, statement_id):
         Task.status.not_in(("voided", "issued"))).order_by(Task.id)).all()
 
 
-def _partner_preview(db, statement_id, user):
+def _partner_preview(db, statement_id, user, selected_ids=None):
     anchor = api._statement_for_user(db, statement_id, user)
-    if not anchor.settlement_entity_id:
-        raise HTTPException(409, "该账单不是合作归集账单")
-    statements = db.scalars(select(Statement).where(
-        Statement.settlement_entity_id == anchor.settlement_entity_id,
-        Statement.statement_month == anchor.statement_month,
-        Statement.confirmation_status != "cancelled",
-        Statement.invoiced_amount < Statement.total_receivable,
-    ).order_by(Statement.id)).all()
+    if selected_ids is None:
+        if not anchor.settlement_entity_id:
+            raise HTTPException(409, "该账单不是合作归集账单")
+        query = select(Statement).where(
+            Statement.settlement_entity_id == anchor.settlement_entity_id,
+            Statement.statement_month == anchor.statement_month,
+            Statement.confirmation_status != "cancelled",
+            Statement.invoiced_amount < Statement.total_receivable)
+    else:
+        ids = set(selected_ids)
+        if len(ids) < 2 or len(ids) > 50 or statement_id not in ids or len(ids) != len(selected_ids):
+            raise HTTPException(422, "请选择当前账单和至少一份同客户账单，最多50份且不可重复")
+        # Authorize every explicit member before any business lock or mutation.
+        for sid in sorted(ids):
+            row = api._statement_for_user(db, sid, user)
+            if row.customer_id != anchor.customer_id or row.settlement_entity_id != anchor.settlement_entity_id:
+                raise HTTPException(409, "只能合并同一客户且冻结开票归属一致的账单")
+        query = select(Statement).where(Statement.id.in_(ids))
+    statements = db.scalars(query.order_by(Statement.id)).all()
     rows, blockers, frozen = [], [], []
     for statement in statements:
         api._statement_for_user(db, statement.id, user)
@@ -45,6 +56,10 @@ def _partner_preview(db, statement_id, user):
         amount = statement.total_receivable - statement.invoiced_amount
         if statement.confirmation_status != "confirmed":
             blockers.append(f"{statement.statement_number} 尚未确认，请先完成该客户对账")
+        if statement.confirmation_status == "cancelled":
+            blockers.append(f"{statement.statement_number} 已作废")
+        if amount <= 0:
+            blockers.append(f"{statement.statement_number} 没有待开票金额")
         if statement.invoiced_amount > 0:
             blockers.append(f"{statement.statement_number} 已部分开票，请按既有开票范围处理，不能整单合并")
         if len(tasks) > 1:
@@ -57,17 +72,35 @@ def _partner_preview(db, statement_id, user):
             frozen.append((statement.id, [(t.id, t.version, t.status, t.source_snapshot_hash) for t in tasks]))
         else:
             frozen.append((statement.id, []))
+        net_amount = tax_amount = None
+        if tasks:
+            net_amount, tax_amount = tasks[0].net_amount, tasks[0].tax_amount
+        elif selected_ids is not None:
+            profile = db.scalar(select(api.CustomerInvoiceProfile).where(api.CustomerInvoiceProfile.customer_id == statement.customer_id))
+            entity = db.get(api.FinanceSettlementEntity, statement.settlement_entity_id) if statement.settlement_entity_id else None
+            seller_id = entity.default_seller_id if entity else (profile.default_seller_id if profile else None)
+            seller = db.get(api.InvoiceSellerEntity, seller_id) if seller_id else None
+            if seller is None:
+                blockers.append(f"{statement.statement_number} 缺少默认销方或客户开票档案")
+            else:
+                _, lines, missing = api._snapshot_for_statement(db, statement, seller)
+                blockers.extend(f"{statement.statement_number}：{item}" for item in missing)
+                if not missing:
+                    net_amount = sum((line["net_amount"] for line in lines), Decimal(0))
+                    tax_amount = sum((line["tax_amount"] for line in lines), Decimal(0))
         rows.append({"statement_id": statement.id, "statement_number": statement.statement_number,
-            "customer_name": "、".join(names) or db.get(Customer, statement.customer_id).name,
+            "statement_month": statement.statement_month, "customer_name": "、".join(names) or db.get(Customer, statement.customer_id).name,
             "statement_version": statement.version, "ledger_version": statement.ledger_version,
             "confirmation_status": statement.confirmation_status,
-            "total_amount": amount, "task_ids": [t.id for t in tasks]})
+            "net_amount": net_amount, "tax_amount": tax_amount, "total_amount": amount, "task_ids": [t.id for t in tasks]})
     if not rows:
         blockers.append("该账期已无可合并的未开票账单，请查看实际开票记录")
     scope_hash = api._snapshot_hash({"entity": anchor.settlement_entity_id,
-        "month": anchor.statement_month, "rows": json.loads(json.dumps(rows, default=str)), "tasks": frozen})
+        "month": anchor.statement_month, "selected_ids": sorted(selected_ids) if selected_ids is not None else None, "rows": json.loads(json.dumps(rows, default=str)), "tasks": frozen})
     return {"statement_id": statement_id, "settlement_entity_id": anchor.settlement_entity_id,
         "settlement_name": anchor.settlement_name_snapshot, "statement_month": anchor.statement_month,
+        "net_amount": sum((r["net_amount"] or Decimal(0) for r in rows), Decimal(0)),
+        "tax_amount": sum((r["tax_amount"] or Decimal(0) for r in rows), Decimal(0)),
         "statements": rows, "total_amount": sum((r["total_amount"] for r in rows), Decimal(0)),
         "blockers": blockers, "scope_hash": scope_hash}
 
@@ -83,11 +116,11 @@ def _same_buyer(task):
 
 
 def merge_partner_tasks(statement_id: int, payload: MergePayload,
-    db: Session, user: User):
+    db: Session, user: User, *, selected_ids=None):
     # Denied member access must be detected before taking a business write lock.
-    _partner_preview(db, statement_id, user)
-    prefix = "partner:" + hashlib.sha256(f"{user.id}\0{payload.idempotency_key}".encode()).hexdigest() + ":"
-    key = prefix + api._snapshot_hash({"statement": statement_id, "scope": payload.scope_hash})
+    _partner_preview(db, statement_id, user, selected_ids)
+    prefix = ("customer-merge:" if selected_ids is not None else "partner:") + hashlib.sha256(f"{user.id}\0{payload.idempotency_key}".encode()).hexdigest() + ":"
+    key = prefix + api._snapshot_hash({"statement": statement_id, "scope": payload.scope_hash, "selected_ids": sorted(selected_ids) if selected_ids is not None else None})
     try:
         # Acquire the SQLite writer lock before re-reading membership, task and ledger versions.
         db.execute(update(Statement).where(Statement.id == statement_id).values(version=Statement.version))
@@ -98,7 +131,7 @@ def merge_partner_tasks(statement_id: int, payload: MergePayload,
             if replay.idempotency_key != key:
                 raise HTTPException(409, "幂等键已用于不同的合并范围")
             return api._task_response(db, replay)
-        preview = _partner_preview(db, statement_id, user)
+        preview = _partner_preview(db, statement_id, user, selected_ids)
         if preview["scope_hash"] != payload.scope_hash:
             raise HTTPException(409, "合作公司账单或任务已变化，请刷新合并范围后重试")
         if preview["blockers"]:
@@ -137,7 +170,7 @@ def merge_partner_tasks(statement_id: int, payload: MergePayload,
         shares = [s for task in tasks.values() for s in task_shares(db, task)]
         if len(shares) != len(ids) or sum((s.total_amount for s in shares), Decimal(0)) != preview["total_amount"]:
             raise HTTPException(409, "账单任务占用重复或金额不守恒，请刷新核对")
-        merged = Task(task_number=f"IT-M{preview['settlement_entity_id']}-{key[-24:]}",
+        merged = Task(task_number=f"IT-M{first.customer_id}-{key[-24:]}",
             statement_id=first.statement_id, statement_version=first.statement_version,
             customer_id=first.customer_id, seller_entity_id=first.seller_entity_id,
             buyer_snapshot_json=first.buyer_snapshot_json, seller_snapshot_json=first.seller_snapshot_json,
@@ -166,10 +199,10 @@ def merge_partner_tasks(statement_id: int, payload: MergePayload,
             api._audit(db, user=user, action="SUPERSEDE_INVOICE_TASK", resource="FinanceInvoiceTask",
                 entity_id=task.id, customer=db.get(Customer, task.customer_id),
                 details={"merged_task_id": merged.id, "old_tax_template_must_not_be_used": True}, description="原开票任务由合作合并任务承接，旧文件停用")
-        api._audit(db, user=user, action="MERGE_PARTNER_INVOICE_TASKS", resource="FinanceInvoiceTask",
+        api._audit(db, user=user, action="MERGE_CUSTOMER_INVOICE_TASKS" if selected_ids is not None else "MERGE_PARTNER_INVOICE_TASKS", resource="FinanceInvoiceTask",
             entity_id=merged.id, customer=db.get(Customer, merged.customer_id),
             details={"source_task_ids": sorted(tasks), "statement_ids": sorted(ids), "total_amount": merged.total_amount,
-                "line_count": len(items), "scope_hash": preview["scope_hash"]}, description="独立对账单合并为合作公司一张发票任务")
+                "line_count": len(items), "scope_hash": preview["scope_hash"]}, description="同客户跨期对账单合并为一张发票任务" if selected_ids is not None else "独立对账单合并为合作公司一张发票任务")
         db.commit()
         return api._task_response(db, merged)
     except Exception:
@@ -178,6 +211,8 @@ def merge_partner_tasks(statement_id: int, payload: MergePayload,
 
 
 def ensure_complete_partner_download(db, task, user):
+    if task.idempotency_key.startswith("customer-merge:"):
+        return
     anchor = db.get(Statement, task.statement_id)
     if anchor.settlement_entity_id and task.status != "issued":
         preview = _partner_preview(db, anchor.id, user)

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.658"
-APP_VERSION_NAME = "模切成品按真实模具身份入库"
+APP_VERSION = "v0.22.659"
+APP_VERSION_NAME = "同客户合并开票与三位金额"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6448,3 +6448,18 @@ APP_VERIFICATION_STEPS = ["对账与开票下载开票文件，核对项目名�
 # v0.22.658：整副多模刀模尺寸不能冒充单片成品尺寸。
 APP_CHANGELOG = ["v0.22.658：模切成品缺单片尺寸时，使用真实有效模具与明确模数冻结描述规格；入库、订单与BOM沿用同一实物身份，不虚填尺寸、不放大库存数量，成本和普通成品资料门禁保留。", *APP_CHANGELOG]
 APP_VERIFICATION_STEPS = ["核对模切成品显示真实模具与模数、明确提示单片尺寸未登记；已盘点成品可在历史送货中按订单实际数量选择。", *APP_VERIFICATION_STEPS]
+
+
+# v0.22.659：同客户跨期合并开票，来源明细与历史价格仍冻结。
+APP_CHANGES = [
+    "去对账与开票列表增加同客户合并开票，可选不同保存日期和账期，保留原账单并导出一份总文件、登记一个发票号。",
+    "原任务合并后停用并默认隐藏；总任务保留逐单来源、台账版本、金额分摊与撤销机制，阻止重复开票和跨客户合并。",
+    "对账、开票及金额显示采用三位小数；既有已确认金额不重算，兼容原两位金额冻结事实。",
+    "本版不批量更正研光光洋历史价税口径；当前客户资料变化不覆盖历史销售快照或库存成本。",
+]
+APP_VERIFICATION_STEPS = [
+    "去对账打开已确认账单，点合并开票勾选同客户另一份账单；核对总文件与来源数量、编码和图号。",
+    "在开票列表确认只有一个有效总任务，展开来源；实际开具后只登记一个发票号码，核对分单开票金额。",
+    "核对页面、对账Excel/PDF与开票Excel金额三位；旧账单金额和既有库存数量成本保持原事实。",
+]
+APP_CHANGELOG = [*(f"v0.22.659：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

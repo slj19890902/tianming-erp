@@ -85,7 +85,7 @@ can_profile_manage = PermissionChecker("finance.invoice_profile.manage")
 can_attachment_view = PermissionChecker("finance.invoice_attachment.view")
 can_attachment_manage = PermissionChecker("finance.invoice_attachment.manage")
 
-MONEY = Decimal("0.01")
+MONEY = Decimal("0.001")
 TAX_TEMPLATE_PATH = (
     PROJECT_ROOT
     / "app"
@@ -852,6 +852,19 @@ def _confirmed_rule_by_product(
     return result
 
 
+def _frozen_exclusive_parts(quantity, price, rate, total):
+    """Accept three-place new facts or exactly proven legacy two-place facts.
+
+    Never reinterpret an already confirmed receivable using today's precision.
+    """
+    for quantum in (MONEY, Decimal("0.01")):
+        net = (quantity * price).quantize(quantum, rounding=ROUND_HALF_UP)
+        tax = (net * rate).quantize(quantum, rounding=ROUND_HALF_UP)
+        if net + tax == total:
+            return net, tax
+    return None
+
+
 def _snapshot_for_statement(
     db: Session,
     statement: Statement,
@@ -943,16 +956,13 @@ def _snapshot_for_statement(
             quantity = Decimal(str(statement_item.charge_quantity_snapshot))
             if mode == "tax_exclusive":
                 raw_unit_price = Decimal(str(statement_item.unit_price_snapshot))
-                net = (quantity * raw_unit_price).quantize(
-                    MONEY, rounding=ROUND_HALF_UP
-                )
-                tax = (net * rate).quantize(MONEY, rounding=ROUND_HALF_UP)
-                calculated_total = (net + tax).quantize(MONEY, rounding=ROUND_HALF_UP)
-                if calculated_total != total:
+                parts = _frozen_exclusive_parts(quantity, raw_unit_price, rate, total)
+                if parts is None:
                     missing.append(
                         f"附加收费 {charge.display_name} 的价税合计与未税单价不一致"
                     )
                     continue
+                net, tax = parts
                 amount = net
                 unit_price = raw_unit_price.quantize(MONEY, rounding=ROUND_HALF_UP)
             else:
@@ -1041,16 +1051,13 @@ def _snapshot_for_statement(
         quantity = Decimal(str(statement_item.actual_received_quantity))
         if mode == "tax_exclusive":
             raw_unit_price = Decimal(str(statement_item.unit_price_snapshot))
-            net = (quantity * raw_unit_price).quantize(
-                MONEY, rounding=ROUND_HALF_UP
-            )
-            tax = (net * rate).quantize(MONEY, rounding=ROUND_HALF_UP)
-            calculated_total = (net + tax).quantize(MONEY, rounding=ROUND_HALF_UP)
-            if calculated_total != total:
+            parts = _frozen_exclusive_parts(quantity, raw_unit_price, rate, total)
+            if parts is None:
                 missing.append(
                     f"对账明细 {statement_item.id} 的价税合计与冻结未税单价不一致"
                 )
                 continue
+            net, tax = parts
             amount = net
             unit_price = (
                 raw_unit_price.quantize(MONEY, rounding=ROUND_HALF_UP)
@@ -1137,10 +1144,12 @@ def _task_response(db: Session, task: FinanceInvoiceTask) -> dict[str, Any]:
         "id": task.id,
         "task_number": task.task_number,
         "statement_id": task.statement_id,
+        "customer_merge": task.idempotency_key.startswith("customer-merge:"),
         "settlement_entity_id": statement.settlement_entity_id if statement else None,
         "source_statements": [
             {"statement_id": s.statement_id, "statement_version": s.statement_version,
              "statement_number": db.get(Statement, s.statement_id).statement_number,
+             "statement_month": db.get(Statement, s.statement_id).statement_month,
              "customer_name": db.get(Customer, db.get(Statement, s.statement_id).customer_id).name,
              "ledger_version": db.get(Statement, s.statement_id).ledger_version,
              "total_amount": s.total_amount}
@@ -1568,9 +1577,11 @@ def list_invoice_tasks(
         query = query.where(FinanceInvoiceTask.customer_id.in_(scopes))
     if status:
         query = query.where(FinanceInvoiceTask.status == status)
+    else:
+        query = query.where(FinanceInvoiceTask.status != "voided")
     tasks = db.scalars(query).all()
     if statement_month:
-        tasks = [task for task in tasks if (statement := db.get(Statement, task.statement_id)) and statement.statement_month == statement_month]
+        tasks = [task for task in tasks if any(db.get(Statement, share.statement_id).statement_month == statement_month for share in task_shares(db, task))]
     visible = []
     for task in tasks:
         try:
@@ -1982,7 +1993,7 @@ def download_tax_template(
         f"{short_name}{statement_month}导入模板.xlsx"
     )
     output = export_dir / (
-        f"{task.task_number}-{task.source_snapshot_hash[:12]}-code-drawing-v1-{download_name}"
+        f"{task.task_number}-{task.source_snapshot_hash[:12]}-code-drawing-money3-v2-{download_name}"
     )
     try:
         from app.services.invoice_export_identity import export_lines
@@ -1993,7 +2004,7 @@ def download_tax_template(
     task.export_count += 1
     task.last_export_hash = export.sha256
     task.last_exported_at = datetime.now()
-    _audit(db, user=user, action="EXPORT_INVOICE_TAX_TEMPLATE", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number, "file_hash": export.sha256, "line_count": export.line_count, "warnings": list(export.warnings), "item_identity_policy": "code-drawing-v1"}, description="生成税局开票导入文件")
+    _audit(db, user=user, action="EXPORT_INVOICE_TAX_TEMPLATE", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number, "file_hash": export.sha256, "line_count": export.line_count, "warnings": list(export.warnings), "item_identity_policy": "code-drawing-money3-v2"}, description="生成税局开票导入文件")
     db.commit()
     return FileResponse(export.path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=download_name)
 
@@ -2352,3 +2363,45 @@ def create_partner_invoice_task(statement_id: int, payload: PartnerMergePayload,
 
 from app.api.invoice_reversals import router as invoice_reversal_router
 router.include_router(invoice_reversal_router)
+
+
+class CustomerMergeSelection(BaseModel):
+    statement_ids: list[int] = Field(min_length=2, max_length=50)
+
+
+class CustomerMergePayload(CustomerMergeSelection):
+    scope_hash: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=8, max_length=160)
+
+
+@router.get("/statements/{statement_id}/customer-invoice-candidates")
+def customer_invoice_candidates(statement_id: int, db: Session = Depends(get_db), user: User = Depends(can_read)):
+    anchor = _statement_for_user(db, statement_id, user)
+    rows = db.scalars(select(Statement).where(Statement.customer_id == anchor.customer_id,
+        Statement.confirmation_status != "cancelled").order_by(Statement.statement_month, Statement.id)).all()
+    result = []
+    for row in rows:
+        _statement_for_user(db, row.id, user)
+        blockers = []
+        if row.confirmation_status != "confirmed": blockers.append("请先核对并确认对账单")
+        if row.invoiced_amount > 0: blockers.append("已有开票金额")
+        if row.total_receivable <= row.invoiced_amount: blockers.append("没有待开票金额")
+        if row.settlement_entity_id != anchor.settlement_entity_id: blockers.append("冻结开票归属不同")
+        result.append({"statement_id": row.id, "statement_number": row.statement_number,
+            "statement_month": row.statement_month, "total_amount": row.total_receivable - row.invoiced_amount,
+            "confirmation_status": row.confirmation_status, "blocker": "；".join(blockers)})
+    return {"customer_name": db.get(Customer, anchor.customer_id).name, "items": result}
+
+
+@router.post("/statements/{statement_id}/customer-invoice-preview")
+def customer_invoice_preview(statement_id: int, payload: CustomerMergeSelection,
+    db: Session = Depends(get_db), user: User = Depends(can_read)):
+    from app.api.partner_invoice import _partner_preview
+    return _partner_preview(db, statement_id, user, payload.statement_ids)
+
+
+@router.post("/statements/{statement_id}/customer-invoice-tasks", status_code=201)
+def create_customer_merged_invoice(statement_id: int, payload: CustomerMergePayload,
+    db: Session = Depends(get_db), user: User = Depends(can_generate)):
+    from app.api.partner_invoice import merge_partner_tasks
+    return merge_partner_tasks(statement_id, payload, db, user, selected_ids=payload.statement_ids)

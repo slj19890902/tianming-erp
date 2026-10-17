@@ -111,7 +111,7 @@ can_adjust_reconciliation_period = PermissionChecker(
 )
 can_manage_customer_charge = PermissionChecker("finance.customer_charge.manage")
 can_confirm_customer_charge = PermissionChecker("finance.customer_charge.confirm")
-MONEY = Decimal("0.00")
+MONEY = Decimal("0.000")
 STATEMENT_COST_FIELDS = frozenset(
     {"total_gross_profit", "unit_cost_snapshot", "gross_profit_amount"}
 )
@@ -2489,8 +2489,8 @@ def export_customer_statement_excel(
             sheet.cell(row, column).alignment = Alignment(wrap_text=True, vertical="center")
         for column in (2, 3, 4):
             sheet.cell(row, column).number_format = "@"
-        sheet.cell(row, 7).number_format = "0.0000"
-        sheet.cell(row, 8).number_format = "0.00"
+        sheet.cell(row, 7).number_format = "0.000"
+        sheet.cell(row, 8).number_format = "0.000"
     output = BytesIO()
     _literal_statement_text(workbook)
     workbook.save(output)
@@ -4089,7 +4089,7 @@ def _pending_line_amount(unit_price):
     supplemented_exclusive = and_(DeliveryItem.price_source == "finance_supplement",
         func.json_extract(DeliveryItem.sales_contract_json, "$.tax_mode") == "tax_exclusive")
     return case((supplemented_exclusive,
-                 func.round(base, 2) + func.round(func.round(base, 2) * func.json_extract(DeliveryItem.sales_contract_json, "$.tax_rate"), 2)),
+                 func.round(base, 3) + func.round(func.round(base, 3) * func.json_extract(DeliveryItem.sales_contract_json, "$.tax_rate"), 3)),
                 else_=base)
 
 

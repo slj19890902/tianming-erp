@@ -235,22 +235,22 @@ class Statement(Base):
     )
     statement_month: Mapped[str] = mapped_column(String(7), nullable=False)
     total_receivable: Mapped[Decimal] = mapped_column(
-        Numeric(14, 2),
+        Numeric(14, 3),
         default=Decimal("0"),
         nullable=False,
     )
     total_gross_profit: Mapped[Decimal] = mapped_column(
-        Numeric(14, 2),
+        Numeric(14, 3),
         default=Decimal("0"),
         nullable=False,
     )
     invoiced_amount: Mapped[Decimal] = mapped_column(
-        Numeric(14, 2),
+        Numeric(14, 3),
         default=Decimal("0"),
         nullable=False,
     )
     settled_amount: Mapped[Decimal] = mapped_column(
-        Numeric(14, 2),
+        Numeric(14, 3),
         default=Decimal("0"),
         nullable=False,
     )
@@ -439,11 +439,11 @@ class StatementItem(Base):
         nullable=False,
     )
     receivable_amount: Mapped[Decimal] = mapped_column(
-        Numeric(14, 2),
+        Numeric(14, 3),
         nullable=False,
     )
     gross_profit_amount: Mapped[Decimal] = mapped_column(
-        Numeric(14, 2),
+        Numeric(14, 3),
         nullable=False,
     )
     price_tax_mode_snapshot: Mapped[str | None] = mapped_column(
@@ -513,7 +513,7 @@ class Invoice(Base):
     invoice_number: Mapped[str] = mapped_column(String(80), nullable=False)
     invoice_date: Mapped[date] = mapped_column(Date, nullable=False)
     invoice_amount: Mapped[Decimal] = mapped_column(
-        Numeric(14, 2),
+        Numeric(14, 3),
         nullable=False,
     )
     invoice_task_id: Mapped[int | None] = mapped_column(
@@ -525,9 +525,9 @@ class Invoice(Base):
         ForeignKey("invoice_seller_entities.id", ondelete="RESTRICT"),
         nullable=True,
     )
-    net_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
-    tax_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
-    total_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    net_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 3), nullable=True)
+    tax_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 3), nullable=True)
+    total_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 3), nullable=True)
     invoice_status: Mapped[str] = mapped_column(
         String(20),
         default="issued",
@@ -575,7 +575,7 @@ class SettlementRecord(Base):
         nullable=False,
     )
     settled_amount: Mapped[Decimal] = mapped_column(
-        Numeric(14, 2),
+        Numeric(14, 3),
         nullable=False,
     )
     settlement_date: Mapped[date] = mapped_column(Date, nullable=False)

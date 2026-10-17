@@ -275,9 +275,9 @@ class FinanceInvoiceTask(Base):
     seller_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
     invoice_type: Mapped[str] = mapped_column(String(40), nullable=False)
     price_tax_mode: Mapped[str] = mapped_column(String(30), nullable=False)
-    net_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    tax_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    total_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    net_amount: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    tax_amount: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), default="draft", server_default="draft", nullable=False
     )
@@ -321,9 +321,9 @@ class FinanceInvoiceTaskStatement(Base):
     task_id: Mapped[int] = mapped_column(ForeignKey("finance_invoice_tasks.id", ondelete="RESTRICT"), primary_key=True)
     statement_id: Mapped[int] = mapped_column(ForeignKey("finance_statements.id", ondelete="RESTRICT"), primary_key=True)
     statement_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    net_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    tax_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    total_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    net_amount: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    tax_amount: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
 
 
 class FinanceInvoiceTaskItem(Base):
@@ -376,9 +376,9 @@ class FinanceInvoiceTaskItem(Base):
     unit: Mapped[str] = mapped_column(String(40), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     unit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 6), nullable=True)
-    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
     tax_rate: Mapped[Decimal] = mapped_column(Numeric(6, 4), nullable=False)
-    tax_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    tax_amount: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
     rule_version: Mapped[int] = mapped_column(Integer, nullable=False)
 
 

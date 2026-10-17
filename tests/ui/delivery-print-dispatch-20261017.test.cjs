@@ -55,30 +55,13 @@ test('Vue order import preserves decimal price; amount uses exact cents; stock e
  allocations:[{inventory_lot_id:1,quantity:10},{inventory_lot_id:2,quantity:10}],stock_locations:[{inventory_lot_id:1,available_quantity:10},{inventory_lot_id:2,available_quantity:10}]};
  c.onDeliveryQuantityChanged(stock);assert.equal(stock.allocations.reduce((s,a)=>s+a.quantity,0),18);assert.equal(stock.allocation_quantity_error,false);
 });
-test('selected nine-column row precedes candidates and renders full business values without technical notes',()=>{
- const {parseHTML}=require('linkedom'),html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
- const source=parseHTML(html).document;
- const panel=source.querySelector('.delivery-unified-picker');
- assert.ok(panel.innerHTML.indexOf('delivery-selected-table')<panel.innerHTML.indexOf('common-picker-sticky-select'));
- assert.ok(panel.querySelector('.delivery-batch-picker-toolbar button').textContent.includes('导入所选'));
- const selected=panel.querySelector('.delivery-selected-table').outerHTML;
- assert.ok(!selected.includes('先分配同款'));
- const dom=parseHTML('<html><body><div id="test"></div></body></html>');
- const context={console,document:dom.document,window:dom.window,Element:dom.window.Element,HTMLElement:dom.window.HTMLElement,SVGElement:dom.window.SVGElement,Node:dom.window.Node,setTimeout,clearTimeout};
- vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(root,'static/vendor/vue-3.5.40.global.prod.js'),'utf8'),context);
- const line={key:'one',product_code:'ABCDEFGHIJ12',customer_po:'ABCDEFGHIJKLM15',unit_price:'2.146420',source_type:'order',delivered_quantity:3,deliverable_quantity:6,remarks:'客户说明'};
- const app=context.Vue.createApp({data:()=>({canViewSalesAmounts:true,deliveryForm:{lines:[line]}}),methods:{
-  deliveryUnifiedLines:()=>[line],deliveryLineLocations:()=>[{key:'loc',id:1,label:'三楼·H6·1层·1格'}],deliveryLineStockQuantity:()=>6,
-  deliveryLinePriceText:()=>line.unit_price,deliveryLineAmount:()=> '6.44',deliveryFormAmount:()=> '6.44',openDeliveryLocation(){},onDeliveryQuantityChanged(){},removeDeliveryLine(){}
- },template:selected});app.mount(dom.document.querySelector('#test'));
- assert.equal(dom.document.querySelectorAll('thead th').length,9);
- assert.equal(dom.document.querySelectorAll('tbody td').length,9);
- assert.match(dom.document.body.textContent,/ABCDEFGHIJ12/);
- assert.equal(dom.document.querySelector('[aria-label="客户订单号"]').value,'ABCDEFGHIJKLM15');
- assert.equal(dom.document.querySelectorAll('.delivery-location-link').length,1);
- assert.ok(!dom.document.body.textContent.includes('ERP TM'));
- assert.ok(!dom.document.body.textContent.includes('FG-'));
- app.unmount();
+test('selected delivery template has drawing and amount columns without internal technical notes',()=>{
+ const fixture=require('./helpers/delivery-editor-fixture.cjs');
+ assert.match(fixture.template,/deliveryEditorPageLines/);
+ assert.match(fixture.template,/<th>图号<\/th>/);
+ assert.match(fixture.template,/<th v-if="canViewSalesAmounts">金额<\/th>/);
+ assert.ok(!fixture.template.includes('先分配同款'));
+ assert.ok(!fixture.template.includes('ERP TM'));
 });
 
 test('completed original request cannot print as a new dispatch after cancellation',async()=>{

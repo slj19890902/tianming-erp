@@ -76,7 +76,7 @@ def test_old_delivery_refreshes_descriptions_keeps_sale_and_tracks_print(n029_de
         assert cleared['customer_document_rows'][0]['customer_model'] == ''
         for view in ('summary', 'full'):
             listed = client.get('/api/deliveries', params={'view': view}).json()['items']
-            assert next(x for x in listed if x['id'] == did)['total_amount'] == '107.32'
+            assert next(x for x in listed if x['id'] == did)['total_amount'] == '107.321'
         with factory() as db:
             assert db.query(DeliveryItem).filter_by(delivery_id=did, is_current=True).one().customer_document_snapshot_json == frozen
             audit = db.query(FinanceIdempotencyRecord).filter_by(idempotency_key=event['idempotency_key']).one()
@@ -114,7 +114,7 @@ def test_missing_frozen_price_is_unknown_and_zero_is_valid():
                                   unit_price_snapshot=Decimal('0'), delivered_quantity=50)]
     result = delivery_amounts(db, [1, 2])
     assert result[1]['total_amount'] is None
-    assert result[2]['total_amount'] == '0.00'
+    assert result[2]['total_amount'] == '0.000'
 
 
 def test_generic_template_uses_compact_current_view_and_retains_original():

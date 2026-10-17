@@ -138,4 +138,5 @@ def present_component_descriptions(db, delivery, items):
             pid = line.get('component_product_id') or links.get(line.get('component_snapshot_id') or line.get('snapshot_id'))
             if pid in products:
                 line['specification'] = delivery_specification(products[pid])
+                line['customer_drawing_number'] = products[pid].customer_drawing_number or ''
     return items

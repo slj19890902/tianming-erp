@@ -2,6 +2,34 @@
 (function(global) {
   'use strict';
   function install(app) {
+    app.component('delivery-customer-select', {
+      props:{modelValue:[String,Number],options:{type:Array,default:()=>[]},disabled:Boolean},
+      emits:['update:modelValue'],
+      data(){return {query:'',open:false};},
+      computed:{
+        selected(){return !!this.modelValue;},
+        selectedLabel(){return this.nameLabel(this.options.find(row=>String(row.id)===String(this.modelValue)));},
+        widthLabel(){return this.selectedLabel || this.options.map(row=>this.nameLabel(row)).sort((a,b)=>this.labelWidth(b)-this.labelWidth(a))[0] || '选择客户或输入关键字';},
+        matches(){const q=this.query.trim().toLowerCase();return this.options.filter(row=>!q || String(row._delivery_label || '').toLowerCase().includes(q));},
+      },
+      watch:{modelValue(){this.open=false;this.query='';},disabled(value){if(value)this.open=false;}},
+      methods:{
+        nameLabel(row){return row?.name ? [row.customer_code,row.name].filter(Boolean).join(' · ') : String(row?._delivery_label || '').split('｜')[0];},
+        labelWidth(text){return Array.from(text).reduce((n,c)=>n+(/[^\x00-\xff]/.test(c)?2:1),0);},
+        show(){if(!this.disabled && !this.selected)this.open=true;},
+        choose(row){if(this.disabled || this.selected)return;this.open=false;this.query='';this.$emit('update:modelValue',row.id);},
+        clear(){if(this.disabled)return;this.open=false;this.query='';this.$emit('update:modelValue','');},
+      },
+      template:`<div class="delivery-customer-select search-select"><span class="delivery-customer-measure" aria-hidden="true">{{ widthLabel }}</span>
+        <input class="input" aria-label="选择客户或输入关键字" :value="selected?selectedLabel:query" :readonly="selected" :disabled="disabled" placeholder="选择客户或输入关键字" @focus="show" @click="show" @input="query=$event.target.value;show()" @blur="open=false" @keydown.esc="open=false" @keydown.down.prevent="show" @keydown.enter.prevent="open && matches.length && choose(matches[0])" />
+        <button v-if="selected" type="button" class="delivery-customer-control" aria-label="清除已选客户" :disabled="disabled" @click="clear">×</button>
+        <button v-else type="button" class="delivery-customer-control" aria-label="展开客户列表" :aria-expanded="open" :disabled="disabled" @mousedown.prevent @click="open=!open">▾</button>
+        <div v-if="open && !selected && !disabled" class="search-select-list" role="listbox" aria-label="可送货客户">
+          <button v-for="row in matches" :key="row.id" type="button" class="search-select-option" role="option" @mousedown.prevent @click="choose(row)">{{ row._delivery_label }}</button>
+          <div v-if="!matches.length" class="empty">没有匹配客户</div>
+        </div>
+      </div>`,
+    });
     app.mixin({
       data() { return this.$parent ? {} : {deliveryEditorPage:1, deliveryEditorPageSize:8, deliveryEditorExitVisible:false, deliveryEditorExitApproved:false}; },
       computed: {
@@ -34,18 +62,27 @@
             const rowHeight=Math.max(40,row?.getBoundingClientRect().height || 44);
             const overhead=secondary?112:62;
             const size=Math.min(50,Math.max(1,Math.floor((area.clientHeight-overhead)/rowHeight)));
-            if(secondary) {
-              if(size!==this.deliveryBatchPicker.page_size) {
-                this.deliveryBatchPicker.page_size=size;
-                this.loadDeliveryBatchItems(1);
-              }
-            } else {
+            // Candidate page size is fixed for an open picker session. Loading and
+            // heterogeneous row contents must never initiate another API request.
+            if(!secondary) {
               this.deliveryEditorPageSize=size;
               this.deliveryEditorPage=Math.min(this.deliveryEditorPage,this.deliveryEditorPages);
             }
           };
           fit();
           if(global.ResizeObserver) { this._deliveryEditorObserver=new global.ResizeObserver(fit);this._deliveryEditorObserver.observe(area); }
+        },
+        prepareDeliveryBatchPagination() {
+          const area=this.$refs.businessModal?.querySelector('.delivery-rows-viewport');
+          if(!area || !Number.isFinite(area.clientHeight) || area.clientHeight<=0) return;
+          // Use a stable row allowance before loading, never a transient data row.
+          const size=Math.min(50,Math.max(1,Math.floor((area.clientHeight-112)/48)));
+          const picker=this.deliveryBatchPicker;
+          if(size===picker.page_size) return;
+          const first=(Math.max(1,Number(picker.page || 1))-1)*picker.page_size;
+          picker.page_size=size;
+          picker.page=Math.floor(first/size)+1;
+          picker.items=[];
         },
         deliveryCustomerName(id) {
           const customer=(this.customers || []).find(row=>Number(row.id)===Number(id));
@@ -66,6 +103,15 @@
           const orders=Object.values(this.deliveryBatchPicker.selected || {});
           const stock=Object.values(this.unorderedFinishedPicker.selected || {}).filter(row=>row._selected);
           return [...orders,...stock].reduce((sum,row)=>sum+Number(row._quantity || 0),0);
+        },
+        async deliveryEditorWithdraw() {
+          if(this.deliveryEditorBusy) return false;
+          if(this.deliveryFormIsDirty()) { this.showToast('请先保存当前修改，再撤回发货',true);return false; }
+          const form=this.deliveryForm, modal=this.modal;
+          const row=this.currentDeliveryDraftRow();
+          if(!await this.cancelDelivery(row)) return false;
+          if(this.deliveryForm!==form || this.modal!==modal) return true;
+          return this.editDelivery(row);
         },
         deliveryEditorReturn() {
           this.deliveryBatchPicker.visible=false;

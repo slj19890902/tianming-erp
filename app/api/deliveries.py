@@ -9938,11 +9938,7 @@ def _update_delivery(
                     "message": "送货单版本已变化，请刷新后重试",
                 },
             )
-        if payload.source_mode != delivery.source_mode and not revision_mode:
-            raise HTTPException(
-                status_code=409,
-                detail="送货单保存后不能切换订单待送与无订单库存来源",
-            )
+        # Pending edits may add another validated source type for this same customer.
         _prepare_shelf_draft_replacement(db, delivery_id)
         _discard_delivery_pick_task(
             db,
@@ -11225,6 +11221,82 @@ def _cancel_delivery(
     except CompositeBomWorkflowError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+class DeliveryWithdraw(BaseModel):
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+
+@router.put("/{delivery_id}/withdraw")
+def withdraw_delivery(
+    delivery_id: int,
+    payload: DeliveryWithdraw,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    """Reverse dispatch and rebuild a fresh pending revision, preserving history."""
+    _delivery_for_user(db, delivery_id, user)
+    action = "delivery_withdraw"
+    request_hash = _delivery_request_hash(action, {"delivery_id": delivery_id, **payload.model_dump(exclude={"idempotency_key"})})
+    replay, record = _delivery_idempotency_replay(db, idempotency_key=payload.idempotency_key, request_hash=request_hash, action=action, actor=user)
+    if replay is not None:
+        _delivery_for_user(db, record.resource_id, user)
+        return replay
+    try:
+        claimed = db.execute(update(Delivery).where(
+            Delivery.id == delivery_id, Delivery.status == "dispatched",
+            Delivery.version == payload.expected_version,
+        ).values(version=Delivery.version))
+        if claimed.rowcount != 1:
+            db.rollback()
+            replay, record = _delivery_idempotency_replay(db, idempotency_key=payload.idempotency_key, request_hash=request_hash, action=action, actor=user)
+            if replay is not None:
+                _delivery_for_user(db, record.resource_id, user)
+                return replay
+            raise HTTPException(status_code=409, detail="送货单状态或版本已变化，请刷新后核对是否已撤回")
+        delivery = _delivery_or_404(db, delivery_id)
+        block = _delivery_finance_chain_block_reason(db, delivery_id)
+        if block:
+            raise HTTPException(status_code=409, detail=block)
+        from app.models.finance import ReturnReceipt
+        receipt = db.scalar(select(ReturnReceipt).where(ReturnReceipt.delivery_id == delivery_id))
+        if receipt is not None and receipt.status != "cancelled":
+            raise HTTPException(status_code=409, detail="送货单已有有效回单，请先撤销回单后再撤回发货")
+        lines = db.scalars(select(DeliveryItem).where(
+            DeliveryItem.delivery_id == delivery_id, DeliveryItem.is_current.is_(True),
+        ).order_by(DeliveryItem.id)).all()
+        items = []
+        for line in lines:
+            allocations = db.scalars(select(UnorderedFinishedDeliveryAllocation).where(
+                UnorderedFinishedDeliveryAllocation.delivery_item_id == line.id,
+            )).all() if line.source_type == "unordered_finished" else []
+            items.append(DeliveryLineCreate(
+                source_type=line.source_type, order_item_id=line.order_item_id,
+                product_id=line.product_id, delivered_quantity=line.delivered_quantity,
+                unit_price=line.unit_price_snapshot, customer_po=line.customer_po_snapshot,
+                remarks=line.remarks,
+                over_delivery_confirmed=bool(line.over_delivery_quantity),
+                over_delivery_reason=line.over_delivery_reason,
+                allocations=[UnorderedFinishedAllocationCreate(inventory_lot_id=a.inventory_lot_id, quantity=a.planned_quantity) for a in allocations],
+            ))
+        rebuild = DeliveryUpdate(expected_version=payload.expected_version,
+            delivery_date=delivery.delivery_date, historical_backfill=bool(delivery.is_historical_backfill),
+            vehicle_number=delivery.vehicle_number, source_mode=delivery.source_mode, items=items)
+        _cancel_delivery(delivery_id, db=db, user=user, commit=False, revision_mode=True)
+        _update_delivery(delivery_id, rebuild, db=db, user=user, commit=False, revision_mode=True)
+        response = jsonable_encoder(_delivery_response(db, delivery_id), custom_encoder={Decimal: str})
+        _write_audit(db, user=user, action="WITHDRAW_DISPATCH", resource="Delivery", entity_id=delivery_id,
+            details={"before_version":payload.expected_version,"after_version":response["version"],
+                     "retired_item_ids":[line.id for line in lines],"source_mode":delivery.source_mode},
+            description="撤回发货并恢复为待发货新修订，保留原出库与反冲历史")
+        _record_delivery_idempotency(db, idempotency_key=payload.idempotency_key, request_hash=request_hash,
+            action=action, actor=user, delivery_id=delivery_id, response=response)
+        db.commit()
+        return response
     except Exception:
         db.rollback()
         raise

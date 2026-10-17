@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import hashlib
+from io import BytesIO
+import re
+from xml.sax.saxutils import quoteattr
 import json
 import os
 from pathlib import Path
@@ -216,6 +219,39 @@ def _set_cell_value(cell: ElementTree.Element, value: Any) -> None:
     text.text = str(value)
 
 
+
+def _serialize_preserving_namespace_aliases(root: ElementTree.Element, original: bytes) -> bytes:
+    """Keep namespace aliases referenced as attribute values (e.g. mc:Ignorable).
+
+    ElementTree rewrites tag prefixes but does not rewrite QName-valued attributes.
+    Without these original aliases, Excel may recover the file while strict importers
+    reject it. Keep the aliases in addition to the serializer's namespace bindings.
+    """
+    aliases = {}
+    for _, (prefix, uri) in ElementTree.iterparse(BytesIO(original), events=("start-ns",)):
+        if prefix in aliases and aliases[prefix] != uri:
+            raise InvoiceTaxTemplateError("模板包含重绑定的命名空间，不能安全改写")
+        aliases[prefix] = uri
+    encoded = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    start = encoded.index(b"<", encoded.index(b"?>") + 2)
+    end = encoded.index(b">", start)
+    opening = encoded[start:end]
+    existing = {match[0].decode(): match[1].decode() for match in
+                re.findall(rb'xmlns(?::([^=\s]+))?="([^"]*)"', opening)}
+    additions = []
+    for prefix, uri in aliases.items():
+        if prefix == "xml":
+            continue
+        if prefix in existing:
+            if existing[prefix] != uri:
+                raise InvoiceTaxTemplateError("模板命名空间别名冲突，已停止导出")
+            continue
+        name = "xmlns:" + prefix if prefix else "xmlns"
+        additions.append(f" {name}={quoteattr(uri)}".encode("utf-8"))
+    insertion = end - 1 if encoded[end - 1:end] == b"/" else end
+    return encoded[:insertion] + b"".join(additions) + encoded[insertion:]
+
+
 def _three_decimal_style_xml(archive: zipfile.ZipFile) -> tuple[bytes, int, int]:
     """Append a minimal custom ``0.000`` cell style and return its index."""
 
@@ -247,7 +283,7 @@ def _three_decimal_style_xml(archive: zipfile.ZipFile) -> tuple[bytes, int, int]
     ElementTree.SubElement(cell_xfs, _qualified("xf"), {"numFmtId": "2", "fontId": "0", "fillId": "0", "borderId": "0", "xfId": "0", "applyNumberFormat": "true"})
     cell_xfs.attrib["count"] = str(style_id + 2)
     return (
-        ElementTree.tostring(styles_root, encoding="utf-8", xml_declaration=True),
+        _serialize_preserving_namespace_aliases(styles_root, archive.read("xl/styles.xml")),
         style_id,
         amount_style_id,
     )
@@ -319,8 +355,8 @@ def _write_detail_rows(path: Path, lines: Sequence[Mapping[str, Any]]) -> None:
                     elif column in ("G", "I") and amount_style_id is not None:
                         cell.attrib["s"] = str(amount_style_id)
                     _set_cell_value(cell, value)
-            detail_xml = ElementTree.tostring(
-                detail_root, encoding="utf-8", xml_declaration=True
+            detail_xml = _serialize_preserving_namespace_aliases(
+                detail_root, source_archive.read(detail_name)
             )
             with zipfile.ZipFile(temporary, "w") as destination_archive:
                 for member in source_archive.infolist():

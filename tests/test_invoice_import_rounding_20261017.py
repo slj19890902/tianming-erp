@@ -79,3 +79,19 @@ def test_new_template_is_empty_and_keeps_version():
     assert w.worksheets[0].max_row==3
     assert w['excelVersion']['A4'].value=='mx;20250501'
     assert w['xzqhdm'].max_row==2863
+
+
+def test_export_preserves_qname_namespace_aliases_required_by_strict_importers(tmp_path):
+    from io import BytesIO
+    from xml.etree import ElementTree as ET
+    output = tmp_path / 'strict.xlsx'
+    generate_invoice_tax_template(template_path=TEMPLATE, output_path=output, lines=[line('100')])
+    with zipfile.ZipFile(output) as z:
+        raw = z.read('xl/styles.xml')
+        ns = dict(value for _, value in ET.iterparse(BytesIO(raw), events=('start-ns',)))
+        root = ET.fromstring(raw)
+        key = '{http://schemas.openxmlformats.org/markup-compatibility/2006}Ignorable'
+        for node in root.iter():
+            for prefix in node.get(key, '').split():
+                assert prefix in ns, 'dangling mc:Ignorable namespace: ' + prefix
+        assert ns['xr9'] == 'http://schemas.microsoft.com/office/spreadsheetml/2016/revision9'

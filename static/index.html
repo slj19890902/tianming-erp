@@ -13171,8 +13171,8 @@
             };
             return icons[key] || '';
           },
-          money(value) { return Number(value || 0).toFixed(2); },
-          unitPrice(value) { return Number(value || 0).toFixed(3); },
+          money(value) { return Number(value || 0).toLocaleString("en-US", {useGrouping:false,minimumFractionDigits:2,maximumFractionDigits:2}); },
+          unitPrice(value) { return Number(value || 0).toLocaleString("en-US", {useGrouping:false,minimumFractionDigits:3,maximumFractionDigits:3}); },
           percent(value) { return `${(Number(value || 0) * 100).toFixed(1)}%`; },
           squarePrice(value) {
             if (value === null || value === undefined || value === "") return "-";

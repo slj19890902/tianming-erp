@@ -27,3 +27,9 @@ global.createIdempotencyKey=()=> 'customer-merge-ui-key';
  const scripts=[...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m=>m[1]).filter(s=>s.trim());scripts.forEach(s=>new vm.Script(s));
  console.log('PASS customer merge: stale response isolation, uncertain retry same payload, retained save on export failure, no duplicate merge, inline JS syntax');
 })().catch(e=>{console.error(e);process.exitCode=1;});
+
+const formatMoney=new Function('value',html.split('money(value) {')[1].split('},')[0]);
+const formatPrice=new Function('value',html.split('unitPrice(value) {')[1].split('},')[0]);
+assert.equal(formatMoney('481.005'),'481.01');assert.equal(formatMoney('68.475'),'68.48');
+assert.equal(formatPrice('1.2345'),'1.235');assert.equal(formatMoney('100537.3656'),'100537.37');
+console.log('PASS Excel-compatible decimal display without binary toFixed ties');

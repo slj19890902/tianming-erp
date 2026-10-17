@@ -89,3 +89,7 @@
 .delivery-candidate-table .delivery-picker-code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;font-weight:600;color:#1d4ed8; }
 .delivery-candidate-table .delivery-picker-quantity { color:#9a4a00;background:#fff8eb;border-color:#e7b86a;font-weight:600;font-variant-numeric:tabular-nums; }
 .delivery-candidate-table .delivery-picker-stock { color:#067647;font-weight:600;font-variant-numeric:tabular-nums; }
+/* The header's nowrap rule must never turn customer choices into a horizontal strip. */
+.delivery-customer-select .search-select-list { display:flex;flex-direction:column;align-items:stretch;white-space:normal;overflow-x:hidden;overflow-y:auto;box-sizing:border-box; }
+.delivery-customer-select .search-select-option { display:block;flex:0 0 auto;min-width:0;width:100%;box-sizing:border-box;white-space:normal;overflow-wrap:anywhere; }
+.delivery-location-countdown { display:block;color:#9a4a00;font-size:12px;white-space:nowrap;margin-top:4px; }

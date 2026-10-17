@@ -44,7 +44,7 @@ def test_order_requisition_incoming_and_guide_use_compact_main_flow() -> None:
 
 def test_delivery_picker_is_one_compact_two_line_location_aware_table() -> None:
     delivery_modal = INDEX.split("modal.type === 'delivery'", 1)[1].split(
-        "modal.type === 'deliveryRoutePlan'", 1
+        "modal.type === 'tianhuaPreimport'", 1
     )[0]
     assert "订单待送（默认优先）" not in delivery_modal
     assert "选择待送订单（{{" in delivery_modal

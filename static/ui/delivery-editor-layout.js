@@ -25,13 +25,13 @@
         <button v-if="selected" type="button" class="delivery-customer-control" aria-label="清除已选客户" :disabled="disabled" @click="clear">×</button>
         <button v-else type="button" class="delivery-customer-control" aria-label="展开客户列表" :aria-expanded="open" :disabled="disabled" @mousedown.prevent @click="open=!open">▾</button>
         <div v-if="open && !selected && !disabled" class="search-select-list" role="listbox" aria-label="可送货客户">
-          <button v-for="row in matches" :key="row.id" type="button" class="search-select-option" role="option" @mousedown.prevent @click="choose(row)">{{ row._delivery_label }}</button>
+          <button v-for="row in matches" :key="row.id" type="button" class="search-select-option" role="option" @mousedown.prevent @click="choose(row)">{{ nameLabel(row) }}</button>
           <div v-if="!matches.length" class="empty">没有匹配客户</div>
         </div>
       </div>`,
     });
     app.mixin({
-      data() { return this.$parent ? {} : {deliveryEditorPage:1, deliveryEditorPageSize:8, deliveryEditorExitVisible:false, deliveryEditorExitApproved:false}; },
+      data() { return this.$parent ? {} : {deliveryLocationClock:Date.now(), deliveryEditorPage:1, deliveryEditorPageSize:8, deliveryEditorExitVisible:false, deliveryEditorExitApproved:false}; },
       computed: {
         deliveryEditorLines() { return this.$parent ? [] : this.deliveryUnifiedLines(); },
         deliveryEditorPages() { return Math.max(1, Math.ceil(this.deliveryEditorLines.length / this.deliveryEditorPageSize)); },
@@ -83,6 +83,28 @@
           picker.page_size=size;
           picker.page=Math.floor(first/size)+1;
           picker.items=[];
+        },
+        receiveDeliveryLocationPolicy(row) {
+          if(row?.location_retention) row.location_retention._receivedAt=Date.now();
+          return row;
+        },
+        deliveryLocationRemaining(row) {
+          const policy=row?.location_retention;
+          if(!policy?.expires_at || !policy.visible) return 0;
+          const initial=(Date.parse(policy.expires_at)-Date.parse(policy.evaluated_at))/1000;
+          const elapsed=Math.max(0,(this.deliveryLocationClock-(policy._receivedAt ?? this.deliveryLocationClock))/1000);
+          return Math.max(0,Math.ceil(initial-elapsed));
+        },
+        deliveryVisibleLocations(row,line) {
+          const policy=row?.location_retention;
+          if(policy && (!policy.visible || (policy.expires_at && !this.deliveryLocationRemaining(row)))) return [];
+          return this.deliveryLineLocations(line);
+        },
+        deliveryLocationCountdown(row) {
+          const seconds=this.deliveryLocationRemaining(row);
+          if(!seconds) return '';
+          const h=Math.floor(seconds/3600), m=Math.floor(seconds%3600/60), s=seconds%60;
+          return '货位保留 '+[h,m,s].map(value=>String(value).padStart(2,'0')).join(':');
         },
         deliveryCustomerName(id) {
           const customer=(this.customers || []).find(row=>Number(row.id)===Number(id));
@@ -138,7 +160,8 @@
           this.deliveryEditorExitApproved=false;
         },
       },
-      beforeUnmount() { this._deliveryEditorObserver?.disconnect(); },
+      mounted() { if(!this.$parent && global.setInterval) this._deliveryLocationTimer=global.setInterval(()=>{this.deliveryLocationClock=Date.now();},1000); },
+      beforeUnmount() { this._deliveryEditorObserver?.disconnect();if(this._deliveryLocationTimer) global.clearInterval(this._deliveryLocationTimer); },
     });
   }
   global.TmDeliveryEditorLayout={install};

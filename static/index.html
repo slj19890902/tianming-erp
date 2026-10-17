@@ -13,6 +13,7 @@
     <script src="/static/ui/product-workbench.js?v=20261014processed01"></script>
     <script src="/static/ui/order-context.js?v=round-experience-d1b"></script>
     <script src="/static/ui/workspace.js?v=71e4c13edadc"></script>
+    <script src="/static/ui/delivery-editor-layout.js?v=ebcf657df829"></script>
     <script src="/static/ui/workflow-continuity.js?v=7ef70dee3ee7"></script>
     <link rel="stylesheet" href="/static/ui/workflow-continuity.css?v=431e9b0f41d3" />
     <script src="/static/ui/order-import-save-recovery.js?v=20261010-save1"></script>
@@ -3242,6 +3243,7 @@
     <script src="/static/js/unified-navigation.js?v=20261008-inventory-flow"></script>
     <script src="/static/js/frontend-reliability.js?v=20261009"></script>
     <script src="/static/js/frontend-shell-bridge.js?v=20261009-reliability"></script>
+    <link rel="stylesheet" href="/static/ui/delivery-editor-layout.css?v=bd96cd0a5741" />
   </head>
   <body>
     <div id="app" v-cloak>
@@ -3757,7 +3759,7 @@
                   <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
                   <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="runExplicitPageListLoad('products')">重试</button></div>
                   <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table data-viewport-page="products"><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>单位</th><th>分类</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div><span v-if="row.customer_document?.missing_labels?.length" class="status orange">{{ row.customer_document.missing_labels.join('、') }}待核对</span><span v-else class="status green">送货资料已具备</span></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td>{{ productUnitLabel(row) }}<span v-if="row.unit_needs_review" class="status orange">单位待完善</span></td><td :title="row.classification?.legacy_name" style="white-space:nowrap">{{ row.classification?.label || "待核对" }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '报料资料完整' : '报料资料待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="(canRequisition || canEditStockAlerts) && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table data-viewport-page="products"><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>单位</th><th>分类</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td>{{ productUnitLabel(row) }}<span v-if="row.unit_needs_review" class="status orange">单位待完善</span></td><td :title="row.classification?.legacy_name" style="white-space:nowrap">{{ row.classification?.label || "待核对" }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '报料资料完整' : '报料资料待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="(canRequisition || canEditStockAlerts) && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <data-panel v-else-if="productTab === 'suppliers'" :empty="false">
@@ -5225,26 +5227,22 @@
                       <div v-if="deliveryDetailState[row.id]?.loading" class="empty">正在读取这张送货单的明细…</div>
                       <div v-else-if="deliveryDetailState[row.id]?.error" class="notice warning">明细读取失败：{{ deliveryDetailState[row.id].error }} <button class="btn small" @click="loadDeliveryListDetail(row,{force:true})">重试</button></div>
                       <div v-else class="delivery-list-detail">
-                        <table>
-                          <thead><tr><th class="delivery-detail-po">客户单号</th><th class="delivery-detail-code">存货编码</th><th class="delivery-detail-name">产品名称</th><th v-if="deliveryShowsCategory(row)" class="delivery-detail-category">类别</th><th class="delivery-detail-spec">尺寸 / 模具</th><th class="delivery-detail-location">库存位置</th><th class="delivery-detail-quantity">送货数量</th><th class="delivery-detail-action">操作</th></tr></thead>
-                          <tbody>
-                            <template v-for="item in row.items || []" :key="item.id">
+                        <table :style="{'--delivery-category-width':deliveryShowsCategory(row)?'48px':'0px','--delivery-price-width':canViewSalesAmounts?'190px':'0px'}">
+                          <thead><tr><th class="delivery-detail-sequence">序号</th><th class="delivery-detail-po">客户单号</th><th class="delivery-detail-code">存货编码</th><th class="delivery-detail-name">产品名称</th><th v-if="deliveryShowsCategory(row)" class="delivery-detail-category">类别</th><th class="delivery-detail-drawing">图号</th><th class="delivery-detail-location">库存位置</th><th class="delivery-detail-quantity">送货数量</th><th v-if="canViewSalesAmounts" class="delivery-detail-price">单价</th><th v-if="canViewSalesAmounts" class="delivery-detail-amount">金额</th><th class="delivery-detail-action">操作</th></tr></thead>
+                          <tbody><template v-for="(item,itemIndex) in row.items || []" :key="item.id">
                               <tr>
-                                <td><input v-if="deliveryInlineFor(row,item)" class="input" v-model.trim="deliveryInlineEdit.customer_po" :disabled="deliveryInlineEdit.saving || deliveryInlineEdit.uncertain" maxlength="200" aria-label="客户单号" /><span v-else :class="{'customer-po':!!item.customer_po,'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'customer_po')}">{{ item.customer_po || '-' }}</span><span v-if="deliverySearchItemFieldMatched(row,item,'customer_po')" class="delivery-search-hit-label">命中客户订单号</span></td>
-                                <td><strong :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_code')}">{{ item.product_code || '未登记' }}</strong><span v-if="deliverySearchItemFieldMatched(row,item,'product_code')" class="delivery-search-hit-label">命中存货编码</span></td>
-                                <td><span :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_name')}">{{ item.product_name || '未登记' }}</span><span v-if="deliverySearchItemFieldMatched(row,item,'product_name')" class="delivery-search-hit-label">命中产品名称</span></td>
+                                <td class="delivery-detail-sequence">{{ itemIndex+1 }}</td>
+                                <td class="delivery-detail-po delivery-text-cell"><input v-if="deliveryInlineFor(row,item)" class="input" v-model.trim="deliveryInlineEdit.customer_po" :disabled="deliveryInlineEdit.saving || deliveryInlineEdit.uncertain" maxlength="200" aria-label="客户单号" /><span v-else :class="{'customer-po':!!item.customer_po,'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'customer_po')}">{{ item.customer_po || '' }}</span><span v-if="deliverySearchItemFieldMatched(row,item,'customer_po')" class="delivery-search-hit-label">命中客户订单号</span></td>
+                                <td class="delivery-detail-code delivery-text-cell"><strong :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_code')}">{{ item.product_code || '未登记' }}</strong><span v-if="deliverySearchItemFieldMatched(row,item,'product_code')" class="delivery-search-hit-label">命中存货编码</span></td>
+                                <td class="delivery-detail-name delivery-text-cell"><span :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_name')}">{{ item.product_name || '未登记' }}</span><span v-if="deliverySearchItemFieldMatched(row,item,'product_name')" class="delivery-search-hit-label">命中产品名称</span></td>
                                 <td v-if="deliveryShowsCategory(row)" class="delivery-detail-category">{{ item.customer_category || "" }}</td>
-                                <td>{{ item.delivery_specification ?? orderSpecificationText(item.specification) }}</td><td><button v-for="location in deliveryLineLocations(item)" :key="location.key" class="delivery-location-link" type="button" @click="openDeliveryLocation(location)">{{ location.label }}</button></td>
-                                <td class="delivery-detail-quantity"><input v-if="deliveryInlineFor(row,item)" class="input" type="number" min="1" step="1" v-model="deliveryInlineEdit.delivered_quantity" :disabled="!deliveryInlineEdit.quantityEditable || deliveryInlineEdit.saving || deliveryInlineEdit.uncertain" @input="rebalanceInlineDeliveryAllocations" aria-label="送货数量" /><strong v-else>{{ item.display_quantity ?? item.delivered_quantity }}</strong></td>
-                                <td><div class="delivery-detail-row-actions"><template v-if="deliveryInlineFor(row,item)"><button class="btn small primary" :disabled="deliveryInlineEdit.saving" @click="saveInlineDeliveryLine(row,item)">{{ deliveryInlineEdit.saving ? '保存中…' : (deliveryInlineEdit.uncertain ? '核对重试' : '保存') }}</button><button class="btn small" :disabled="deliveryInlineEdit.saving" @click="cancelInlineDeliveryLine">取消</button></template><template v-else><button v-if="canDelivery && ['pending','dispatched'].includes(row.status)" class="btn small" :disabled="!!deliveryInlineEdit || !!deliveryOperationState.action || !!receiptOperationState.action" @click="startInlineDeliveryLine(row,item)">编辑</button><button v-if="canEditDeliveryLineQuantity(row)" class="btn small danger" :disabled="!!deliveryInlineEdit || !!deliveryOperationState.action || !!receiptOperationState.action" @click="deleteDeliveryDetailLine(row,item)">删除</button></template></div></td>
+                                <td class="delivery-detail-drawing delivery-text-cell">{{ item.customer_drawing_number || "" }}</td><td class="delivery-detail-location"><button v-for="location in deliveryLineLocations(item)" :key="location.key" class="delivery-location-link" type="button" @click="openDeliveryLocation(location)">{{ location.label }}</button></td>
+                                <td class="delivery-detail-quantity"><input v-if="deliveryInlineFor(row,item)" class="input" type="number" min="1" step="1" v-model="deliveryInlineEdit.delivered_quantity" :disabled="!deliveryInlineEdit.quantityEditable || deliveryInlineEdit.saving || deliveryInlineEdit.uncertain" @input="rebalanceInlineDeliveryAllocations" aria-label="送货数量" /><strong v-else>{{ item.display_quantity ?? item.delivered_quantity }}</strong></td><td v-if="canViewSalesAmounts" class="delivery-detail-price">{{ deliveryLinePriceText(item) }}</td><td v-if="canViewSalesAmounts" class="delivery-detail-amount">{{ deliveryLineAmount(item) }}</td>
+                                <td class="delivery-detail-action"><div class="delivery-detail-row-actions"><template v-if="deliveryInlineFor(row,item)"><button class="btn small primary" :disabled="deliveryInlineEdit.saving" @click="saveInlineDeliveryLine(row,item)">{{ deliveryInlineEdit.saving ? '保存中…' : (deliveryInlineEdit.uncertain ? '核对重试' : '保存') }}</button><button class="btn small" :disabled="deliveryInlineEdit.saving" @click="cancelInlineDeliveryLine">取消</button></template><template v-else><button v-if="canDelivery && ['pending','dispatched'].includes(row.status)" class="btn small" :disabled="!!deliveryInlineEdit || !!deliveryOperationState.action || !!receiptOperationState.action" @click="startInlineDeliveryLine(row,item)">编辑</button><button v-if="canEditDeliveryLineQuantity(row)" class="btn small danger" :disabled="!!deliveryInlineEdit || !!deliveryOperationState.action || !!receiptOperationState.action" @click="deleteDeliveryDetailLine(row,item)">删除</button></template></div></td>
                               </tr>
-                              <tr v-if="deliveryInlineFor(row,item)"><td :colspan="deliveryShowsCategory(row) ? 8 : 7"><div class="delivery-detail-edit-note">客户单号只修改本送货单及后续对账引用。{{ deliveryInlineEdit.quantityEditable ? '修改数量后保存，打印单同步更新。' : '已有回单，送货数量已锁定；如需调整请先处理回单。' }}</div><div v-if="deliveryInlineEdit.allocations.length" class="delivery-detail-edit-note">库存批次分配（可逐批调整；合计为本行送货数量）：<div v-for="allocation in deliveryInlineEdit.allocations" :key="allocation.inventory_lot_id">{{ allocation.lot_number }} · {{ allocation.location_name || '位置待确认' }} <input class="input" style="width:100px;display:inline-block" type="number" min="0" step="1" v-model="allocation.quantity" :disabled="!deliveryInlineEdit.quantityEditable || deliveryInlineEdit.saving || deliveryInlineEdit.uncertain" @input="sumInlineDeliveryAllocations" aria-label="批次数量" /></div></div><div v-if="deliveryInlineEdit.error" class="notice danger">{{ deliveryInlineEdit.error }}</div></td></tr>
-                              <tr v-for="component in deliverySavedComponentLines(item)" :key="component.component_snapshot_id || component.snapshot_id || component.id || component.component_code || component.product_code">
-                                <td></td><td>{{ component.component_code || component.product_code || '-' }}</td><td><span class="status blue">套内子件</span> {{ component.component_name || component.product_name || '未命名组件' }}</td><td v-if="deliveryShowsCategory(row)"></td><td>{{ orderSpecificationText(component.specification) }}</td><td></td><td>{{ component.quantity ?? component.planned_delivery_quantity ?? component.delivered_quantity ?? 0 }}</td><td></td>
-                              </tr>
-                            </template>
-                            <tr v-if="!(row.items || []).length"><td :colspan="deliveryShowsCategory(row) ? 8 : 7" class="empty">暂无送货明细</td></tr>
-                          </tbody>
+                              <tr v-if="deliveryInlineFor(row,item)"><td :colspan="deliveryDetailColumnCount(row)"><div class="delivery-detail-edit-note">客户单号只修改本送货单及后续对账引用。{{ deliveryInlineEdit.quantityEditable ? '修改数量后保存，打印单同步更新。' : '已有回单，送货数量已锁定；如需调整请先处理回单。' }}</div><div v-if="deliveryInlineEdit.allocations.length" class="delivery-detail-edit-note">库存批次分配（可逐批调整；合计为本行送货数量）：<div v-for="allocation in deliveryInlineEdit.allocations" :key="allocation.inventory_lot_id">{{ allocation.lot_number }} · {{ allocation.location_name || '位置待确认' }} <input class="input" style="width:100px;display:inline-block" type="number" min="0" step="1" v-model="allocation.quantity" :disabled="!deliveryInlineEdit.quantityEditable || deliveryInlineEdit.saving || deliveryInlineEdit.uncertain" @input="sumInlineDeliveryAllocations" aria-label="批次数量" /></div></div><div v-if="deliveryInlineEdit.error" class="notice danger">{{ deliveryInlineEdit.error }}</div></td></tr>
+                              <tr v-for="component in deliverySavedComponentLines(item)" :key="component.component_snapshot_id || component.snapshot_id || component.id || component.component_code || component.product_code"><td></td><td></td><td class="delivery-text-cell">{{ component.component_code || component.product_code || '' }}</td><td class="delivery-text-cell">{{ component.component_name || component.product_name || '' }}</td><td v-if="deliveryShowsCategory(row)"></td><td>{{ component.customer_drawing_number || '' }}</td><td></td><td class="delivery-detail-quantity">{{ component.quantity ?? component.planned_delivery_quantity ?? component.delivered_quantity ?? 0 }}</td><td v-if="canViewSalesAmounts"></td><td v-if="canViewSalesAmounts"></td><td></td></tr>
+                          </template><tr v-if="!(row.items || []).length"><td :colspan="deliveryDetailColumnCount(row)" class="empty">暂无送货明细</td></tr></tbody>
                         </table>
                       </div>
                     </td>
@@ -6544,12 +6542,12 @@
       </div>
 
       <div v-if="modal" class="modal-mask" @click.self="onModalMaskClick">
-        <div ref="businessModal" class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport', 'product-editor-modal': modal.type === 'product', 'product-editor-large': modal.type === 'product' && isLargeUi}" :role="isAccessibleBusinessDialog ? 'dialog' : null" :aria-modal="isAccessibleBusinessDialog ? 'true' : null" :aria-labelledby="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null" :aria-describedby="isAccessibleReadOnlyOrderDialog ? 'erp-order-detail-description' : null" :tabindex="isAccessibleBusinessDialog ? -1 : null" @keydown="onModalKeydown($event); onOrderEntryKeydown($event)">
-          <div class="modal-head"><strong :id="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null">{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small high-frequency-action" @click="closeModal">{{ modal.type==='orderDetail' && costPanelReturnContext ? '返回成本提醒' : modal.type==='product' && productEditReturnContext && productEditReturnContext.source!=='bom' ? (productEditReturnContext.source==='requisition' ? '返回报料' : '返回订单') : workflowReturnLabel }}</button></div>
-          <div v-if="workflowStatus" class="workflow-status" :data-tone="workflowStatus.tone" role="status" aria-live="polite">
-            <strong>{{ workflowStatus.label }}</strong><span>{{ workflowStatus.detail }}</span>
-            <span v-if="workflowSourceHint" class="workflow-source-hint">{{ workflowSourceHint }}</span>
-          </div>
+        <div ref="businessModal" class="modal" :class="{'delivery-editor-modal': modal.type === 'delivery', 'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport', 'product-editor-modal': modal.type === 'product', 'product-editor-large': modal.type === 'product' && isLargeUi}" :role="isAccessibleBusinessDialog ? 'dialog' : null" :aria-modal="isAccessibleBusinessDialog ? 'true' : null" :aria-labelledby="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null" :aria-describedby="isAccessibleReadOnlyOrderDialog ? 'erp-order-detail-description' : null" :tabindex="isAccessibleBusinessDialog ? -1 : null" @keydown="onModalKeydown($event); onOrderEntryKeydown($event)">
+          <div class="modal-head"><strong :id="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null">{{ modal.type==='delivery' && deliveryBatchPicker.visible ? '导入订单' : modal.title }}</strong>
+            <span v-if="modal.type==='delivery' && !deliveryBatchPicker.visible && workflowStatus" class="delivery-header-notice" role="status"><strong>{{ workflowStatus.label }}</strong><span>{{ workflowStatus.detail }}</span></span>
+            <span v-else-if="modal.type==='delivery'" class="delivery-header-notice">客户：{{ deliveryCustomerName(deliveryForm.customer_id) }}</span>
+            <button v-if="!isForcedPassword" class="btn small high-frequency-action" @click="modal.type==='delivery' && deliveryBatchPicker.visible ? deliveryEditorReturn() : closeModal()">{{ modal.type==='delivery' ? (deliveryBatchPicker.visible ? '返回明细' : '退出') : modal.type==='orderDetail' && costPanelReturnContext ? '返回成本提醒' : modal.type==='product' && productEditReturnContext && productEditReturnContext.source!=='bom' ? (productEditReturnContext.source==='requisition' ? '返回报料' : '返回订单') : workflowReturnLabel }}</button></div>
+          <div v-if="workflowStatus && modal.type!=='delivery'" class="workflow-status" :data-tone="workflowStatus.tone" role="status" aria-live="polite"><strong>{{ workflowStatus.label }}</strong><span>{{ workflowStatus.detail }}</span><span v-if="workflowSourceHint" class="workflow-source-hint">{{ workflowSourceHint }}</span></div>
           <div class="modal-body">
             <div v-if="masterVersionConflict && masterVersionConflict.entity === modal.type" class="notice danger" style="margin-bottom:12px">
               <strong>他人已修改，打开版本{{ masterVersionConflict.expectedVersion }} / 当前版本{{ masterVersionConflict.currentVersion }}</strong>
@@ -9562,97 +9560,41 @@
                 <button class="btn primary" :disabled="deliveryDispatchIsBusy()" data-delivery-dispatch-send @click="sendDeliveryDispatchPreview">{{ deliveryDispatchIsBusy() ? '发货中…' : (deliveryDispatchPreview.packet.snapshot.pick_action==='apply' ? '确认拿货变化并发货' : '发货并打印') }}</button>
               </div>
             </div>
-            <div v-else-if="modal.type === 'delivery'">
+            <div v-else-if="modal.type === 'delivery'" class="delivery-editor">
               <fieldset :disabled="deliverySaveState.saving" style="border:0;padding:0;margin:0;min-width:0;width:100%">
-              <div class="delivery-flow-guide" aria-label="送货单操作顺序" aria-live="polite">
-                <div class="delivery-flow-steps">
-                  <span v-for="(step,index) in deliveryGuideSteps" :key="step.key" :class="['delivery-flow-step',{done:index < deliveryGuideStepIndex,current:index === deliveryGuideStepIndex}]" :aria-current="index === deliveryGuideStepIndex ? 'step' : null">{{ index + 1 }}. {{ step.label }}</span>
-                </div>
-                <div class="delivery-flow-message">{{ deliveryGuideMessage }}</div>
-              </div>
-              <div v-if="deliveryForm.pre_delivery_batch && deliveryForm.editing_status==='pending'" class="toolbar-group" style="margin-bottom:10px">
-                <button class="btn" :disabled="loading || deliveryFormIsDirty()" @click="openSavedPreDeliveryBatch">返回预送货核对</button>
-                <span v-if="deliveryFormIsDirty()" class="muted">请先保存或取消当前送货单修改，再返回原预送货批次。</span>
-              </div>
-              <div class="form-grid delivery-header-grid">
-                <div :class="['field',{'delivery-guide-target':deliveryGuideStage === 'customer'}]"><label>客户</label><search-select :model-value="deliveryForm.customer_id" @update:model-value="chooseDeliveryCustomer" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading"></search-select><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && deliveryCandidateError" class="status orange" style="white-space:normal">客户候选加载失败：{{ deliveryCandidateError }} <button class="btn small" type="button" @click="loadDeliveryCustomerOptions">重试</button></div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">当前没有待送订单或可送成品库存</div></div>
-                <div class="field"><label>业务类型</label><label v-if="!deliveryForm.editingId" class="delivery-customer-source-option"><input type="checkbox" v-model="deliveryForm.historical_backfill" @change="onDeliveryHistoricalBackfillChange" />补录历史送货</label><span v-else :class="['status',deliveryForm.historical_backfill?'blue':'green']">{{ deliveryForm.historical_backfill ? '历史补录' : '普通送货' }}</span><div class="muted">普通送货自动使用服务器当天，不增加输入。</div></div>
-                <div v-if="deliveryForm.historical_backfill || deliveryForm.editingId" class="field"><label>{{ deliveryForm.historical_backfill ? '实际送货日期' : '送货日期' }}</label><input class="input" type="date" v-model="deliveryForm.delivery_date" :disabled="deliveryForm.editingId && !deliveryForm.historical_backfill && !(deliveryForm.editing_status==='dispatched' && canAdjustReconciliationPeriod)" /><div v-if="deliveryForm.historical_backfill || (deliveryForm.editing_status==='dispatched' && canAdjustReconciliationPeriod)" class="muted">不得早于关联订单日期，不得晚于服务器今天。</div></div>
-                <div v-if="!deliveryForm.editingId" class="field delivery-customer-source-field"><label>选择客户范围</label><div class="delivery-customer-source-options"><label class="delivery-customer-source-option"><input type="checkbox" v-model="deliveryCustomerSources.orders" @change="onDeliveryCustomerSourceFilterChange" />有订单客户</label><label class="delivery-customer-source-option"><input type="checkbox" v-model="deliveryCustomerSources.inventory" @change="onDeliveryCustomerSourceFilterChange" />有库存客户</label></div></div>
-              </div>
-              <div v-if="deliveryForm.customer_id && (deliveryReminderState.total || deliveryReminderState.loading || deliveryReminderState.error)" class="panel" style="margin-bottom:10px" aria-label="内部送货提醒">
+                <template v-if="!deliveryBatchPicker.visible">
+                  <div class="delivery-flow-guide" aria-label="送货单操作顺序"><div class="delivery-flow-steps"><span v-for="(step,index) in deliveryGuideSteps" :key="step.key" :class="['delivery-flow-step',{done:index < deliveryGuideStepIndex,current:index === deliveryGuideStepIndex}]" :aria-current="index === deliveryGuideStepIndex ? 'step' : null">{{ index + 1 }}. {{ step.label }}</span></div></div>
+                  <div class="delivery-editor-header">
+                    <div class="delivery-inline-field delivery-customer-field"><label>客户</label><search-select :model-value="deliveryForm.customer_id" @update:model-value="chooseDeliveryCustomer" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="选择客户" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading"></search-select></div>
+                    <div class="delivery-inline-field"><label>业务类型</label><select class="select" v-model="deliveryForm.historical_backfill" :disabled="!!deliveryForm.editingId" @change="onDeliveryHistoricalBackfillChange"><option :value="false">普通送货</option><option :value="true">补录历史送货</option></select></div>
+                    <div v-if="deliveryForm.historical_backfill" class="delivery-inline-field"><label>实际送货日期</label><input class="input" type="date" v-model="deliveryForm.delivery_date" /></div>
+                    <div v-if="!deliveryForm.editingId" class="delivery-inline-field"><label>客户范围</label><div class="delivery-customer-source-options"><label><input type="checkbox" v-model="deliveryCustomerSources.orders" @change="onDeliveryCustomerSourceFilterChange" />有订单客户</label><label><input type="checkbox" v-model="deliveryCustomerSources.inventory" @change="onDeliveryCustomerSourceFilterChange" />有库存客户</label></div></div>
+                  </div>
+                  <div v-if="deliveryCandidateError" class="notice danger">{{ deliveryCandidateError }} <button class="btn small" @click="loadDeliveryCustomerOptions">重试</button></div>
+              <div v-if="deliveryForm.customer_id && (deliveryReminderState.total || deliveryReminderState.loading || deliveryReminderState.error)" class="delivery-reminder-summary" aria-label="内部送货提醒">
                 <div class="toolbar">
-                  <div><strong>内部送货提醒</strong><span v-if="deliveryReminderState.total" class="status orange" style="margin-left:8px">{{ deliveryReminderState.total }} 条</span><div class="muted">只供厂内核对，不会写入送货备注或客户打印。</div></div>
+                  <div><strong>内部送货提醒</strong><span v-if="deliveryReminderState.total" class="status orange" style="margin-left:8px">{{ deliveryReminderState.total }} 条</span></div>
                   <div class="toolbar-group"><button v-if="deliveryReminderState.total && !deliveryReminderState.visible" class="btn small" type="button" @click="reopenDeliveryReminderSummary">重新查看</button><button v-if="deliveryReminderState.error" class="btn small" type="button" @click="loadDeliveryRemindersForCustomer(deliveryForm.customer_id)">重试</button></div>
                 </div>
                 <div v-if="deliveryReminderState.loading" class="muted">正在一次性读取该客户的送货提醒…</div>
                 <div v-else-if="deliveryReminderState.error" class="status orange" style="white-space:normal">{{ deliveryReminderState.error }}</div>
                 <div v-else-if="!deliveryReminderState.total" class="muted">当前没有到期的内部送货提醒。</div>
                 <div v-if="deliveryReminderState.visible" class="panel" role="dialog" aria-modal="true" aria-label="送货提醒汇总" style="margin-top:10px;border-color:var(--warning,#d99000)">
-                  <div class="toolbar" style="margin-bottom:8px"><div><strong>请先看完本客户 {{ deliveryReminderState.total }} 条提醒</strong><div class="muted">商品级提醒会随本单已选商品即时标亮，但不会再次请求服务器。</div></div><button class="btn primary" type="button" @click="acknowledgeDeliveryReminders">知道了，继续开单</button></div>
+                  <div class="toolbar" style="margin-bottom:8px"><div><strong>请先看完本客户 {{ deliveryReminderState.total }} 条提醒</strong></div><button class="btn primary" type="button" @click="acknowledgeDeliveryReminders">知道了，继续开单</button></div>
                   <div v-for="row in deliveryReminderState.items" :key="row.id" :class="['panel',{'warning-row':deliveryReminderMatchesCurrentProducts(row)}]" style="padding:8px;margin:6px 0">
                     <div class="toolbar"><div><span class="status blue">{{ deliveryReminderScopeLabel(row) }}</span> <span class="status gray">{{ deliveryReminderTypeLabel(row.reminder_type) }}</span> <span v-if="deliveryReminderMatchesCurrentProducts(row)" class="status orange">本单已选商品匹配</span><div style="white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px">{{ row.content }}</div><div class="muted">来源 {{ row.source_delivery_number || '-' }}｜回单日 {{ row.source_received_date || '-' }}<span v-if="row.suggested_quantity">｜建议数量 {{ row.suggested_quantity }}</span>｜{{ row.cadence==='continuous' ? '持续提醒' : '一次性提醒' }}｜记录人 {{ row.created_by_name || '-' }}</div></div><button v-if="row.cadence==='one_time' && canFinance" class="btn small success" type="button" :disabled="deliveryReminderState.actionId===row.id" @click="resolveDeliveryReminderForThisTime(row)">{{ deliveryReminderState.actionId===row.id ? '处理中…' : '本次已处理' }}</button></div>
                   </div>
                 </div>
               </div>
-              <div v-if="deliveryForm.editingId" class="status blue" style="margin-bottom:10px">
-                {{ deliveryForm.editing_status==='dispatched' ? '已发货待回单：保存后仍保持已发货，并需补打最新版送货单。' : '草稿已保存。核对打印预览后，点击确认打印即可发货。' }}
-              </div>
-              <div v-if="deliveryDraftRecoveryState.checking || deliveryDraftRecoveryState.error" class="notice warning" data-delivery-draft-recovery role="status">
-                <div>{{ deliveryDraftRecoveryState.checking ? '正在核对已保存的原送货单…' : deliveryDraftRecoveryState.error }}</div>
-                <div v-if="deliveryDraftRecoveryState.error" class="toolbar-group" style="margin-top:8px">
-                  <button class="btn primary" type="button" :disabled="deliveryDraftRecoveryState.checking || deliverySaveState.saving || deliveryDispatchIsBusy()" @click="dispatchCurrentDeliveryDraft">重新核对并继续</button>
-                  <button class="btn" type="button" :disabled="deliveryDraftRecoveryState.checking || deliverySaveState.saving || deliveryDispatchIsBusy()" @click="viewSavedDeliveryDraft">查看已保存原单</button>
-                </div>
-              </div>
-              <div v-if="deliveryForm.customer_id" class="panel delivery-unified-picker">
-                <div class="toolbar delivery-batch-picker-toolbar">
-                  <button class="btn primary" type="button" :disabled="!deliveryUnifiedSelectedCount() || deliveryBatchPicker.loading" @click="importSelectedDeliveryBatchItems">导入所选（{{ deliveryUnifiedSelectedCount() }}）</button>
-                  <div class="toolbar-group">
-                    <input class="input" v-model.trim="deliveryBatchPicker.keyword" placeholder="存货编码 / 产品 / 规格 / 客户单号" @keyup.enter.prevent="loadDeliveryBatchItems(1)" />
-                    <button class="btn small" type="button" :disabled="deliveryBatchPicker.loading" @click="loadDeliveryBatchItems(1)">查询</button>
-                    <button class="btn small" type="button" @click="clearDeliveryBatchFilter">清空</button>
+
+                  <div v-if="deliveryDraftRecoveryState.checking || deliveryDraftRecoveryState.error || deliverySaveState.outcomeUncertain" class="notice warning" data-delivery-draft-recovery role="status">{{ deliveryDraftRecoveryState.error || (deliverySaveState.outcomeUncertain ? '保存结果待核对，请核对原单后继续。' : '正在核对原送货单…') }}<button v-if="deliveryDraftRecoveryState.error" class="btn small" @click="dispatchCurrentDeliveryDraft">重新核对</button></div>
+                  <div class="delivery-editor-toolbar"><button class="btn primary" type="button" :disabled="!deliveryForm.customer_id || !!deliveryForm.editingId || deliveryEditorBusy" @click="toggleDeliveryBatchPicker">导入订单</button></div>
+                  <div class="delivery-rows-viewport delivery-selected-table">
+                    <table class="delivery-editor-table"><colgroup><col class="delivery-col-select"/><col class="delivery-col-sequence"/><col class="delivery-col-code"/><col class="delivery-col-drawing"/><col class="delivery-col-po"/><col class="delivery-col-location"/><col class="delivery-col-quantity"/><col class="delivery-col-stock"/><col v-if="canViewSalesAmounts" class="delivery-col-price"/><col v-if="canViewSalesAmounts" class="delivery-col-amount"/><col class="delivery-col-remark"/><col class="delivery-col-action"/></colgroup>
+                    <thead><tr><th></th><th>序号</th><th>存货编码</th><th>图号</th><th>客户单号</th><th>库存位置</th><th>送货数</th><th>库存数</th><th v-if="canViewSalesAmounts">单价</th><th v-if="canViewSalesAmounts">金额</th><th>客户备注</th><th>操作</th></tr></thead>
+                    <tbody><tr v-for="(line,index) in deliveryEditorPageLines" :key="line.key" data-product-row><td><input type="checkbox" checked disabled aria-label="已导入" /></td><td>{{ deliveryEditorSequence(index) }}</td><td>{{ line.product_code || line.inventory_code }}</td><td>{{ line.customer_drawing_number || '' }}</td><td><input class="input" v-model.trim="line.customer_po" maxlength="200" aria-label="客户订单号" /></td><td class="delivery-cell-location"><button v-for="location in deliveryLineLocations(line)" :key="location.key" class="delivery-location-link" @click="openDeliveryLocation(location)">{{ location.label }}</button></td><td><input class="input" type="number" min="1" :max="deliveryLineStockQuantity(line) || undefined" v-model.number="line.delivered_quantity" @input="onDeliveryQuantityChanged(line)" aria-label="送货数" /></td><td>{{ deliveryLineStockQuantity(line) }}</td><td v-if="canViewSalesAmounts"><input v-if="line.source_type==='unordered_finished'" class="input" type="number" min="0" step="0.000001" v-model="line.unit_price" aria-label="单价" /><span v-else>{{ deliveryLinePriceText(line) }}</span></td><td v-if="canViewSalesAmounts">{{ deliveryLineAmount(line) }}</td><td><input class="input" v-model.trim="line.remarks" aria-label="客户备注" /></td><td><button class="btn small danger" @click="removeDeliveryLine(line.key)">删除</button></td></tr><tr v-if="!deliveryEditorLines.length"><td :colspan="canViewSalesAmounts?12:10" class="empty">{{ deliveryForm.customer_id ? '请点击导入订单选择产品' : '请选择客户' }}</td></tr></tbody></table>
                   </div>
-                </div>
-                <div v-if="deliveryForm.lines.length" class="delivery-unified-scroll delivery-selected-table">
-                  <table class="table"><thead><tr><th>存货编码</th><th>订单号</th><th>库存位置</th><th>送货数</th><th>库存数</th><th v-if="canViewSalesAmounts">单价</th><th v-if="canViewSalesAmounts">总金额</th><th>客户备注</th><th>操作</th></tr></thead>
-                  <tbody><tr v-for="line in deliveryUnifiedLines()" :key="line.key">
-                    <td>{{ line.product_code || line.inventory_code }}</td>
-                    <td><input class="input" v-model.trim="line.customer_po" maxlength="200" aria-label="客户订单号" /></td>
-                    <td><button v-for="location in deliveryLineLocations(line)" :key="location.key" class="delivery-location-link" type="button" @click="openDeliveryLocation(location)">{{ location.label }}</button></td>
-                    <td><input class="input" type="number" min="1" :max="deliveryLineStockQuantity(line) || undefined" v-model.number="line.delivered_quantity" @input="onDeliveryQuantityChanged(line)" aria-label="送货数" /></td>
-                    <td>{{ deliveryLineStockQuantity(line) }}</td>
-                    <td v-if="canViewSalesAmounts"><input v-if="line.source_type==='unordered_finished'" class="input" type="number" min="0" step="0.000001" v-model.number="line.unit_price" aria-label="单价" /><span v-else>{{ deliveryLinePriceText(line) }}</span></td>
-                    <td v-if="canViewSalesAmounts">{{ deliveryLineAmount(line) }}</td>
-                    <td><input class="input" v-model.trim="line.remarks" aria-label="客户备注" /></td>
-                    <td><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></td>
-                  </tr></tbody></table>
-                  <div v-if="canViewSalesAmounts" class="delivery-selected-total">总金额：{{ deliveryFormAmount() }}</div>
-                </div>
-                <div class="muted" style="margin:8px 0">有订单优先，无订单库存随后；点击行选择，再次点击取消，点击数量直接选中编辑。</div>
-                <div v-if="deliveryBatchPicker.error" class="status orange">{{ deliveryBatchPicker.message }}</div>
-                <div class="delivery-unified-scroll"><table class="table delivery-unified-table">
-                  <thead><tr><th class="common-picker-sticky-select"><input type="checkbox" aria-label="选择本页货物" :checked="deliveryBatchPicker.items.length > 0 && deliveryBatchPicker.items.every(item => deliveryUnifiedSelected(item) || deliveryUnifiedInForm(item))" @change="toggleAllDeliveryBatchFiltered($event.target.checked)" /></th><th class="common-picker-sticky-quantity">本次数量</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单 / 客户单号</th><th>库存位置</th><th>待送 / 可用</th></tr></thead>
-                  <tbody><tr v-for="item in deliveryBatchPicker.items" :key="deliveryUnifiedKey(item)" :class="{'selected-row':deliveryUnifiedSelected(item),'delivery-row-disabled':deliveryUnifiedInForm(item)}" @click="toggleDeliveryUnifiedRow(item)" @keydown.space.self.prevent="toggleDeliveryUnifiedRow(item)" @keydown.enter.self.prevent="toggleDeliveryUnifiedRow(item)" tabindex="0" :aria-selected="deliveryUnifiedSelected(item)">
-                    <td class="common-picker-sticky-select"><input type="checkbox" :aria-label="'选择 '+item.product_code" :checked="deliveryUnifiedSelected(item)" :disabled="deliveryUnifiedInForm(item)" @click.stop @change="setDeliveryBatchSelection(item,$event.target.checked)" /></td>
-                    <td class="common-picker-sticky-quantity"><span v-if="deliveryUnifiedInForm(item)" class="muted">已在单中</span><input v-else class="input delivery-selection-quantity" type="number" min="1" :max="deliveryUnifiedMax(item)" :value="deliveryUnifiedQuantity(item)" :aria-label="item.product_code+' 本次数量'" placeholder="客户送货数量" @click.stop="selectDeliveryUnifiedQuantity(item)" @focus="selectDeliveryUnifiedQuantity(item)" @input="setDeliveryUnifiedQuantity(item,$event.target.value)" /></td>
-                    <td><strong>{{ item.product_code || '-' }}</strong></td><td>{{ item.product_name || '-' }}</td><td>{{ item.specification || '-' }}</td><td>{{ item.material_display || '-' }}</td>
-                    <td><span v-if="item.source_type === 'unordered_finished'" class="status orange">无订单</span><span v-else>{{ item.customer_po || "" }}</span></td>
-                    <td>{{ item.source_type === 'unordered_finished' ? (item.location_name || '位置待确认') : deliveryBatchOrderLocationText(item) }}</td>
-                    <td>{{ item.source_type === 'unordered_finished' ? unorderedFinishedAvailableQuantity(item) : (item.order_remaining_quantity ?? item.remaining_quantity) }}<div class="muted">{{ item.source_type === 'unordered_finished' ? '可送客户数量' : '订单待送' }}</div></td>
-                  </tr><tr v-if="deliveryBatchPicker.loading"><td colspan="9" class="empty">正在载入货物…</td></tr><tr v-else-if="!deliveryBatchPicker.items.length"><td colspan="9" class="empty">未找到可送货物，请调整搜索条件</td></tr></tbody>
-                </table></div>
-                <div class="toolbar" style="margin-top:10px"><div class="toolbar-group"><span class="muted">共 {{ deliveryBatchPicker.total }} 条 · 每页 {{ deliveryBatchPicker.page_size }} 行 · 已选 {{ deliveryUnifiedSelectedCount() }} 条</span></div><div class="toolbar-group"><button class="btn small" type="button" :disabled="deliveryBatchPicker.loading || deliveryBatchPicker.page <= 1" @click="loadDeliveryBatchItems(deliveryBatchPicker.page-1)">上一页</button><span>{{ deliveryBatchPicker.page }} / {{ deliveryBatchPicker.total_pages }}</span><button class="btn small" type="button" :disabled="deliveryBatchPicker.loading || deliveryBatchPicker.page >= deliveryBatchPicker.total_pages" @click="loadDeliveryBatchItems(deliveryBatchPicker.page+1)">下一页</button></div></div>
-              </div>
-              <div v-else class="empty">请先选择客户</div>
-              <div v-if="deliveryBacklogs.preview?.originKey" class="panel" style="border-left:4px solid #d97706">
-                <strong>同款旧欠送整体分配</strong><p>同客户单号优先，再按交期和建立时间。确认后，本次已填数量将分配给以下原订单；未分配部分仍保留在当前订单，不增加本单总量。</p>
-                <div v-for="r in deliveryBacklogs.preview.items" :key="r.id" class="toolbar">{{ r.order_number }} / {{ r.customer_order_no || '-' }} / {{ r.due_date || '-' }}：欠 {{ r.remaining_quantity }} {{ r.customer_unit }}，可补 {{ r.ready_quantity }} {{ r.customer_unit }}（实物 {{ r.ready_physical_quantity }} {{ r.physical_unit }}）<label>本次（{{ r.customer_unit }}） <input class="input" type="number" min="0" :max="r.ready_quantity" :step="r.customer_quantity_step || 1" v-model.number="r.take" :disabled="user.role!=='admin'" /></label></div>
-                <button class="btn primary" type="button" :disabled="deliveryBacklogs.loading" @click="applyDeliveryBacklogs">确认分配到以上原订单</button><button class="btn" type="button" @click="deliveryBacklogs.preview=null">保留当前明细</button>
-              </div>
-              <button v-if="deliveryForm.editingId" class="btn small" type="button" :disabled="deliveryOperationState.action" @click="saveDeliveryCustomerPo">保存客户单号</button>
-              <div v-if="deliveryForm.editingId" class="muted" style="font-size:12px">仅更新本送货单及后续对账的客户单号，不修改原订单、报料、来料和生产记录。</div>
-              <div v-if="deliveryActiveLines.some(line => deliveryDraftComponents(line).length)" class="delivery-component-plan">
+              <details v-if="deliveryActiveLines.some(line => deliveryDraftComponents(line).length)" class="delivery-component-plan"><summary>本次实际随货子件</summary>
                 <div class="delivery-component-plan-title">
                   <strong>统一计价组合 · 本次实际随货明细</strong>
                   <span class="status blue">组件数量来自订单级需求，只读；子件不单独计价</span>
@@ -9669,7 +9611,19 @@
                     </div>
                   </div>
                 </div>
-              </div>
+              </details>
+
+                </template>
+                <template v-else>
+                  <div class="delivery-editor-toolbar delivery-batch-picker-toolbar"><button class="btn primary" :disabled="!deliveryUnifiedSelectedCount() || deliveryBatchPicker.loading" @click="importSelectedDeliveryBatchItems">导入（{{ deliveryUnifiedSelectedCount() }}条）</button><input class="input" v-model.trim="deliveryBatchPicker.keyword" placeholder="存货编码 / 客户单号" @keyup.enter.prevent="loadDeliveryBatchItems(1)"/><button class="btn primary" :disabled="deliveryBatchPicker.loading" @click="loadDeliveryBatchItems(1)">查询</button><button class="btn" @click="clearDeliveryBatchFilter">清空</button></div>
+                  <div v-if="deliveryBatchPicker.error" class="notice danger">{{ deliveryBatchPicker.message }} <button class="btn small" @click="loadDeliveryBatchItems(deliveryBatchPicker.page)">重试</button></div>
+                  <div class="delivery-rows-viewport delivery-unified-picker"><table class="delivery-editor-table delivery-candidate-table"><colgroup><col class="delivery-col-select"/><col class="delivery-col-sequence"/><col class="delivery-col-quantity"/><col class="delivery-col-code"/><col class="delivery-col-drawing"/><col class="delivery-col-po"/><col class="delivery-col-location"/><col class="delivery-col-stock"/><col class="delivery-col-stock"/><col v-if="canViewSalesAmounts" class="delivery-col-price"/></colgroup>
+                    <thead><tr><th><input type="checkbox" :checked="deliveryBatchPicker.items.length>0 && deliveryBatchPicker.items.every(item=>deliveryUnifiedSelected(item)||deliveryUnifiedInForm(item))" :disabled="deliveryBatchPicker.loading" @change="toggleAllDeliveryBatchFiltered($event.target.checked)" aria-label="全选本页" /></th><th>序号</th><th>本次数量</th><th>存货编码</th><th>图号</th><th>客户单号</th><th>库存位置</th><th>待送数</th><th>可用库存</th><th v-if="canViewSalesAmounts">单价</th></tr></thead>
+                    <tbody><template v-for="(item,index) in deliveryBatchPicker.items" :key="deliveryUnifiedKey(item)"><tr v-if="index===0 || item.source_type!==deliveryBatchPicker.items[index-1].source_type" class="delivery-source-heading"><th :colspan="canViewSalesAmounts?10:9">{{ item.source_type==='unordered_finished'?'无订单库存':'有订单产品' }}</th></tr>
+                      <tr data-product-row :class="{'selected-row':deliveryUnifiedSelected(item)}" @click="toggleDeliveryUnifiedRow(item)"><td><input type="checkbox" :checked="deliveryUnifiedSelected(item)||deliveryUnifiedInForm(item)" :disabled="deliveryUnifiedInForm(item)||deliveryBatchPicker.loading" @click.stop @change="setDeliveryBatchSelection(item,$event.target.checked)" :aria-label="'选择 '+item.product_code" /></td><td>{{ deliverySelectionSequence(index) }}</td><td><input class="input" type="number" min="1" :max="deliveryUnifiedMax(item)" :disabled="deliveryUnifiedInForm(item)" :value="deliveryUnifiedInForm(item)?'':deliveryUnifiedQuantity(item)" :aria-label="item.product_code+' 本次数量'" @click.stop="selectDeliveryUnifiedQuantity(item)" @input="setDeliveryUnifiedQuantity(item,$event.target.value)" /></td><td>{{ item.product_code }}</td><td>{{ item.customer_drawing_number || '' }}</td><td>{{ item.source_type==='unordered_finished'?'':(item.customer_po || '') }}</td><td class="delivery-cell-location"><button v-for="location in deliveryLineLocations(item)" :key="location.key" class="delivery-location-link" @click.stop="openDeliveryLocation(location)">{{ location.label }}</button></td><td>{{ item.source_type==='unordered_finished'?'':(item.order_remaining_quantity ?? item.remaining_quantity) }}</td><td>{{ deliverySelectionStock(item) }}</td><td v-if="canViewSalesAmounts"><input v-if="item.source_type==='unordered_finished'" class="input" type="number" min="0" step="0.000001" v-model="deliverySelectionPrice(item).unit_price" @click.stop aria-label="库存单价" /><span v-else>{{ deliveryLinePriceText(item) }}</span></td></tr>
+                    </template><tr v-if="deliveryBatchPicker.loading"><td :colspan="canViewSalesAmounts?10:9" class="empty">正在载入货物…</td></tr><tr v-else-if="!deliveryBatchPicker.items.length"><td :colspan="canViewSalesAmounts?10:9" class="empty">未找到可送货物</td></tr></tbody>
+                  </table></div>
+                </template>
               </fieldset>
             </div>
             <div v-else-if="modal.type === 'tianhuaPreimport'">
@@ -10240,7 +10194,12 @@
             </div>
             <button type="button" class="btn primary product-inline-save" :disabled="(!!productForm.id && !canEditProducts) || loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : (productEditReturnContext && productEditReturnContext.source!=='bom' ? (productEditReturnContext.source==='requisition' ? '保存并返回报料' : '保存并返回订单') : '保存') }}</button>
           </div>
-          <div v-if="!['product','orderPdfImport'].includes(modal?.type)" class="modal-foot">
+          <div v-if="modal.type==='delivery'" class="delivery-editor-foot">
+            <template v-if="!deliveryBatchPicker.visible"><div class="delivery-editor-total">合计 {{ deliveryEditorLines.length }} 条<strong v-if="canViewSalesAmounts">总金额 {{ deliveryFormAmount() }}</strong></div><div class="delivery-footer-actions"><button class="btn" :disabled="deliveryEditorPage<=1" @click="deliveryEditorPage--">上一页</button><span>第 {{ deliveryEditorPage }}/{{ deliveryEditorPages }} 页 · 共 {{ deliveryEditorPages }} 页</span><button class="btn" :disabled="deliveryEditorPage>=deliveryEditorPages" @click="deliveryEditorPage++">下一页</button><button class="btn delivery-save-button" :disabled="!canSaveModal || deliveryEditorBusy || !!deliveryValidationError" @click="saveModal()">{{ deliverySaveState.saving?'保存中…':'保存' }}</button><button class="btn delivery-print-button" :disabled="!canSaveModal || deliveryEditorBusy || !!deliveryValidationError" @click="deliveryEditorPrint">打印</button></div></template>
+            <template v-else><div class="delivery-editor-total">已选 {{ deliveryUnifiedSelectedCount() }} 条 · 本次送货 {{ deliverySelectedQuantityTotal() }}</div><div class="delivery-footer-actions"><button class="btn" :disabled="deliveryBatchPicker.loading || deliveryBatchPicker.page<=1" @click="loadDeliveryBatchItems(deliveryBatchPicker.page-1)">上一页</button><span>第 {{ deliveryBatchPicker.page }}/{{ deliveryBatchPicker.total_pages }} 页 · 共 {{ deliveryBatchPicker.total_pages }} 页</span><button class="btn" :disabled="deliveryBatchPicker.loading || deliveryBatchPicker.page>=deliveryBatchPicker.total_pages" @click="loadDeliveryBatchItems(deliveryBatchPicker.page+1)">下一页</button></div></template>
+          </div>
+          <div v-if="modal.type==='delivery' && deliveryEditorExitVisible" class="delivery-editor-exit" role="alertdialog" aria-modal="true" aria-label="未保存修改"><div><strong>送货单有未保存修改</strong><p>请选择如何退出。</p><div class="toolbar-group"><button class="btn success" :disabled="deliveryEditorBusy || !!deliveryValidationError" @click="deliveryEditorSaveAndExit">保存后退出</button><button class="btn danger" :disabled="deliveryEditorBusy" @click="deliveryEditorDiscardAndExit">放弃修改并退出</button><button class="btn" @click="deliveryEditorExitVisible=false">继续编辑</button></div></div></div>
+          <div v-if="!['product','orderPdfImport','delivery'].includes(modal?.type)" class="modal-foot">
             <button v-if="!isForcedPassword && modal?.type!=='statementDetail'" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving) || (modal?.type==='deliveryDispatch' && deliveryDispatchIsBusy())" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <button v-if="modal?.type==='statementDetail' && !['confirmed','cancelled'].includes(statementDetail?.confirmation_status)" class="btn primary" :disabled="!!financeStatementOperationState.action" @click="exportStatement(statementDetail,'xlsx')">导出对账单</button>
             <button v-if="modal?.type==='statementDetail' && !['confirmed','cancelled'].includes(statementDetail?.confirmation_status) && canConfirmStatement && canGenerateInvoiceTask" class="btn" :disabled="!!financeStatementOperationState.action" @click="confirmAndDownloadStatement(statementDetail)">{{ financeStatementOperationState.action==='confirm_download' ? '确认并下载中…' : '确认并下载开票文件' }}</button>
@@ -12629,7 +12588,7 @@
               return;
             }
             if (!this.modal || this.isForcedPassword) return;
-            if (this.modal.type === "order" || this.modal.type === "orderEdit") return;
+            if (["order","orderEdit","delivery"].includes(this.modal.type)) return;
             this.closeModal();
           });
           window.addEventListener("popstate", this.handlePdfWarehousePopState);
@@ -32126,19 +32085,6 @@
 
 
 
-      .delivery-selected-table table, .delivery-list-detail table { table-layout:auto; width:max-content; min-width:100%; }
-      .delivery-selected-table td, .delivery-selected-table th, .delivery-list-detail td, .delivery-list-detail th { white-space:nowrap; overflow:visible; text-overflow:clip; }
-      .delivery-selected-table td:first-child, .delivery-list-detail .delivery-detail-code { width:12ch; min-width:12ch; }
-      .delivery-selected-table td:nth-child(2), .delivery-list-detail .delivery-detail-po { width:15ch; min-width:15ch; }
-      .delivery-list-detail .delivery-detail-name { width:170px; min-width:170px; }
-      .delivery-list-detail .delivery-detail-spec { width:auto; }
-      .delivery-list-detail .delivery-detail-category { width:5ch; }
-      .delivery-selected-table input { min-width:0; width:100%; }
-      .delivery-selected-table td:nth-child(4) input { width:90px; }
-      .delivery-selected-table td:nth-child(6) input { width:100px; }
-      .delivery-selected-table td:nth-last-child(2) input { min-width:170px; }
-      .delivery-location-link { border:0; background:none; color:#1667c7; text-decoration:underline; cursor:pointer; font:inherit; white-space:nowrap; padding:2px 6px 2px 0; }
-      .delivery-selected-total { text-align:right; font-weight:600; padding:8px; }
     </style></head><body>${area.innerHTML}</body></html>`);
             w.document.close();
             w.focus();
@@ -38110,7 +38056,7 @@
             window.location.href = "/incoming.html";
           },
           onModalMaskClick() {
-            if (this.modal?.type === "order" || this.modal?.type === "orderEdit") return;
+            if (["order","orderEdit","delivery"].includes(this.modal?.type)) return;
             if (this._productFormDirty()) return; // 有未保存更改，禁止点遮罩关闭
             this.closeModal();
           },
@@ -38759,7 +38705,7 @@
             return ['YG','GY'].includes(row.customer_code || customer?.customer_code) || [137,138].includes(Number(row.customer_id));
           },
           deliveryLineLocations(line) {
-            const sources = line.inventory_sources?.length ? line.inventory_sources : (line.stock_locations || []);
+            const sources = line.inventory_sources?.length ? line.inventory_sources : (line.stock_locations?.length ? line.stock_locations : (line.location_id || line.warehouse_location_id ? [line] : []));
             const seen = new Set();
             return sources.map(source => {
               const id = Number(source.warehouse_location_id || source.location_id || source.warehouse_location?.id || 0);
@@ -39015,6 +38961,8 @@
             if ([...selectedItems, ...stockItems.map(item => ({...item, source_type:"unordered_finished"}))].some(item => !Number.isInteger(Number(item._quantity)) || Number(item._quantity) <= 0 || Number(item._quantity) > this.deliveryUnifiedMax(item))) {
               this.showToast("请填写有效的本次数量，不能超过可用数量", true); return;
             }
+            const beforeLines = JSON.stringify(this.deliveryForm.lines);
+            const beforeStockSelections = JSON.stringify(this.unorderedFinishedPicker.selected);
             selectedItems.forEach((item) => {
               let line = this.emptyDeliveryLine();
               if (!line) {
@@ -39023,10 +38971,15 @@
               }
               this.applyDeliveryBatchItemToLine(line, item);
             });
-            if (stockItems.length) this.importUnorderedFinishedCandidates({silent:true});
+            if (stockItems.length && !this.importUnorderedFinishedCandidates({silent:true})) {
+              this.deliveryForm.lines = JSON.parse(beforeLines);
+              this.unorderedFinishedPicker.selected = JSON.parse(beforeStockSelections);
+              return false;
+            }
             this.clearDeliveryBatchSelection();
             this.deliveryBatchPicker.message = `已导入 ${selectedItems.length + stockItems.length} 条待送货明细`;
             this.deliveryBatchPicker.visible = false;
+            this.deliveryEditorPage = this.deliveryEditorPages;
             this.showToast(`已导入 ${selectedItems.length + stockItems.length} 条待送货明细`);
           },
           onDeliveryCustomerChange() {
@@ -39189,9 +39142,9 @@
                 this.showToast("库存批次缺少产品或批次标识，无法导入", true);
                 return false;
               }
-              let line = this.deliveryForm.lines.find(row => Number(row.product_id) === productId && row.source_type === "unordered_finished");
+              let line = this.deliveryForm.lines.find(row => Number(row.product_id) === productId && row.source_type === "unordered_finished" && String(row.unit_price ?? "") === String(Number(item.unit_price || 0)>0 ? item.unit_price : ""));
               if (!line) {
-                line = this.createDeliveryLine({ source_type:"unordered_finished", product_id:productId, product_code:item.product_code || "", product_name:item.product_name || "", specification:item.specification || "", material_display:item.material_display || "", location_name:item.location_name || "", unit_price:Number(item.unit_price || 0) > 0 ? Number(item.unit_price) : null, delivered_quantity:0, allocations:[], order_pending_quantity:Number(item.order_pending_quantity || 0) });
+                line = this.createDeliveryLine({ source_type:"unordered_finished", product_id:productId, product_code:item.product_code || "", product_name:item.product_name || "", specification:item.specification || "", material_display:item.material_display || "", location_name:item.location_name || "", customer_drawing_number:item.customer_drawing_number || "", unit_price:Number(item.unit_price || 0) > 0 ? String(item.unit_price) : null, delivered_quantity:0, allocations:[], order_pending_quantity:Number(item.order_pending_quantity || 0) });
                 this.deliveryForm.lines.push(line);
               }
               line.order_pending_quantity = Math.max(Number(line.order_pending_quantity || 0), Number(item.order_pending_quantity || 0));
@@ -39767,6 +39720,7 @@
               order_id: candidate.order_id,
               order_number: candidate.display_order_number || candidate.order_number || "",
               customer_po: candidate.customer_po || "",
+              customer_drawing_number: candidate.customer_drawing_number || "",
               product_code: candidate.product_code || "",
               product_name: candidate.product_name || "",
               specification: candidate.specification || "",
@@ -40508,11 +40462,8 @@
               this.closePdfWarehouseLocator();
               return;
             }
-            if (
-              this.modal?.type === "delivery"
-              && this.deliveryFormHasUnsavedChanges()
-              && !confirm("送货草稿有未保存的修改，确定要关闭吗？")
-            ) return;
+            if (this.modal?.type==='delivery' && this.deliveryBatchPicker.visible) { this.deliveryEditorReturn(); return; }
+            if (this.modal?.type==='delivery' && this.deliveryFormHasUnsavedChanges() && !this.deliveryEditorExitApproved) { this.deliveryEditorExitVisible=true; return; }
             if (
               this.modal?.type === "receipt"
               && ((this.receiptForm.reminder_drafts || []).length || String(this.receiptReminderEditor?.content || "").trim())
@@ -41388,7 +41339,7 @@
                     source_type: "unordered_finished",
                     product_id: Number(line.product_id),
                     delivered_quantity: Number(line.delivered_quantity),
-                    unit_price: Number(line.unit_price || 0) > 0 ? Number(line.unit_price) : null,
+                    unit_price: Number(line.unit_price || 0) > 0 ? String(line.unit_price) : null,
                     allocations: (line.allocations || []).filter(a=>Number(a.quantity)>0).map(allocation => ({ inventory_lot_id:Number(allocation.inventory_lot_id), quantity:Number(allocation.quantity) })),
                     customer_po: line.customer_po ?? null,
                     remarks: line.remarks || null,
@@ -41917,6 +41868,8 @@
                 return this.createDeliveryLine({
                   source_type: "unordered_finished",
                   product_id: it.product_id,
+                  customer_drawing_number: it.customer_drawing_number || "",
+                  stock_locations: it.inventory_sources || [],
                   delivery_item_id: it.id,
                   customer_po: it.customer_po === "无订单库存" ? "" : (it.customer_po || ""),
                   product_code: it.product_code || "",
@@ -41938,6 +41891,8 @@
                 order_number: it.display_order_number || it.order_number || "",
                 customer_po: it.customer_po || "",
                 delivery_item_id: it.id,
+                customer_drawing_number: it.customer_drawing_number || "",
+                unit_price: it.unit_price ?? null,
                 pre_delivery_position: it.pre_delivery_position,
                 item_sequence: it.item_sequence ?? pending?.item_sequence,
                 product_code: it.product_code || "",
@@ -43487,6 +43442,7 @@
           },
         }
       });
+      window.TmDeliveryEditorLayout.install(app);
       app.mixin(TMDemandStock.mixin);
       app.component("demand-stock-summary", TMDemandStock.summary);
       app.component("manual-replenishment-picker", TMManualReplenishment.picker);

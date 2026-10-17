@@ -19,6 +19,8 @@ def test_order_candidate_price_is_exact_and_permission_checked(n029_delivery_app
     with factory() as db:
         item = db.get(OrderItem, ids['task_completed'])
         item.unit_price = Decimal('2.146420')
+        from app.models.product import Product
+        db.get(Product, item.product_id).customer_drawing_number = '007942511'
         db.commit()
     with TestClient(app) as c:
         _login(c)
@@ -26,6 +28,13 @@ def test_order_candidate_price_is_exact_and_permission_checked(n029_delivery_app
         assert response.status_code == 200, response.text
         row = next(r for r in response.json()['items'] if r.get('order_item_id') == ids['task_completed'])
         assert Decimal(row['unit_price']) == Decimal('2.14642')
+        assert row['customer_drawing_number'] == '007942511'
+        with factory() as db:
+            product = db.get(Product, db.get(OrderItem, ids['task_completed']).product_id)
+            product.customer_drawing_number = ''
+            db.commit()
+        empty = c.get('/api/deliveries/selection-items', params={'customer_id':ids['customer']})
+        assert next(r for r in empty.json()['items'] if r.get('order_item_id') == ids['task_completed'])['customer_drawing_number'] == ''
         with patch('app.api.orders._can_view_order_sales_amount', return_value=False):
             hidden = c.get('/api/deliveries/selection-items', params={'customer_id':ids['customer']})
             assert hidden.status_code == 200, hidden.text

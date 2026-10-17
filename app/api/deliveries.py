@@ -8793,6 +8793,12 @@ def unified_delivery_selection_items(
     if not allowed_prices:
         for item in items:
             item.pop('unit_price', None)
+    product_ids = {item.get('product_id') for item in items} - {None}
+    drawing_numbers = {product.id: product.customer_drawing_number or ''
+        for product in db.scalars(select(Product).where(Product.id.in_(product_ids),
+            Product.customer_id == customer_id, Product.deleted_at.is_(None)))}
+    for item in items:
+        item['customer_drawing_number'] = drawing_numbers.get(item.get('product_id'), '')
     total = len(orders) + stock_total
     return {"items": items, "total": total, "order_total": len(orders),
             "inventory_total": stock_total, "page": page, "page_size": page_size,
@@ -11375,7 +11381,7 @@ def get_delivery(
         by_id = {r.id: r for r in records}
         for item in result["items"]:
             contract = read_sales_contract(by_id[item['id']])
-            item['unit_price'] = contract['unit_price'] if contract else None
+            item['unit_price'] = contract['unit_price'] if contract else (str(by_id[item['id']].unit_price_snapshot) if by_id[item['id']].unit_price_snapshot is not None else None)
     else:
         for item in result["items"]:
             item.pop("unit_price", None)

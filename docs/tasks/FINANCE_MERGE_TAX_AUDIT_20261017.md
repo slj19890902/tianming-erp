@@ -19,3 +19,5 @@
 
 
 正式闭环：2026-10-17 12:58:07技术发布v0.22.659，包8e60fac50161704166e9491fe490c26f17cafc43c7e0b56ab022edd6112945c0，源码346d7ac864ef03d675120bc0a7acf3470035c3ee，revisioner1016pa、PID89835、健康200；一次受限授权，备份与恢复演练通过，待人工验收。最新只读价税检查已完成；原80行送货含税口径及69行对账应收尚未更正，不能把新功能上线当成历史价格修复。详细逐行清单和待回收副本见evidence/finance-merge-tax-audit-20261017/RECEIPT.md。
+
+保留工作补核：本次backup_work_retained由原生独立恢复验证后的副本回收异常写入；具体异常被旧函数吞掉未记录，不能仅按演练的进程守卫异常断言实际原因。普通用户不能读取state所指随机job身份，原生close_locked闭环未执行，长期调度仍受此项阻断；详细检查与精确闭环条件见evidence/finance-merge-tax-audit-20261017/RETAINED_WORK_CLOSURE.md。没有再次系统授权、没有直接改state。

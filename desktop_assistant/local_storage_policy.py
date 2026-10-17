@@ -80,6 +80,29 @@ def expanded_programs(state, *, additional=(), point_programs=()):
     return protected_programs(state, {}, additional=additional,
                               point_programs=point_programs)
 
+
+def rehearsal_payload_scope(report, *, delivered, ancestor, later_passed):
+    """Keep reports; retire only terminal, provably superseded payloads."""
+    if (report.get('scope')!='isolated_additive_rehearsal_only'
+            or not isinstance(report.get('package_sha256'),str)
+            or not IDENTITY.fullmatch(report['package_sha256'])):
+        return None
+    if report.get('status')=='passed':
+        if (report.get('source_unchanged') is True
+                and report.get('schema_fingerprint_version')==2
+                and isinstance(report.get('result_schema'),str)
+                and IDENTITY.fullmatch(report['result_schema'])
+                and (delivered or ancestor)):
+            return 'release-and-shared'
+    # Only transient inconsistent copies superseded by a later successful run
+    # of the exact same package; never general migration/structure failures.
+    errors={'复制期间数据变化或附件不一致，请重新演练',
+            '原系统数据已变化，本次演练结果不能用于更新'}
+    if (report.get('status')=='failed' and report.get('error') in errors
+            and delivered and later_passed):
+        return 'shared-only'
+    return None
+
 def maintenance_admitted(state, *, running, healthy):
     operation = state.get('operation', '')
     return bool(running and healthy and state.get('current')

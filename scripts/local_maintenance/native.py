@@ -582,6 +582,8 @@ def root_cleanup():
                     with zipfile.ZipFile(candidates[0]) as z: m=json.loads(z.read('manifest.json'))
                     delivered=any(v.get('git_sha')==m.get('git_sha') for v in receipts.values())
                     if not delivered:
+                        candidate_ids={h for h,manifest in manifests.items() if manifest==m}
+                        keep.update(candidate_ids);expanded_keep.update(candidate_ids)
                         for name in ('build-result.json','signing-request.json'):
                             p=folder/name
                             if p.is_file() and p.stat().st_size<1024**2:
@@ -670,6 +672,55 @@ def root_cleanup():
                 except (ValueError,OSError,KeyError) as e:
                     report['retained'].append({'path':str(job),'reason':type(e).__name__})
                 record()
+            # Additional terminal rehearsals: v2 schema evidence is self-contained.
+            jobs=[]
+            for job in (ROOT/'staging').glob('migration-*'):
+                p=job/'report.json'
+                if not job.is_symlink() and p.is_file() and not p.is_symlink():
+                    jobs.append((job,read(p),p.stat().st_mtime_ns))
+            source_cache={}
+            def source_known(commit,*,ancestor=False):
+                key=(commit,ancestor)
+                if key not in source_cache:
+                    args=(['merge-base','--is-ancestor',commit,manifests[state['current']]['git_sha']]
+                          if ancestor else ['cat-file','-e',commit+'^{commit}'])
+                    answer=subprocess.run(['/usr/bin/git','-C',str(GIT),*args],user=501,group=20,extra_groups=[20],
+                                          cwd='/',capture_output=True,timeout=15,
+                                          env={'HOME':'/Users/kimiyf','PATH':'/usr/bin:/bin:/usr/sbin:/sbin'})
+                    source_cache[key]=answer.returncode==0
+                return source_cache[key]
+            for job,r,mtime in jobs:
+                h=r.get('package_sha256');receipt=receipts.get(h,{})
+                delivered=policy.receipt_valid(receipt,h,receipt.get('git_sha'))
+                later=any(other.get('package_sha256')==h and other_mtime>mtime
+                          and policy.rehearsal_payload_scope(other,delivered=True,ancestor=False,later_passed=False)=='release-and-shared'
+                          for _,other,other_mtime in jobs)
+                ancestor=(h in manifests and source_known(manifests[h]['git_sha'],ancestor=True))
+                scope=policy.rehearsal_payload_scope(r,delivered=delivered,ancestor=ancestor,later_passed=later)
+                names=('release','shared') if scope=='release-and-shared' else ('shared',) if scope=='shared-only' else ()
+                if not any((job/name).exists() for name in names):continue
+                try:
+                    if not re.fullmatch('migration-[0-9a-f]{32}',job.name):raise ValueError('Unknown rehearsal path')
+                    assert_idle(job)
+                    for name in names:
+                        target=job/name
+                        if not target.exists():continue
+                        if name=='release' and h not in manifests:raise ValueError('Rehearsal original unavailable')
+                        links=_release_files(job,target,manifests[h]) if name=='release' else []
+                        idle(target)
+                        before=policy.tree_fingerprint(target,uid=499,device=ROOT.stat().st_dev,allow_links=links)
+                        unchanged();idle(target)
+                        if policy.tree_fingerprint(target,uid=499,device=ROOT.stat().st_dev,allow_links=links)!=before:
+                            raise ValueError('Terminal rehearsal payload changed')
+                        if settings['apply_cleanup']:
+                            for link in links:link.unlink()
+                            removed=remove_owned_tree(target,job)
+                        else:removed=before['allocated']
+                        report['removed' if settings['apply_cleanup'] else 'planned'].append(
+                            {'path':str(target),'kind':'terminal-rehearsal-'+scope,'bytes':removed})
+                except (ValueError,OSError,KeyError) as e:
+                    report['retained'].append({'path':str(job),'reason':type(e).__name__})
+                record()
             # Old expansion sets only. Exact signed originals remain available.
             registry=read(BASE/'published.json')
             candidates=set(registry['packages'])
@@ -679,9 +730,10 @@ def root_cleanup():
             report['protected_originals'] = sorted(keep)
             report['protected_expansions'] = sorted(expanded_keep)
             for h in sorted(candidates-expanded_keep):
-                if h not in manifests or not policy.receipt_valid(receipts.get(h),h,manifests[h]['git_sha']):
+                if h not in manifests:
                     continue
                 try:
+                    if not source_known(manifests[h]['git_sha']):raise ValueError('Source commit unavailable')
                     parent=BASE/'published'/h;manifest=manifests[h]
                     with archives[h].open('rb') as f:
                         manifest_raw,_,_=publication.inspect(f)

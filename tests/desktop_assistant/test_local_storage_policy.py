@@ -35,6 +35,23 @@ def test_missing_current_still_refuses_expansion_retirement():
     with pytest.raises(ValueError):p.expanded_programs({'previous':'b'*64})
 
 
+def test_rehearsal_recovery_requires_self_contained_v2_schema_and_completed_source():
+    r=dict(scope='isolated_additive_rehearsal_only',package_sha256='a'*64,status='passed',
+           source_unchanged=True,schema_fingerprint_version=2,result_schema='b'*64)
+    assert p.rehearsal_payload_scope(r,delivered=False,ancestor=True,later_passed=False)=='release-and-shared'
+    assert p.rehearsal_payload_scope(r,delivered=False,ancestor=False,later_passed=False) is None
+    assert p.rehearsal_payload_scope(dict(r,schema_fingerprint_version=1),delivered=True,ancestor=False,later_passed=False) is None
+
+
+def test_failed_copy_only_retires_data_after_later_success_of_delivered_package():
+    r=dict(scope='isolated_additive_rehearsal_only',package_sha256='a'*64,status='failed',
+           error='复制期间数据变化或附件不一致，请重新演练')
+    assert p.rehearsal_payload_scope(r,delivered=True,ancestor=False,later_passed=True)=='shared-only'
+    assert p.rehearsal_payload_scope(r,delivered=True,ancestor=False,later_passed=False) is None
+    assert p.rehearsal_payload_scope(r,delivered=False,ancestor=False,later_passed=True) is None
+    assert p.rehearsal_payload_scope(dict(r,error='structural migration failed'),delivered=True,ancestor=True,later_passed=True) is None
+
+
 @pytest.mark.parametrize('extra',[{'manual_stop':True},{'onboarding_pending':True},
     {'backup_work_retained':['one']},{'operation':'migration_running'}, {'operation':'update_failed'}])
 def test_incomplete_or_failed_operation_has_no_cleanup(extra):

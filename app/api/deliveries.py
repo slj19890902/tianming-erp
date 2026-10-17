@@ -11840,8 +11840,9 @@ def record_customer_print_request(delivery_id: int, payload: CustomerPrintReques
                                             sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     replay, _ = _delivery_idempotency_replay(db, idempotency_key=payload.idempotency_key,
         request_hash=request_hash, action=action, actor=user)
+    from app.services.customer_delivery_print import print_request_receipt
     if replay is not None:
-        return replay
+        return print_request_receipt(replay)
     current = get_delivery_print_data(delivery_id, db=db, user=user,
                                      show_prices=payload.show_prices, order_context=payload.order_context,
                                      description_mode=payload.description_mode)
@@ -11853,6 +11854,7 @@ def record_customer_print_request(delivery_id: int, payload: CustomerPrintReques
         'description_mode': payload.description_mode,
         'printed_document': {key: current[key] for key in ('sender', 'customer', 'print_template',
             'customer_document_rows', 'description_versions', 'commercial_quantities', 'price_display')}}
+    response = print_request_receipt(response)
     _write_audit(db, user=user, action=action, resource='Delivery', entity_id=delivery_id,
         details=response, description='登记客户送货单打印请求及本次价格模式（不代表实体打印完成）')
     _record_delivery_idempotency(db, idempotency_key=payload.idempotency_key, request_hash=request_hash,

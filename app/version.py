@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.655"
-APP_VERSION_NAME = "送货单紧凑排版与常用箱资料同步"
+APP_VERSION = "v0.22.656"
+APP_VERSION_NAME = "送货单资料同步与打印金额权限保护"
 APP_BUILD_DATE = "2026-10-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6434,3 +6434,9 @@ APP_VERIFICATION_STEPS = [
     "核对正式版本v0.22.655、数据库revision仍er1016pa；已有数量、单价、出库及财务事实保持原记录。",
 ]
 APP_CHANGELOG = [*(f"v0.22.655：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.656：打印记录重试不返回可复用销售金额。
+APP_CHANGES = [*APP_CHANGES, "打印回执保留描述资料与版本，销售金额仍由实时权限保护；兼容脱敏旧版有价打印回执。"]
+APP_CHANGELOG = ["v0.22.656：打印记录重试金额权限保护，包含本轮全部送货排版与常用箱同步优化。", *APP_CHANGELOG]
+
+APP_VERIFICATION_STEPS = [step.replace("v0.22.655", "v0.22.656") for step in APP_VERIFICATION_STEPS]

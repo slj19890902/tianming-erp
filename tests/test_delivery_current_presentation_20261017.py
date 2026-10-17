@@ -87,6 +87,10 @@ def test_old_delivery_refreshes_descriptions_keeps_sale_and_tracks_print(n029_de
         assert all('total_amount' not in x for x in hidden)
         assert client.get(f'/api/deliveries/{did}/print?show_prices=true').status_code == 403
         assert 'unit_price' not in client.get(f'/api/deliveries/{did}/print?show_prices=false').json()['customer_document_rows'][0]
+        replay = client.post(f'/api/deliveries/{did}/customer-print-events', json=event)
+        assert replay.status_code == 200, replay.text
+        assert 'unit_price' not in replay.json()['printed_document']['customer_document_rows'][0]
+        assert 'amount' not in replay.json()['printed_document']['customer_document_rows'][0]
 
 
 def test_current_description_never_uses_another_customer_or_legacy_candidates():
@@ -125,3 +129,14 @@ def test_generic_template_uses_compact_current_view_and_retains_original():
     assert result['layout']['font_size_pt'] == 11
     assert result['source_layout_hash'] == original['layout_hash']
     assert [c['key'] for c in result['layout']['columns']] == list(original['layout']['column_widths'])
+
+
+def test_old_priced_print_receipt_is_redacted_without_rewriting_stored_fact():
+    from copy import deepcopy
+    from app.services.customer_delivery_print import print_request_receipt
+    old = {'document_hash': 'a'*64, 'printed_document': {'customer_document_rows': [
+        {'customer_drawing_number': '0001234', 'quantity': 50, 'unit_price': '99.00', 'amount': '4950.00', 'tax_mode': 'tax_inclusive'}]}}
+    before = deepcopy(old)
+    result = print_request_receipt(old)
+    assert result['printed_document']['customer_document_rows'] == [{'customer_drawing_number': '0001234', 'quantity': 50}]
+    assert old == before

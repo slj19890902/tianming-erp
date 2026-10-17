@@ -2,6 +2,7 @@
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
+from copy import deepcopy
 
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
@@ -10,6 +11,24 @@ from sqlalchemy import select
 from app.models.delivery import DeliveryItem
 from app.services.customer_document_fields import decode_snapshot
 from app.services.delivery_snapshots import read_sales_contract
+
+
+def print_request_receipt(value):
+    """Idempotency receipts retain descriptions, never reusable sales amounts.
+
+    Also redact receipts written by older versions: a user's price permission
+    may have been revoked since the original request. Frozen sales contracts
+    remain the authority for prices; the document hash binds the printed view.
+    """
+    result = deepcopy(value)
+    result.pop('total_amount', None)
+    document = result.get('printed_document')
+    if isinstance(document, dict):
+        document.pop('total_amount', None)
+        for row in document.get('customer_document_rows', []):
+            for field in ('unit_price', 'amount', 'tax_mode'):
+                row.pop(field, None)
+    return result
 
 
 def enrich_customer_print(db, delivery, result, user, *, show_prices=None, order_context=None):

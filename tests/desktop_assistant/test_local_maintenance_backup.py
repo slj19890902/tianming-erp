@@ -56,6 +56,28 @@ def test_backup_failure_keeps_every_last_verified_point(scene,monkeypatch):
     assert {p['path']:p['sha256'] for p in native.completed_points()}==before
 
 
+def test_development_venv_and_link_references_preserve_runtime(scene,monkeypatch):
+    case,native,now=scene
+    base=case.root/'development';base.mkdir()
+    repo=base/'repository';repo.mkdir();builds=base/'builds';builds.mkdir()
+    workspace=base/'work';workspace.mkdir();venv=workspace/'.venv';venv.mkdir()
+    h='e'*64
+    (venv/'pyvenv.cfg').write_text('home = /Library/TianmingERP/published/'+h+'/migration/runtime/bin')
+    (builds/'old-alias').symlink_to('/Library/TianmingERP/published/'+'f'*64+'/package.zip')
+    monkeypatch.setattr(native,'GIT',repo);monkeypatch.setattr(native,'BUILDS',builds)
+    assert native.development_program_references()=={h,'f'*64}
+
+
+def test_unknown_venv_config_link_refuses_retirement(scene,monkeypatch):
+    case,native,now=scene
+    base=case.root/'development';base.mkdir()
+    repo=base/'repository';repo.mkdir();builds=base/'builds';builds.mkdir()
+    (repo/'pyvenv.cfg').symlink_to(base/'missing')
+    monkeypatch.setattr(native,'GIT',repo);monkeypatch.setattr(native,'BUILDS',builds)
+    with pytest.raises(ValueError,match='Unknown development runtime metadata'):
+        native.development_program_references()
+
+
 def test_verified_rotation_keeps_three_database_points_and_one_data_point(scene):
     case,native,now=scene
     for _ in range(5):

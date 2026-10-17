@@ -174,6 +174,32 @@ def database_path_references():
     return result
 
 
+def development_program_references():
+    """Read shallow local venv metadata/links, never traverse mounted links."""
+    result=set()
+    pattern=r'/Library/TianmingERP/published/([0-9a-f]{64})'
+    base=GIT.parent
+    folders=[base]
+    folders.extend(p for p in base.iterdir() if not p.is_symlink() and p.is_dir())
+    if BUILDS.is_dir() and not BUILDS.is_symlink():
+        folders.extend(p for p in BUILDS.iterdir() if not p.is_symlink() and p.is_dir())
+    for folder in folders:
+        config_paths=[folder/'pyvenv.cfg']
+        for p in folder.iterdir():
+            if p.is_symlink():
+                target=os.path.normpath(str(p.parent/os.readlink(p)))
+                result.update(re.findall(pattern,target))
+            elif p.is_dir():
+                config_paths.append(p/'pyvenv.cfg')
+        for p in config_paths:
+            try:s=p.lstat()
+            except FileNotFoundError:continue
+            if p.is_symlink() or not stat.S_ISREG(s.st_mode) or s.st_uid not in (0,501) or s.st_size>16384:
+                raise ValueError('Unknown development runtime metadata protects cleanup')
+            result.update(re.findall(pattern,p.read_text()))
+    return result
+
+
 def completed_points():
     p = POINTS
     if not p.is_dir():
@@ -517,6 +543,7 @@ def root_cleanup():
             receipts = delivery_receipts(manifests, state['current'], now=now)
             processes = process_values()
             extra = set(settings.get('protected_helper_packages', []))
+            extra.update(development_program_references())
             for name in ('system-service.json','factory-activation.json','current-mac-publication.json'):
                 p=BASE/name
                 if p.is_file():extra.update(re.findall('[0-9a-f]{64}',p.read_text()))
@@ -543,6 +570,8 @@ def root_cleanup():
             points = completed_points()
             keep = policy.protected_programs(state, manifests, additional=extra,
                                              point_programs=[p['program_sha256'] for p in points])
+            expanded_keep = policy.expanded_programs(state, additional=extra,
+                                             point_programs=[p['program_sha256'] for p in points])
             for folder in BUILDS.iterdir():
                 if folder.is_symlink() or not folder.is_dir():
                     continue
@@ -556,10 +585,13 @@ def root_cleanup():
                         for name in ('build-result.json','signing-request.json'):
                             p=folder/name
                             if p.is_file() and p.stat().st_size<1024**2:
-                                keep.update(re.findall('[0-9a-f]{64}',p.read_text()))
+                                refs_in_candidate = re.findall('[0-9a-f]{64}',p.read_text())
+                                keep.update(refs_in_candidate)
+                                expanded_keep.update(refs_in_candidate)
                 except (OSError,ValueError,zipfile.BadZipFile):
                     # Unreadable candidate: no original archives are retired this run.
                     keep.update(manifests)
+                    expanded_keep.update(manifests)
             refs = database_path_references()+proof['active_paths']
             controls = bytearray(raw)
             for name in ('system-service.json','factory-activation.json','current-mac-publication.json'):
@@ -644,7 +676,9 @@ def root_cleanup():
             candidates.update(p.name for p in (ROOT/'releases').iterdir() if policy.IDENTITY.fullmatch(p.name))
             candidates.update(p.stem for p in (ROOT/'packages').glob('*.zip') if policy.IDENTITY.fullmatch(p.stem))
             candidates.update(h for h in manifests if (BASE/'published'/h/'server').exists() or (BASE/'published'/h/'migration').exists())
-            for h in sorted(candidates-keep):
+            report['protected_originals'] = sorted(keep)
+            report['protected_expansions'] = sorted(expanded_keep)
+            for h in sorted(candidates-expanded_keep):
                 if h not in manifests or not policy.receipt_valid(receipts.get(h),h,manifests[h]['git_sha']):
                     continue
                 try:

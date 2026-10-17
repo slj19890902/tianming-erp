@@ -20,6 +20,21 @@ def test_invalid_fallback_stops_program_retirement():
         p.protected_programs({'current':'a'*64},{'a'*64:{'migration':{'rollback_package_sha256':'../escape'}}})
 
 
+def test_expansions_do_not_accumulate_transitive_signed_fallbacks():
+    a,b,c,d,e,f=('a'*64,'b'*64,'c'*64,'d'*64,'e'*64,'f'*64)
+    state={'current':a,'previous':b,'schema_authority':c}
+    manifests={a:{'migration':{'rollback_package_sha256':b}},
+               b:{'migration':{'rollback_package_sha256':d}},
+               d:{'migration':{'rollback_package_sha256':f}}}
+    assert p.protected_programs(state,manifests,additional=[e])=={a,b,c,d,e,f}
+    assert p.expanded_programs(state,additional=[e],point_programs=[d])=={a,b,c,d,e}
+    assert f not in p.expanded_programs(state,additional=[e],point_programs=[d])
+
+
+def test_missing_current_still_refuses_expansion_retirement():
+    with pytest.raises(ValueError):p.expanded_programs({'previous':'b'*64})
+
+
 @pytest.mark.parametrize('extra',[{'manual_stop':True},{'onboarding_pending':True},
     {'backup_work_retained':['one']},{'operation':'migration_running'}, {'operation':'update_failed'}])
 def test_incomplete_or_failed_operation_has_no_cleanup(extra):

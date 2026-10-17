@@ -70,6 +70,16 @@ def protected_programs(state, manifests, *, additional=(), point_programs=()):
                 pending.append(fallback)
     return keep
 
+
+def expanded_programs(state, *, additional=(), point_programs=()):
+    """Live/recovery roles need expansions; transitive fallbacks need originals.
+
+    An old signed fallback archive remains protected by protected_programs.
+    Its reproducible expansion is not an additional running or restore role.
+    """
+    return protected_programs(state, {}, additional=additional,
+                              point_programs=point_programs)
+
 def maintenance_admitted(state, *, running, healthy):
     operation = state.get('operation', '')
     return bool(running and healthy and state.get('current')

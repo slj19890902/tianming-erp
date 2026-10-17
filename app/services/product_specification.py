@@ -157,17 +157,16 @@ def resolved_product_specification(
 
 
 def delivery_specification(product):
-    """Employee delivery display uses the registered die location and mold count."""
-    from app.services.sheet_cutting_settings import component_settings
-    from app.services.sheet_cutting_contract import SheetCuttingContractError
-    try:
-        setting = component_settings(getattr(product, 'sheet_cutting_settings', None))
-    except SheetCuttingContractError:
-        setting = None
-    if setting and setting.is_die_cut:
-        mold = getattr(product, 'mold_tool', None)
-        valid = (mold is not None and mold.is_active and mold.deleted_at is None
-                 and mold.archive_status == 'active' and product.mold_tool_id == mold.id)
-        location = str(mold.rack_location or '').strip() if valid else ''
-        return ' · '.join(filter(None, [location, f'{setting.mold_count}模']))
+    """Only the common-box product specification belongs on a delivery note.
+
+    Tool locations, mold counts, report sizes and names are not finished sizes.
+    Keep the separate warehouse/production specification resolver unchanged.
+    """
+    if product is None:
+        return ''
+    if getattr(product, 'supply_mode', None) == 'external_purchase':
+        text = str(getattr(product, 'external_packaging_specification_summary', None) or '').strip()
+        if text in _MISSING_SPECIFICATIONS or any(note in text for note in ('待完善', '待补', '未登记')):
+            return ''
+        return text
     return product_dimension_specification(product) or ''

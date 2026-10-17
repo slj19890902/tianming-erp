@@ -67,7 +67,9 @@
       columns.forEach(col => {
         const label = col.key === 'specification'
           ? `${col.label.replace(/\s*[（(]?\s*(?:mm|毫米)\s*[）)]?/gi, '').trim()}（mm）` : col.label;
-        tr.append(node('th', label));
+        const th = node('th', label);
+        if (col.key === 'unit') th.classList.add('cd-unit');
+        tr.append(th);
       }); head.append(tr); table.append(head);
     }
     const tbody = node('tbody');
@@ -78,6 +80,7 @@
       } else {
         columns.forEach((col, index) => {
           const td = node('td', entry.values[index], numericKeys.has(col.key) ? 'cd-numeric' : '');
+          if (col.key === 'unit') td.classList.add('cd-unit');
           if (compact && ['product_code','customer_material_code','quantity'].includes(col.key))
             td.classList.add(col.key === 'quantity' ? 'cd-large-quantity' : 'cd-large-code');
           if (col.key === 'customer_po') {

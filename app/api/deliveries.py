@@ -11264,7 +11264,7 @@ def get_delivery(
     records = list(db.scalars(select(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id, DeliveryItem.is_current.is_(True))))
     descriptions = current_descriptions(db, delivery, records)
     for item in result["items"]:
-        item.update(descriptions.get(item["id"], {}))
+        item.update(descriptions.get(item["id"], {"specification": "", "delivery_specification": ""}))
     present_component_descriptions(db, delivery, result['items'])
     from app.api.orders import _can_view_order_sales_amount
     if _can_view_order_sales_amount(user):

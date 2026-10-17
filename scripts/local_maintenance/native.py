@@ -582,6 +582,7 @@ def root_cleanup():
                     if not p.is_file() or p.is_symlink() or time.time()-p.stat().st_mtime < 3600:
                         continue
                     try:
+                        idle(p)
                         fp=policy.stable_file(p,uid=501)
                         with zipfile.ZipFile(p) as z:
                             manifest=json.loads(z.read('manifest.json'))

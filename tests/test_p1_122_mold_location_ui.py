@@ -12,9 +12,9 @@ from test_p1_111_mold_location_filters import _seed_filter_matrix
 @pytest.mark.parametrize(
     ("location", "expected"),
     [
-        ("1F-M-R01-L2-G01", "一楼，左架，第2层、第1格"),
-        ("1F-M-R02-L2-G03", "一楼，中架，第2层、第3格"),
-        ("1F-M-R03-L1", "一楼，右架，第1层"),
+        ("1F-M-R01-L2-G01", "R01-2-1"),
+        ("1F-M-R02-L2-G03", "R02-2-3"),
+        ("1F-M-R03-L1", "R03-1"),
     ],
 )
 def test_mold_location_employee_names_are_short_and_do_not_change_codes(

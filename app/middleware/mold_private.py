@@ -18,7 +18,7 @@ class MoldPrivateNoStoreMiddleware:
 
     @staticmethod
     def _matches(path: str) -> bool:
-        if path in {"/api/warehouse/molds/labels","/api/warehouse/molds/cell","/api/warehouse/molds/by-map-rack",
+        if path in {"/api/warehouse/molds/label-texts","/api/warehouse/molds/labels","/api/warehouse/molds/cell","/api/warehouse/molds/by-map-rack",
                     "/api/warehouse/molds/by-map-area","/api/warehouse/molds/location-labels","/m/mold-rack","/m/mold-cell"}:
             return True
         if path.startswith("/api/warehouse/molds/live/"):

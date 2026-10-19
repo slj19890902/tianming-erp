@@ -137,6 +137,7 @@ export function moldRackLevelUsage(items) {
 
 export function buildMoldRackView(rack, items, blockedLevels = []) {
   const counts = normalizedLevelCounts(rack);
+  const compactRack = /^R0[1-4]$/.test(normalizedIdentity(rack.mold_rack_code || rack.rack_code)) ? normalizedIdentity(rack.mold_rack_code || rack.rack_code) : null;
   const blocked = new Set((blockedLevels || []).map((value) => Number(value)));
   const levels = counts.map((cellCount, index) => ({
     level: index + 1,
@@ -145,6 +146,7 @@ export function buildMoldRackView(rack, items, blockedLevels = []) {
     cells: Array.from({ length: cellCount }, (_, cellIndex) => ({
       grid: cellIndex + 1,
       ...((rack.cells || rack.mold_cells || []).find(cell => Number(cell.level) === index + 1 && Number(cell.grid) === cellIndex + 1) || {}),
+      ...(compactRack ? {alias: `${compactRack}-${index + 1}-${cellIndex + 1}`} : {}),
       items: []
     })),
     level_only_items: []
@@ -198,7 +200,9 @@ export function moldBatchPayload(items, target, key) {
 
 export function moldLocationChoices(options) {
   return (options || []).flatMap(rack => {
-    const label = `${rack.floor_code || "1F"} · ${rack.name}`;
+    const code = normalizedIdentity(rack.mold_rack_code || rack.rack_code);
+    const compact = /^R0[1-4]$/.test(code);
+    const label = compact ? code : `${rack.floor_code || "1F"} · ${rack.name}`;
     if (rack.location_depth === "rack") {
       const value = buildMoldLocationTarget(rack, 0, 0);
       return value ? [{value, label}] : [];
@@ -206,12 +210,12 @@ export function moldLocationChoices(options) {
     return (rack.levels || []).flatMap(level => {
       if (rack.location_depth === "level") {
         const value = buildMoldLocationTarget(rack, level.level, 0);
-        return value ? [{value, label: `${label} · 第${level.level}层`}] : [];
+        return value ? [{value, label: compact ? `${label}-${level.level}` : `${label} · 第${level.level}层`}] : [];
       }
       return (level.grids || []).flatMap(grid => {
         const value = buildMoldLocationTarget(rack, level.level, grid);
         const alias = rack.cells?.find(cell => Number(cell.level) === Number(level.level) && Number(cell.grid) === Number(grid))?.alias;
-        return value ? [{value, label: `${label} · ${alias || `第${level.level}层第${grid}格`}`}] : [];
+        return value ? [{value, label: compact ? `${label}-${level.level}-${grid}` : `${label} · ${alias || `第${level.level}层第${grid}格`}`}] : [];
       });
     });
   });

@@ -164,3 +164,18 @@ test("层占用统计只计算已有明确层号的正式模具", () => {
 
   assert.deepEqual([...usage.entries()], [[2, 2], [3, 1]]);
 });
+
+test("R01至R04位置简写覆盖旧显示别名但保留稳定身份与移动目标", () => {
+  for (const code of ["R01", "R02", "R03", "R04"]) {
+    const cell = {id:"fixed",location_code:"MCELL-fixed",alias:"旧格名",level:2,grid:1};
+    const rack = {mold_rack_code:code,levels:2,level_cell_counts:[1,1],cells:[cell]};
+    const before = structuredClone(rack);
+    const shown = buildMoldRackView(rack,[]).levels[1].cells[0];
+    assert.equal(shown.alias,`${code}-2-1`);
+    assert.equal(shown.id,"fixed");assert.equal(shown.location_code,"MCELL-fixed");
+    assert.deepEqual(rack,before);
+    const choices=moldLocationChoices([{rack_code:code,name:"旧架名",location_depth:"grid",levels:[{level:2,grids:[1]}],cells:[cell]}]);
+    assert.deepEqual(choices,[{value:"MCELL-fixed",label:`${code}-2-1`}]);
+  }
+  assert.equal(moldLocationChoices([{rack_code:"R03",name:"旧层",location_depth:"level",levels:[{level:2,grids:[]}]}])[0].label,"R03-2");
+});

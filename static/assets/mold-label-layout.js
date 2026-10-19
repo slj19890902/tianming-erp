@@ -312,7 +312,13 @@
     return envelope;
   }
 
+  function compactRackPosition(value) {
+    const raw=String(value||""), match=raw.match(/^1F-M-(R0[1-4])(?:-L([1-9]\d*))?(?:-G(0*[1-9]\d*))?$/i);
+    return match ? [match[1].toUpperCase(),match[2]&&Number(match[2]),match[3]&&Number(match[3])].filter(Boolean).join("-") : raw;
+  }
+
   function valueForElement(row, elementId, catalogVersion = V3_CATALOG_VERSION) {
+    if (Object.prototype.hasOwnProperty.call(row?.label_text_overrides||{}, elementId)) return String(row.label_text_overrides[elementId]);
     const product = Array.isArray(row?.products) ? row.products[0] : null;
     if ([V11_CATALOG_VERSION,V12_CATALOG_VERSION,V13_CATALOG_VERSION].includes(catalogVersion)) {
       const products=Array.isArray(row?.products)?row.products:[];
@@ -320,7 +326,7 @@
       const drawings=[...new Set((row?.label_drawing_numbers?.length ? row.label_drawing_numbers : products.map(p=>p.customer_drawing_number)).map(x=>String(x||"").trim()).filter(Boolean))];
       const code=codes.join(" / ") || String(row?.label_inventory_code||"待完善");
       const values={inventory_code_top:code,drawing_number:catalogVersion === V13_CATALOG_VERSION ? String(row?.label_title_text || "待完善") : drawings.join(" / ")||"待完善",
-        rack_location:`位置 ${String(row?.label_rack_location||"待完善")}`,
+        rack_location:compactRackPosition(row?.label_rack_location||"待完善"),
         cutting_mode:String(row?.label_mold_count||"几模待核"),
         customer_name:String(row?.label_customer_name||product?.customer_short_name||"待完善"),
         inventory_code_side:code,
@@ -339,7 +345,7 @@
         sizes=[...new Set(products.map(p=>`${p.customer_short_name||""} ${p.product_code||"待完善"}：${p.report_specification||"待完善"}`.trim()))].join(" / ");
       }
       const values={inventory_code_top:code,inventory_code_side:code,customer_name:customer,
-        rack_location:String(row?.label_rack_location||"待完善"),
+        rack_location:compactRackPosition(row?.label_rack_location||"待完善"),
         cutting_mode:catalogVersion === V10_CATALOG_VERSION ? String(row?.label_mold_count || "几模待核") : String(row?.label_display_cutting_mode ?? row?.label_cutting_mode ?? product?.default_cutting_mode ?? "待完善"),
         custom_note:[...new Set(notes.map(x=>String(x).trim()).filter(Boolean))].join(" · "),
         report_specification:`片料尺寸：${sizes.replace(/\s*[×x*]\s*/g,"×").replace(/mm\s*$/i,"")}mm`};
@@ -442,6 +448,7 @@
   }
 
   function textElementHtml(row, element, catalogVersion) {
+    if(Object.prototype.hasOwnProperty.call(row?.label_text_overrides||{},element.id)) return escapeHtml(row.label_text_overrides[element.id]);
     if ([V11_CATALOG_VERSION,V12_CATALOG_VERSION,V13_CATALOG_VERSION].includes(catalogVersion) && element.id === "drawing_number" && !(catalogVersion === V13_CATALOG_VERSION && row?.label_title_kind === "name")) {
       return `<span class="mold-drawing-key">图号</span><span class="mold-drawing-value">${escapeHtml(valueForElement(row, element.id, catalogVersion))}</span>`;
     }
@@ -475,7 +482,7 @@
     validateEnvelope(envelope);
     const prototypeMode = options.prototypeMode === true;
     const elements = envelope.layout.elements.filter((element) => element.visible !== false).map((element) => {
-      const style = elementInlineStyle(element);
+      const style = elementInlineStyle(element) + (Object.prototype.hasOwnProperty.call(row?.label_text_overrides||{},element.id) ? ";white-space:pre-wrap" : "");
       if (element.kind === "qr") {
         return row?.qr_data_url
           ? `<img class="mold-layout-element mold-layout-qr" data-layout-id="mold_qr" style="${style}" src="${escapeHtml(row.qr_data_url)}" alt="扫码查看模具实时信息">`
@@ -497,9 +504,9 @@
       const fitAttributes = minFontSize === undefined || minFontSize === null
         ? ""
         : ` data-min-font-mm="${minFontSize}" data-full-text="${escapeHtml(value)}"`;
-      return `<div class="mold-layout-element mold-layout-text${identityClass}${isIncompleteText(value) ? " missing" : ""}" data-layout-id="${escapeHtml(element.id)}" data-title-kind="${escapeHtml(envelope.layout.catalog_version === V13_CATALOG_VERSION ? row?.label_title_kind || "drawing" : "drawing")}" ${isCellLabel ? 'data-mold-cell-label="true"' : ""} data-layout-label="${escapeHtml(element.id === "drawing_number" && envelope.layout.catalog_version === V13_CATALOG_VERSION && row?.label_title_kind === "name" ? "产品标签简称" : ELEMENT_LABELS[element.id])}" data-max-font-mm="${Number(element.font_size_mm)}"${fitAttributes} style="${style}">${textElementHtml(row, element, envelope.layout.catalog_version)}</div>`;
+      return `<div class="mold-layout-element mold-layout-text${identityClass}${isIncompleteText(value) ? " missing" : ""}" data-layout-id="${escapeHtml(element.id)}" data-text-overridden="${Object.prototype.hasOwnProperty.call(row?.label_text_overrides||{},element.id)}" data-title-kind="${escapeHtml(envelope.layout.catalog_version === V13_CATALOG_VERSION ? row?.label_title_kind || "drawing" : "drawing")}" ${isCellLabel ? 'data-mold-cell-label="true"' : ""} data-layout-label="${escapeHtml(element.id === "drawing_number" && envelope.layout.catalog_version === V13_CATALOG_VERSION && row?.label_title_kind === "name" ? "产品标签简称" : ELEMENT_LABELS[element.id])}" data-max-font-mm="${Number(element.font_size_mm)}"${fitAttributes} style="${style}">${textElementHtml(row, element, envelope.layout.catalog_version)}</div>`;
     }).join("");
-    return `<article class="mold-label-page" data-layout-catalog="${escapeHtml(envelope.layout.catalog_version)}"><div class="label template-80x40 layout-driven">${elements}${prototypeMode ? '<span class="prototype-mark">样例</span>' : ""}</div></article>`;
+    return `<article class="mold-label-page" data-mold-id="${Number(row?.mold_id)||0}" data-layout-catalog="${escapeHtml(envelope.layout.catalog_version)}"><div class="label template-80x40 layout-driven">${elements}${prototypeMode ? '<span class="prototype-mark">样例</span>' : ""}</div></article>`;
   }
 
   function fitAndValidate(container) {
@@ -508,7 +515,7 @@
       let size = Number(node.dataset.maxFontMm);
       const minimum = Number(node.dataset.minFontMm);
       const fullText = node.dataset.fullText || node.textContent || "";
-      if (node.dataset.layoutId === "drawing_number" && node.dataset.titleKind !== "name" && [V11_CATALOG_VERSION,V12_CATALOG_VERSION,V13_CATALOG_VERSION].includes(node.closest('.mold-label-page')?.dataset.layoutCatalog)) {
+      if (node.dataset.textOverridden !== "true" && node.dataset.layoutId === "drawing_number" && node.dataset.titleKind !== "name" && [V11_CATALOG_VERSION,V12_CATALOG_VERSION,V13_CATALOG_VERSION].includes(node.closest('.mold-label-page')?.dataset.layoutCatalog)) {
         node.innerHTML = `<span class="mold-drawing-key">图号</span><span class="mold-drawing-value">${escapeHtml(fullText)}</span>`;
       } else node.textContent = fullText;
       delete node.dataset.truncated;

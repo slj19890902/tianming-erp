@@ -143,6 +143,12 @@ class Manager:
                 from desktop_assistant.attribution_compatibility import unchanged_attribution_reader
                 if not unchanged_attribution_reader(self, release, revision, authority):
                     return False
+        from desktop_assistant.reader_contract import has_mold_label_text_facts, MOLD_LABEL_TEXT_READER
+        if database.is_file():
+            with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+                db.execute('PRAGMA query_only=ON')
+                if has_mold_label_text_facts(db) and not self._shared_finished_reader(release, MOLD_LABEL_TEXT_READER):
+                    return False
         # Additive JSON business facts can change semantics without an Alembic
         # revision change. Check the signed reader contract before that shortcut.
         activation = self.state.get('order_inventory_activation')

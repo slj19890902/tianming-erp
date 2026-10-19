@@ -332,7 +332,7 @@ def main():
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
                             'revision': args.revision, 'git_sha': code_sha, 'migration': migration,
                             'schema_contract': schema_contract,
-                            'reader_capabilities': {'order_inventory_v1': 1, 'quotation_write_v1': 1,
+                            'reader_capabilities': {'order_inventory_v1': 1, 'mold_label_text_v3': 1, 'quotation_write_v1': 1,
                                                     'shared_finished_v1': 1,
                                                     'shared_finished_management_v1': 1,
                                                     'shared_customer_members_v1': 1,

@@ -914,3 +914,7 @@ eo1010pi→ep1010md仅给mold_tools新增三个可空删除标记/凭证字段�
 ## 2026-10-19 实际收料规格 es1019ra（候选）
 
 er1016pa→es1019ra 仅新增 incoming_receipt_actual_specs，不回填历史。保存每笔实际材质、纸板尺寸、开料/模数及确认人，原采购和常用箱不变。有实际规格事实时拒绝降级；Manager 必须验证签名 actual_receipt_specs_v1 读取能力。无新事实的启动失败可由已签名 schema_authority 允许兼容旧版运行，不覆盖数据库。正式发布前要求最新副本升降升、原表事实与索引/触发器保留、实际规格收料/成本/撤销定向验证，见 docs/tasks/INCOMING_ACTUAL_20261019.md。
+
+## 2026-10-19 已入库成品标签 et1019fl
+
+es1019ra→et1019fl只新增独立finished_product_label_print_jobs空表及冻结内容/生命周期保护，不改写原业务事实。空表允许隔离升降升；存在任何作业在DDL前拒绝有损降级。正式采用Manager最新时点备份、完整恢复验证、签名包隔离演练、所有旧表事实/附件保留核对，管理员人工验收标签机出纸。技术结果见FINISHED_PRODUCT_LABELS_20261019独立回执。

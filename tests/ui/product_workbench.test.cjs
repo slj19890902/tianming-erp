@@ -24,6 +24,7 @@ test('sheet discovery selects actual batch, filters recommendations and returns 
  await h.instance.query({length:800,width:600},2,'sheets');assert.match(paths.at(-1),/\/sheets\?/);assert.match(h.root.textContent,/可用 8 张/);assert.match(h.root.textContent,/三楼原料区/);
  click(h,'[data-sheet="0"]');await tick();let q=new URL(paths.at(-1),'http://localhost').searchParams;assert.equal(q.get('lot_id'),'97');assert.equal(q.get('processed_state'),null);
  for(const text of ['存货编码 / 产品','成品尺寸','报料材质','报料尺寸','匹配度','图纸','查看资料','100%','K=A'])assert.ok(h.root.textContent.includes(text),text);
+ assert.equal(h.root.querySelector('.pw-match-details'),null);assert.doesNotMatch(h.root.textContent,/匹配说明|待核对|仅供查找|核对实际/);
  assert.equal(h.root.querySelector('[name="length"]').readOnly,true);assert.equal(h.root.querySelector('[name="flute_type"]').disabled,true);
  fill(h,'min_score','90');await tick();q=new URL(paths.at(-1),'http://localhost').searchParams;assert.equal(q.get('min_score'),'90');assert.equal(q.get('lot_id'),'97');assert.equal(q.get('flute_type'),'B');assert.equal(q.get('page'),'1');
  click(h,'[data-product="17"]');await tick();assert.equal(h.instance.snapshot().productId,17);click(h,'[data-back]');assert.ok(h.root.querySelector('.pw-reverse-results'));

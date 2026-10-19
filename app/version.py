@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.685"
-APP_VERSION_NAME = "库存片料弹窗与定向匹配"
+APP_VERSION = "v0.22.686"
+APP_VERSION_NAME = "工作台片料查询与用途推荐"
 APP_BUILD_DATE = "2026-10-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6700,3 +6700,18 @@ APP_VERIFICATION_STEPS = [
     "实际抵扣后核对全部覆盖免报料、部分覆盖仅保留缺口；取消或关闭不改变库存。",
 ]
 APP_CHANGELOG = [*(f"v0.22.685：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.686：今日工作台片料查库存与常用箱用途推荐。
+APP_CHANGES = [
+    "今日工作台增加按片料原长宽查找原料及半成品库存，选中后直接推荐常用箱。",
+    "片料找用途按长宽与楞型搜索并自动显示层数，取消材质、现状和层数搜索输入。",
+    "推荐结果展示存货编码、产品、成品尺寸、报料材质、报料尺寸、匹配度、图纸及查看资料，支持匹配度筛选。",
+    "取消匹配依据中的冗长说明和待核对等文字。",
+]
+APP_VERIFICATION_STEPS = [
+    "今日工作台点击按尺寸找片料，输入实际长宽，选中库存查看推荐常用箱。",
+    "片料找用途填写长宽并选择B瓦，核对自动显示三层及匹配度筛选。",
+    "核对结果字段、图纸与查看资料，匹配依据说明已取消。",
+]
+APP_CHANGELOG = [*(f"v0.22.686：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

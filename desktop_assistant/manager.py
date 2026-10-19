@@ -140,7 +140,9 @@ class Manager:
             if purchase_identity_contract and not self._shared_finished_reader(release, "stock_purchase_identity_v1"):
                 return False
             if attribution_facts and self.manifest(release)['revision'] != revision:
-                return False
+                from desktop_assistant.attribution_compatibility import unchanged_attribution_reader
+                if not unchanged_attribution_reader(self, release, revision, authority):
+                    return False
         # Additive JSON business facts can change semantics without an Alembic
         # revision change. Check the signed reader contract before that shortcut.
         activation = self.state.get('order_inventory_activation')

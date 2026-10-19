@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.679"
-APP_VERSION_NAME = "区域名称独立保存与地图同步"
+APP_VERSION = "v0.22.680"
+APP_VERSION_NAME = "盘点预占接续与光洋送货修复"
 APP_BUILD_DATE = "2026-10-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6664,3 +6664,17 @@ APP_VERIFICATION_STEPS = [
     "刷新后核对地图和区域下拉保留新名称，分别选择原同名区域的货架核对归属。",
 ]
 APP_CHANGELOG = [*(f"v0.22.679：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.680：盘点减少优先扣未预占库存，接续同身份成品预占。
+APP_CHANGES = [
+    "盘点减少先扣未预占成品；原批次实盘不足时，在同一事务中从同客户、同产品且实物身份相符的可用批次接续订单预占。",
+    "旧盘点已释放预占而新批次随后到货时，发货前受控补足预占；真正不足明确提示缺口，不再显示模糊的发货结果错误。",
+    "光洋 GY-20261017-002 的 300 件旧批次预占失效可由有效批次接续；不回写历史盘点、完工、送货或成本事实。",
+    "本版无数据库结构迁移，保留v674库存来源与生产入库分流。",
+]
+APP_VERIFICATION_STEPS = [
+    "盘点 3000 件（预占 300）为 2700 件后，核对预占仍为 300 件。",
+    "在“5.送货”打开光洋 GY-20261017-002，按原数量发货打印并核对总数 3010 件，其中 80012273 为 300 件。",
+    "发货成功后确认回单；若提示结果不明，使用原请求标识核对结果，不盲目重新提交。",
+]
+APP_CHANGELOG = [*(f"v0.22.680：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -1,6 +1,6 @@
 # 今日工作台片料查库存与找用途（2026-10-19）
 
-状态：开发验证通过，尚未正式发布。管理员正式页面验收待发布后执行。
+状态：v0.22.686 技术发布完成，服务正常，原生备份收尾完成；管理员正式页面验收待实际反馈。
 
 功能候选提交：`8c6494bc9f9ebe7f533116f313338fcb9660521c`。已保存本地独立分支；尝试推送 GitHub 时 HTTPS 认证缺少可用用户名凭据，退出 128，未宣称候选已推送。发布前须重新核对当时正式运行版本及其他并行更新。
 
@@ -9,15 +9,15 @@
 - 今日工作台共享产品搜索增加“按尺寸找片料”：输入原料/半成品实际长宽，按原方向精确查询所有授权范围内有可用或占用实存的 active 片料批次，支持分页，含未绑定产品的库存；楞型可选。列表显示名称、长宽、楞型/材质、实存/可用/占用、真实位置及“选中查用途”。
 - 选中后沿实际批次身份自动查常用箱用途，保留真实加工类型和客户权限；查询不形成预占、库存抵扣或用途绑定。可以重新选片料并返回原查询页。
 - “片料找用途”只要求长宽和楞型，自动显示层数；移除材质代码、现状和层数输入。A/B/E 为三层、AB/BE 为五层、AAA/ABC 为七层、NONE 卡纸为单层。服务端验证楞型和自动层数，实际批次事实有冲突时拒绝。
-- 推荐结果展示存货编码、产品、成品尺寸、报料材质、对应报料长宽、匹配度、图纸及查看资料。匹配解释默认折叠；图纸继续使用原授权及按需加载入口。底料批次显示对应底料报料长宽。
+- 推荐结果展示存货编码、产品、成品尺寸、报料材质、对应报料长宽、匹配度、图纸及查看资料。匹配依据、待核对及冗长说明文字已按老板追加要求全部取消；图纸继续使用原授权及按需加载入口。底料批次显示对应底料报料长宽。
 - 匹配度提供全部、70%/80%/90%及以上、100%筛选；筛选在分页前执行，保留原匹配排序和不旋转规则。实际批次沿用现有尺寸/工艺匹配分数；手填尺寸按原方向报料面积占片料面积计算尺寸相似度，不把分数或矩形尺寸当作实际可用、已确认产出或分配授权。
 - 卡纸小数尺寸通过字符串转 Decimal 核对，避免 120.10×80.20 等实际片料在选中后因二进制小数误差被误判为尺寸不一致。
 
 ## 基线与文件
 
-独立工作区 `/Users/kimiyf/ERP-Migration/workbench-sheet-search-20261019`，分支 `codex/workbench-sheet-search-20261019`。实时正式业务 PID69732 运行 v685 签名包 `b89f96c4617bf9657c556eeccd97535d87ae4f59ce30ff230bfcc386a9848562`；候选从对应发布回执 `278a44b1` 建立。实时 GitHub factory-current-baseline 查询仍为 `b9a077bc115cc649cdc2753cab3dfb3d75269d1c`，落后实际正式代码，未覆盖已上线功能。
+独立工作区 `/Users/kimiyf/ERP-Migration/workbench-sheet-search-20261019`，分支 `codex/workbench-sheet-search-20261019`。开发时正式业务 PID69732 运行 v685 签名包 `b89f96c4617bf9657c556eeccd97535d87ae4f59ce30ff230bfcc386a9848562`；候选从对应发布回执 `278a44b1` 建立。实时 GitHub factory-current-baseline 查询仍为 `b9a077bc115cc649cdc2753cab3dfb3d75269d1c`，落后实际正式代码，未覆盖已上线功能。
 
-生产文件：`app/api/product_workbench.py`、`app/services/product_workbench.py`、新增 `app/services/workbench_sheet_search.py`、`static/ui/product-workbench.js/css`、`static/index.html`、`static/mobile_erp.html`。无 DDL，无正式业务数据写入，无正式停服或重启。
+生产文件：`app/api/product_workbench.py`、`app/services/product_workbench.py`、新增 `app/services/workbench_sheet_search.py`、`static/ui/product-workbench.js/css`、`static/index.html`、`static/mobile_erp.html`。无 DDL；本次已按授权完成 Manager 串行停启更新，检查仅只读，未执行正式库存抵扣等业务操作。
 
 ## 验证
 
@@ -26,6 +26,16 @@
 - Chrome 隔离示例交互通过，电脑 1440px 与手机 390px 截图已人工查看；浏览器使用示例回执，不连接正式业务 API。没有自动点击正式页面，没有用技术检查替代管理员正式验收。
 - Python 编译、JavaScript 语法、git diff --check 通过；唯一 Alembic head `et1019fl`。桌面/手机 HTML 都使用当前 JS/CSS 内容 hash，详见证据 `asset-shas.json`。
 - 证据目录：`/Users/kimiyf/ERP-Migration/evidence/workbench-sheet-search-20261019`，包括后端 XML/日志、前端日志、Chrome 预览脚本/回执、电脑库存及用途截图、手机用途截图。
+
+## v0.22.686 正式发布回执
+
+- 老板明确授权“取消 然后发布”；匹配依据、待核对及冗长说明文字已取消，保留实际字段和匹配度。
+- 正式源码 `281eed29c8551324d388fffffabe5e2249aa25aa`；签名包 `d407b603602330a78993637caa8e9e89d5f803c01b8419b114888a66176f5e01`；manifest SHA-256 `a5a272d3d6897f35ed8e3eb833898ec87265018c765cf0274a004c1fecfac604`。旧包 `b89f96c4617bf9657c556eeccd97535d87ae4f59ce30ff230bfcc386a9848562`，源/目标 revision 均为 `et1019fl`，无 schema 变更，依赖运行时保持。
+- 完整时点备份 `/Library/TianmingERP/instance/backups/20261019-193953-4b93426b.tmbackup`；SHA-256 `1350c0b727c9d2d0263b0aa6730c9f71cdca90c3d9c8e4de1b2e01fe823d76dc`。完整备份及独立恢复验证通过，备份保留，恢复工作副本已通过原生流程闭合。
+- 在线演练附件核对 3066 个；隔离启动 326 张业务表及 schema 不变。正式只读查询：片料批次 4、库存行 4、用途推荐 116、90%以上筛选推荐 6，无跳过样本；完整性 ok、外键错误 0，无业务写入。
+- 正式 PID 78629，健康及页面/JS/CSS资源 HTTP 200；独立核对静态字节与签名清单一致，JS 中匹配说明模块已移除，匿名库存接口 401。
+- `stop_requested` 2026-10-19T11:39:31.237604+00:00；`process_ready` 2026-10-19T11:45:43.266017+00:00，约 372.03 秒。临时演练载荷、隔离启动快照及重复签名包已清理，`backup_work_retained=false`、`manual_stop=false`、`healthy=true`。
+- 最终回执 `/Library/TianmingERP-Release-20261019-v686/final-result.json`，本地证据 `/Users/kimiyf/ERP-Migration/evidence/workbench-sheet-search-20261019/release-v686`；状态 `technical_release_and_native_closure_complete`。正式页面未做自动点击，人工验收按管理员实际反馈记录。
 
 ## 发布后最短人工核对
 

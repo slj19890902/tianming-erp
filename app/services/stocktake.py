@@ -1074,11 +1074,14 @@ def approve_stocktake(
             remember_stocktake(db, lot, reviewer.id, follow_position=True)
     adjustments: list[dict[str, object]] = []
     movement_bindings: list[tuple[StocktakeItem, int]] = []
+    released_for_rebalance: list[dict] = []
     for lot in lots:
         item = items_by_lot[lot.id]
         released_shortfall = _release_count_shortfall(
             db, lot=lot, counted=int(item.counted_quantity), reviewer=reviewer,
             order_number=order.order_number, key=key)
+        if lot.inventory_type == "finished":
+            released_for_rebalance.extend(released_shortfall)
         before_available = int(lot.quantity_available)
         reserved = int(lot.quantity_reserved)
         new_available = int(item.counted_quantity) - reserved
@@ -1132,6 +1135,29 @@ def approve_stocktake(
             }
         )
 
+    # Apply every physical count first. Only the genuinely remaining, unreserved
+    # stock can receive a replacement order reservation. This is in the same
+    # transaction as the stocktake, so a failed ledger write rolls it all back.
+    if released_for_rebalance:
+        from app.services.finished_stock_rebalance import reserve_released_finished
+        from collections import defaultdict
+        deficits = defaultdict(int)
+        for release in released_for_rebalance:
+            if release["order_item_id"] is not None:
+                deficits[int(release["order_item_id"])] += int(release["shortage_quantity"])
+        rebalanced = []
+        for order_item_id, quantity in sorted(deficits.items()):
+            assigned = reserve_released_finished(
+                db, order_item_id=order_item_id, quantity=quantity,
+                operator_id=reviewer.id,
+                operation_key=f"stocktake:{order.id}:{key}:order:{order_item_id}",
+                reason="stocktake_rebalance")
+            rebalanced.append({"order_item_id": order_item_id,
+                               "released_quantity": quantity,
+                               "reassigned_quantity": assigned})
+    else:
+        rebalanced = []
+
     order.status = "approved"
     order.version += 1
     order.reviewed_by = reviewer.id
@@ -1152,7 +1178,7 @@ def approve_stocktake(
         to_status="approved",
         reason=reason,
         idempotency_key=key,
-        details_json={"adjustments": adjustments},
+        details_json={"adjustments": adjustments, "rebalanced": rebalanced},
         reviewed_by=reviewer.id,
         reviewed_at=reviewed_at,
     )
@@ -1168,6 +1194,7 @@ def approve_stocktake(
                 "idempotency_key": key,
                 "reason": reason,
                 "adjustments": adjustments,
+                "rebalanced": rebalanced,
             },
             ip_address=ip_address,
             user_agent=user_agent,

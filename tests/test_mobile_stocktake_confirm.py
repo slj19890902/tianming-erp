@@ -35,8 +35,12 @@ def _seed_count_reservations(factory, ids):
         return row_ids
 
 
-@pytest.mark.parametrize("counted, released", [(19, [0, 1]), (9, [1, 10]), (0, [10, 10])])
-def test_admin_shortage_keeps_oldest_reservation_and_replays_once(stocktake_api, counted, released):
+@pytest.mark.parametrize("counted, released, covered", [
+    (19, [0, 1], [10, 10]),
+    (9, [1, 10], [10, 6]),
+    (0, [10, 10], [7, 0]),
+])
+def test_admin_shortage_keeps_oldest_reservation_and_replays_once(stocktake_api, counted, released, covered):
     app, factory, ids = stocktake_api
     reservation_ids = _seed_count_reservations(factory, ids)
     with TestClient(app) as client:
@@ -58,17 +62,24 @@ def test_admin_shortage_keeps_oldest_reservation_and_replays_once(stocktake_api,
         assert all(db.get(OrderItem, row.order_item_id).quantity == 100 for row in rows)
         from app.api.deliveries import _inventory_sources_for_order_item
         from app.services.warehouse_inventory import active_finished_reserved_qty
-        for row, loss in zip(rows, released):
+        for row, expected_coverage in zip(rows, covered):
             item = db.get(OrderItem, row.order_item_id)
-            assert active_finished_reserved_qty(db, item.id) == 10 - loss
+            assert active_finished_reserved_qty(db, item.id) == expected_coverage
             sources = _inventory_sources_for_order_item(db, order_item=item, planned_delivery_quantity=10)
-            assert sum(source["quantity_to_pick_stock"] for source in sources) == 10 - loss
+            assert sum(source["quantity_to_pick_stock"] for source in sources) == expected_coverage
+        replacement = db.get(InventoryLot, ids["other_lot"])
+        rebalanced_quantity = min(sum(released), 7)
+        assert (replacement.quantity_available, replacement.quantity_reserved) == (
+            7 - rebalanced_quantity, rebalanced_quantity
+        )
         movements = list(db.scalars(select(InventoryMovement).order_by(InventoryMovement.id)))
-        assert len(movements) == sum(value > 0 for value in released) + 1
-        assert movements[-1].movement_type == "adjust"
-        assert movements[-1].quantity == 20 - counted
+        adjust = next(m for m in movements if m.movement_type == "adjust")
+        assert adjust.quantity == 20 - counted
+        rebalanced = [m for m in movements if m.movement_type == "reserve"]
+        assert sum(m.quantity for m in rebalanced) == rebalanced_quantity
+        assert all(m.inventory_lot_id == ids["other_lot"] for m in rebalanced)
         assert all(m.before_available + m.before_reserved == m.after_available + m.after_reserved
-                   for m in movements[:-1])
+                   for m in movements if m.movement_type != "adjust")
 
 
 def test_shortfall_release_and_adjustment_roll_back_together(stocktake_api, monkeypatch):

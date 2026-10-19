@@ -12,7 +12,10 @@ from app.api import deliveries
 from app.models.delivery import Delivery,DeliveryPickTask
 from app.models.finance import FinanceIdempotencyRecord
 from app.models.order import OrderItem
-from app.models.warehouse_inventory import InventoryLot,InventoryMovement
+from app.models.warehouse_inventory import (
+    FinishedGoodsInventoryDetail, InventoryLot, InventoryMovement,
+    InventoryReservation,
+)
 
 
 def state(factory):
@@ -73,6 +76,80 @@ def test_complete_replay_cancel_and_old_version_are_distinct(delivery_api_app):
         assert recovered.json()['dispatch_receipt']==receipt and recovered.json()['current']['status']=='pending'
         fresh=command(c,did,'dispatch-command-new');new=c.put(f'/api/deliveries/{did}/dispatch',json=fresh)
         assert new.status_code==200 and new.json()['dispatch_receipt']['completed_version']==4
+
+
+@pytest.mark.parametrize("free_quantity, succeeds", [(30, True), (10, False)])
+def test_dispatch_rebinds_stocktake_released_reservation_to_compatible_free_lot(
+    delivery_api_app, free_quantity, succeeds,
+):
+    app, factory = delivery_api_app
+    with TestClient(app) as client:
+        _login(client, 'admin')
+        created = seed(client, factory)
+        with factory() as db:
+            old = db.scalar(select(InventoryReservation).where(
+                InventoryReservation.order_item_id == 1,
+                InventoryReservation.reservation_type == 'finished_order',
+            ))
+            assert old is not None
+            old_lot = db.get(InventoryLot, old.inventory_lot_id)
+            # The earlier stocktake found only the 20 already consumed; its
+            # remaining 80 boxes were released. A new lot has real free stock.
+            old.released_stock_quantity = 80
+            old.released_requirement_quantity = 80
+            old.release_reason = '盘点单 COUNT-20261019 实盘不足，先预占先保留'
+            old.status = 'partial'
+            old_lot.quantity_reserved = 0
+            old_lot.version += 1
+            replacement = InventoryLot(
+                lot_number=f'PHASE7-REPLACEMENT-{free_quantity}',
+                inventory_type='finished',
+                warehouse_location_id=old_lot.warehouse_location_id,
+                quantity_available=free_quantity,
+                quantity_reserved=0,
+                quantity_consumed=0,
+                quantity_damaged=0,
+                quantity_scrapped=0,
+                unit='boxes',
+                status='active',
+                source_type='manual',
+                stock_date=old_lot.stock_date,
+                last_movement_at=old_lot.last_movement_at,
+                version=1,
+            )
+            db.add(replacement)
+            db.flush()
+            original_detail = old_lot.finished_detail
+            db.add(FinishedGoodsInventoryDetail(
+                inventory_lot_id=replacement.id,
+                owner_customer_id=original_detail.owner_customer_id,
+                owner_customer_name_snapshot=original_detail.owner_customer_name_snapshot,
+                is_general=False,
+                product_id=original_detail.product_id,
+                inventory_code_snapshot=original_detail.inventory_code_snapshot,
+                product_name_snapshot=original_detail.product_name_snapshot,
+            ))
+            replacement_id = replacement.id
+            db.commit()
+
+        body = command(client, created['id'], key=f'rebind-{free_quantity}-boxes')
+        before = state(factory)
+        response = client.put(f"/api/deliveries/{created['id']}/dispatch", json=body)
+        if succeeds:
+            assert response.status_code == 200, response.text
+            movements = response.json()['dispatch_receipt']['movements']
+            assert any(row['inventory_lot_id'] == replacement_id and
+                       row['physical_quantity'] == 30 for row in movements)
+            with factory() as db:
+                new_lot = db.get(InventoryLot, replacement_id)
+                assert (new_lot.quantity_available, new_lot.quantity_reserved,
+                        new_lot.quantity_consumed) == (0, 0, 30)
+            assert client.put(f"/api/deliveries/{created['id']}/dispatch", json=body).json() == response.json()
+        else:
+            assert response.status_code == 409, response.text
+            assert 'SME-001' in response.json()['detail']
+            assert '可重新预占 10' in response.json()['detail']
+            assert state(factory) == before
 
 
 def test_snapshot_drift_and_actor_conflict_preserve_original(delivery_api_app):

@@ -14,6 +14,7 @@ def flute_layers(flute):
 
 
 SHORTFALL_MM = Decimal('10')
+NEAR_SIZE_FACTOR = Decimal('1.10')
 
 
 def _axis_fit(actual, required):
@@ -49,11 +50,12 @@ def sheet_fit(actual_length, actual_width, length, width):
             'length_cuts': length_cuts, 'width_cuts': width_cuts}
 
 
-def find_sheets(db, scope, *, length, width, flute_type, page, page_size, min_score=0):
+def find_sheets(db, scope, *, length, width, flute_type, page, page_size, min_score=0, expand_scope=False):
     from app.api.mobile_erp import _inventory_group, _lot_load_options
     from app.services.location_candidates import load_warehouse_location_projection_contexts
     from app.services.warehouse_goods import goods_profile
 
+    length, width = Decimal(str(length)), Decimal(str(width))
     query = select(InventoryLot).join(SemiFinishedInventoryDetail).where(
         InventoryLot.inventory_type == "semi_finished", InventoryLot.status == "active",
         or_(InventoryLot.quantity_available > 0, InventoryLot.quantity_reserved > 0),
@@ -61,6 +63,10 @@ def find_sheets(db, scope, *, length, width, flute_type, page, page_size, min_sc
         SemiFinishedInventoryDetail.board_width_mm > 0,
         SemiFinishedInventoryDetail.board_length_mm >= length - SHORTFALL_MM,
         SemiFinishedInventoryDetail.board_width_mm >= width - SHORTFALL_MM)
+    if not expand_scope:
+        query = query.where(
+            SemiFinishedInventoryDetail.board_length_mm <= length * NEAR_SIZE_FACTOR,
+            SemiFinishedInventoryDetail.board_width_mm <= width * NEAR_SIZE_FACTOR)
     if flute_type:
         query = query.where(SemiFinishedInventoryDetail.flute_type == flute_type)
     if scope is not None:
@@ -73,13 +79,16 @@ def find_sheets(db, scope, *, length, width, flute_type, page, page_size, min_sc
     # Rank the scoped dimensional projection before paging. Load relationships
     # only for the visible page, retaining separate physical batches and units.
     ranked = []
+    large_lots = set()
     for lot_id, actual_length, actual_width in db.execute(query.with_only_columns(
             InventoryLot.id, SemiFinishedInventoryDetail.board_length_mm,
             SemiFinishedInventoryDetail.board_width_mm)):
         fit = sheet_fit(actual_length, actual_width, length, width)
         if fit and fit['match_score'] >= min_score:
             ranked.append((lot_id, fit))
-    ranked.sort(key=lambda row: (-row[1]['match_score'], row[1]['cuts_per_sheet'], row[0]))
+            if actual_length > length * NEAR_SIZE_FACTOR or actual_width > width * NEAR_SIZE_FACTOR:
+                large_lots.add(lot_id)
+    ranked.sort(key=lambda row: (row[0] in large_lots, -row[1]['match_score'], row[1]['cuts_per_sheet'], row[0]))
     total = len(ranked)
     selected = ranked[(page - 1) * page_size:page * page_size]
     fits = dict(selected)

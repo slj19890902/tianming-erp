@@ -31,9 +31,14 @@ def test_sheet_size_fit_examples(mobile_erp_app, stock_length, stock_width, expe
         before = db.execute(text('select * from inventory_lots order by id')).all()
     with TestClient(app) as client:
         _login(client, 'mobile-admin')
-        response = client.get('/api/product-workbench/sheets?length=1000&width=200&flute_type=B')
+        response = client.get('/api/product-workbench/sheets?length=1000&width=200&flute_type=B&expand_scope=true')
         assert response.status_code == 200, response.text
         rows = response.json()['items']
+        default_rows = client.get('/api/product-workbench/sheets?length=1000&width=200&flute_type=B').json()['items']
+        if stock_length > 1100 or stock_width > 220:
+            assert default_rows == []  # An empty near-size result must never auto-expand.
+        else:
+            assert default_rows == rows
         if expected_cuts is None:
             assert rows == []
         else:
@@ -70,7 +75,9 @@ def test_sheet_fit_ranks_and_filters_all_batches_before_paging(mobile_erp_app):
         db.commit()
     with TestClient(app) as client:
         _login(client, 'mobile-admin')
-        params = dict(length=1000, width=200, flute_type='B', page_size=2)
+        params = dict(length=1000, width=200, flute_type='B', page_size=2, expand_scope=True)
+        near = client.get('/api/product-workbench/sheets', params={**params, 'expand_scope': False, 'page_size': 50}).json()
+        assert [r['lot_id'] for r in near['items']] == [lot_ids[i] for i in (4, 6, 3, 0)]
         rows = []
         for page in range(1, 5):
             response = client.get('/api/product-workbench/sheets', params={**params, 'page': page})
@@ -79,7 +86,7 @@ def test_sheet_fit_ranks_and_filters_all_batches_before_paging(mobile_erp_app):
             assert body['total'] == 8
             assert body['has_more'] == (page < 4)
             rows.extend(body['items'])
-        assert [r['lot_id'] for r in rows] == [lot_ids[i] for i in (4, 6, 2, 5, 1, 7, 3, 0)]
+        assert [r['lot_id'] for r in rows] == [lot_ids[i] for i in (4, 6, 3, 0, 2, 5, 1, 7)]
         filtered = client.get('/api/product-workbench/sheets', params={**params, 'min_score': 100}).json()
         assert filtered['total'] == 6 and filtered['has_more']
         assert all(r['match_score'] == 100 for r in filtered['items'])

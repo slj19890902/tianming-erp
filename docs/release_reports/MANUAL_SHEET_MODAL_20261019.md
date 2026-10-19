@@ -1,6 +1,6 @@
 # 库存片料弹窗与定向匹配优化（2026-10-19）
 
-状态：开发验证通过，尚未正式发布；正式 ERP 人工验收待发布后由管理员完成。
+状态：v0.22.685 已正式发布，技术核对及原生备份收尾完成；正式 ERP 人工业务验收待管理员完成。
 
 ## 实现结果
 
@@ -16,7 +16,7 @@
 
 功能提交为 `4832196af9103c1055cc6c820536b3c24d1ba7e6`。候选已保存到本地干净分支；GitHub 推送无进展后停止，随后定向远端分支核对也报告网络过慢，远端推送结果未确认，不宣称已推送。
 
-生产实现文件：`app/api/warehouse.py`、`app/services/semi_finished_inventory.py`、`app/services/sheet_cut_plan.py`、`static/index.html`、`static/ui/manual-sheet-deduction.js`、新样式 `static/ui/manual-sheet-deduction.css`。无 schema 变更，无正式数据写入，无停服或重启。
+生产实现文件：`app/api/warehouse.py`、`app/services/semi_finished_inventory.py`、`app/services/sheet_cut_plan.py`、`static/index.html`、`static/ui/manual-sheet-deduction.js`、新样式 `static/ui/manual-sheet-deduction.css`。无 schema 变更。本次正式发布已按 Manager 串行流程停启服务；发布检查仅只读，未执行正式库存抵扣或其他业务测试写入。版本文件 app/version.py 同步升级。
 
 ## 验证与证据
 
@@ -30,7 +30,17 @@ Chrome 隔离预览使用相同组件、样式及主界面基础 CSS，使用示
 
 ## 发布与人工核对
 
-当前没有执行本任务正式发布。发布后管理员最短核对：
+用户已明确授权“发布”。2026-10-19 18:08（Asia/Shanghai）完成技术发布及原生收尾：
+
+- 正式版本：`v0.22.685`；发布源码：`ac7938d0b4a91613294dc1ab6b68b5a9feada259`。
+- 正式签名包：`b89f96c4617bf9657c556eeccd97535d87ae4f59ce30ff230bfcc386a9848562`；旧包 `b0722c0cc21a100de1ff3a52e4d382301b590e0e088382315d88e1fdaa9e81a4`。源/目标 revision 均为 `et1019fl`。
+- 备份：`/Library/TianmingERP/instance/backups/20261019-180045-e02c264b.tmbackup`；SHA-256 `1cb849fe7f70f705b5684b65f67b357613aebfedc4ffe4272cf0ee26050b448a`。完整备份和独立恢复验证通过，备份保留，恢复工作副本已原生闭合。
+- 在线演练核对 3066 个附件；隔离启动 326 张业务表及 schema 不变，无业务写入。正式只读完整性检查为 ok、外键错误 0；抽样仅有 1 个符合可检查前提的需求，未命中可用默认/交换片料，匹配行为另由合成测试及隔离预览覆盖。
+- 新业务进程 PID 69732，健康 HTTP 200；独立发布后核对页面、JS、CSS 均 200，资源 SHA 与签名清单一致；匿名库存接口 401。正式单据、库存、送货记录计数及既有身份已核对。
+- `stop_requested` 10:00:23.730065 UTC，`process_ready` 10:06:18.105682 UTC，约 354.38 秒。发布工作副本、成功演练临时载荷、隔离启动快照及重复包清理完成，`backup_work_retained=false`、`manual_stop=false`、`healthy=true`。
+- 最终回执：`/Library/TianmingERP-Release-20261019-v685/final-result.json`，本地副本与独立核对结果位于 `/Users/kimiyf/ERP-Migration/evidence/manual-sheet-modal-20261019/release-v685/`。最终状态 `technical_release_and_native_closure_complete`。
+
+管理员最短核对（必须按实际业务需求操作）：
 
 1. 待报料点击“使用库存片料”，核对独立弹窗及尺寸、数量、位置和一开几；以真实业务需求填写片数并确认。
 2. 核对异楞不出现，默认原长宽；没有匹配时再点“进一步匹配”，核对仅显示同楞型交换长宽的合格库存。

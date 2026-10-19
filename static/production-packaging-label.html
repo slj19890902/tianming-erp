@@ -288,6 +288,10 @@
       )].sort((a, b) => a - b);
       const compositeBatchId = Number(params.get("batch_id"));
       const deliveryId = Number(params.get("delivery_id"));
+      const finishedStockSource = params.get("finished_stock") === "1";
+      const finishedLots = String(params.get("finished_lots") || "");
+      let finishedLatestPrinted = false;
+      let finishedReprintConfirmed = false;
       const stockReceiptId = Number(params.get("stock_receipt_id"));
       const bomStockOrderId = Number(params.get("bom_stock_order_id"));
       const bomAssemblyLotId = Number(params.get("assembly_lot_id"));
@@ -305,6 +309,7 @@
         unitsPerLabelHeading.textContent = "每张标签套数";
       }
       const deliverySource = Number.isInteger(deliveryId) && deliveryId > 0;
+      if (finishedStockSource) totalQuantityHeading.textContent = "所选批次现存成品数";
       if (stockReceiptId > 0) totalQuantityHeading.textContent = "本次实收加工成品数";
       if (deliverySource) {
         totalQuantityHeading.textContent = "送货总数量";
@@ -828,6 +833,7 @@
         if (Number.isInteger(stockReceiptId) && stockReceiptId > 0) linkParams.set("stock_receipt_id", String(stockReceiptId));
         if (Number.isInteger(bomStockOrderId) && bomStockOrderId > 0) linkParams.set("bom_stock_order_id", String(bomStockOrderId));
         if (Number.isInteger(bomAssemblyLotId) && bomAssemblyLotId > 0) linkParams.set("assembly_lot_id", String(bomAssemblyLotId));
+        if (finishedStockSource) linkParams.set("finished_stock", "1");
         latestJobLink.href = `${window.location.pathname}?${linkParams.toString()}`;
         latestJobLink.textContent = latest.template_version === LEGACY_TEMPLATE_VERSION
           ? "补打最近 65 × 45 mm 历史作业"
@@ -1184,14 +1190,17 @@
         const loadingDelivery = Number.isInteger(deliveryId) && deliveryId > 0;
         const loadingStock = Number.isInteger(stockReceiptId) && stockReceiptId > 0;
         const loadingBomParent = Number.isInteger(bomStockOrderId) && bomStockOrderId > 0;
-        const liveSourceCount = [loadingSupplier, loadingSupplierBatch, loadingComposite, loadingDelivery, loadingStock, loadingBomParent].filter(Boolean).length;
+        const loadingFinished = finishedStockSource && !!finishedLots;
+        const liveSourceCount = [loadingFinished, loadingSupplier, loadingSupplierBatch, loadingComposite, loadingDelivery, loadingStock, loadingBomParent].filter(Boolean).length;
         if (!loadingJob && liveSourceCount !== 1) {
           showMessage(liveSourceCount > 1 ? "标签实时来源冲突，已停止加载" : "报料单或送货单编号无效", "message error");
           return;
         }
         try {
           const url = loadingJob
-            ? `/api/requisition/production-packaging-label-jobs/${requestedJobId}`
+            ? (finishedStockSource ? `/api/production/finished-product-labels/jobs/${requestedJobId}` : `/api/requisition/production-packaging-label-jobs/${requestedJobId}`)
+            : loadingFinished
+              ? `/api/production/finished-product-labels/package?lots=${encodeURIComponent(finishedLots)}`
             : loadingBomParent
               ? `/api/requisition/stock-replenishment-orders/${bomStockOrderId}/parent-product-label-package${bomAssemblyLotId > 0 ? `?assembly_lot_id=${bomAssemblyLotId}` : ""}`
             : loadingStock
@@ -1206,6 +1215,8 @@
           const payload = await requestJson(url, {method:"GET", signal:activeController.signal});
           if (generation !== loadGeneration) return;
           const normalized = normalizeResponse(payload);
+          finishedLatestPrinted = !!normalized.latestPrintedJob;
+          finishedReprintConfirmed = false;
           await render(normalized, {isPrepared:loadingJob, showPrintConfirmation:false});
         } catch (error) {
           if (error && error.name === "AbortError") return;
@@ -1243,12 +1254,16 @@
         }
         const fingerprint = planFingerprint(loadedPackage);
         if (!fingerprint) throw new Error("标签计划缺少校验指纹，已停止创建打印作业；请重新加载");
+        if (finishedStockSource && finishedLatestPrinted && !finishedReprintConfirmed) {
+          if (!window.confirm("所选成品已有实际打印记录，确认需要补打产品标签？")) throw new Error("已取消补打");
+          finishedReprintConfirmed = true;
+        }
         const isDelivery = Number.isInteger(deliveryId) && deliveryId > 0;
         const isStock = Number.isInteger(stockReceiptId) && stockReceiptId > 0;
         const isBomParent = typeof bomStockOrderId !== "undefined" && Number.isInteger(bomStockOrderId) && bomStockOrderId > 0;
         const isSupplierBatch = supplierOrderIds.length > 0;
         const hasReplenishmentSource = (plannedPackage?.plans || []).some((plan) => String(plan.selection_key || "").startsWith("stock-item:"));
-        const items = (plannedPackage?.plans || []).map((plan) => (isDelivery || isStock || isBomParent || hasReplenishmentSource) ? ({
+        const items = (plannedPackage?.plans || []).map((plan) => (finishedStockSource || isDelivery || isStock || isBomParent || hasReplenishmentSource) ? ({
           selection_key:planSelectionKey(plan),
           print_label_count:parsePrintCount(printCounts.get(planSelectionKey(plan)), Number(plan.label_count)),
         }) : ({
@@ -1256,7 +1271,7 @@
           print_label_count:parsePrintCount(printCounts.get(planSelectionKey(plan)), Number(plan.label_count)),
         }));
         if (!items.some((item) => item.print_label_count > 0)) throw new Error("本次未选择需要打印的标签");
-        const sourceSignature = isStock
+        const sourceSignature = finishedStockSource ? `finished-stock:${finishedLots}` : isStock
           ? `stock-receipt:${stockReceiptId}`
           : isBomParent
           ? `bom-parent:${bomStockOrderId}:${bomAssemblyLotId || 0}`
@@ -1272,7 +1287,7 @@
           prepareAttempt = {signature, idempotencyKey:newIdempotencyKey("p1106-label-job"), uncertain:false};
         }
         const isComposite = Number.isInteger(compositeBatchId) && compositeBatchId > 0;
-        const url = isStock
+        const url = finishedStockSource ? "/api/production/finished-product-labels/jobs" : isStock
           ? `/api/incoming/receipt-items/${stockReceiptId}/product-label-jobs`
           : isBomParent
           ? `/api/requisition/stock-replenishment-orders/${bomStockOrderId}/parent-product-label-jobs${bomAssemblyLotId > 0 ? `?assembly_lot_id=${bomAssemblyLotId}` : ""}`
@@ -1288,6 +1303,7 @@
           confirmed:true,
           plan_fingerprint:fingerprint,
           items,
+          ...(finishedStockSource ? {selections:plannedPackage.lot_versions.map(row=>({lot_id:row.lot_id,expected_version:row.expected_version})),reprint_confirmed:finishedReprintConfirmed} : {}),
           ...(isSupplierBatch ? {order_ids:supplierOrderIds} : {}),
           ...(isComposite ? {selected_item_ids:compositeItemIds} : {}),
         };
@@ -1327,7 +1343,12 @@
             const normalized = await preparePrintJob();
             await render(normalized, {isPrepared:true, showPrintConfirmation:false});
           }
+          if (finishedStockSource && hasFrozenJob && loadedJobs.some(job=>job.status === "prepared")) {
+            const payload = await requestJson(`/api/production/finished-product-labels/jobs/${loadedJobs[0].id}`, {method:"GET"});
+            await render(normalizeResponse(payload), {isPrepared:true,showPrintConfirmation:false});
+          }
           validateRenderedLabels();
+          if (finishedStockSource && loadedJobs.some(job=>job.status === "printed" || job.printed_at) && !window.confirm("确认补打这份已实际打印的冻结成品标签？")) return;
           window.print();
           if (loadedJobs.length && loadedJobs.every((job) => job.status === "printed" || job.printed_at)) {
             showMessage("已打开历史作业打印对话框；补打沿用原作业的冻结内容和纸型。", "message");
@@ -1363,7 +1384,7 @@
         confirmPrintedButton.disabled = true;
         try {
           const isSupplierBatch = supplierOrderIds.length > 0 && jobIds.length > 0;
-          const url = isSupplierBatch
+          const url = finishedStockSource ? `/api/production/finished-product-labels/jobs/${jobIds[0]}/confirm` : isSupplierBatch
             ? "/api/requisition/supplier-order-label-batches/confirm"
             : `/api/requisition/production-packaging-label-jobs/${jobIds[0]}/confirm`;
           await requestJson(url, {

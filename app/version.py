@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.674"
-APP_VERSION_NAME = "产品库存来源与生产入库分流"
+APP_VERSION = "v0.22.675"
+APP_VERSION_NAME = "已入库成品勾选打印产品标签"
 APP_BUILD_DATE = "2026-10-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6651,3 +6651,17 @@ APP_VERIFICATION_STEPS = [
     "核对盘点、补库生产和订单生产来源及生产入库分流正常。",
 ]
 APP_CHANGELOG = [*(f"v0.22.674：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.675：已入库成品按真实库存身份打印产品标签。
+APP_CHANGES = [
+    "生产工作台已入库增加逐行及本页勾选，在筛选查找旁打印产品标签；查询、翻页、刷新和账号切换清空选择。",
+    "按所选批次现存成品数分捆，已完成组套打印父件标签，子件独立交付打印自身，不沿报料清单展开未完工子件。",
+    "复用既有40×30产品标签模板、每张数量、张数选择、冻结预览和实际打印确认；补打确认一次。",
+    "新增独立成品标签作业台账并保留版本、客户范围、幂等及审计保护；不改库存数量、订单或报料事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "生产工作台→已入库→全部成品，勾选成品，点击筛选查找旁的打印产品标签。",
+    "核对组套父件、单独交付子件、现存数量、每捆数量及尾捆；标签机实际出纸后确认已实际打印。",
+    "返回列表保留原位置，查询或翻页后勾选清空；重新打印已登记批次时确认补打。",
+]
+APP_CHANGELOG = [*(f"v0.22.675：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

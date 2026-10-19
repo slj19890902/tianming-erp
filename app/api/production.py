@@ -63,6 +63,8 @@ from app.services.mobile_qr import production_task_mobile_url, qr_data_url
 
 
 router = APIRouter()
+from app.api.finished_product_labels import router as finished_product_labels_router
+router.include_router(finished_product_labels_router)
 from app.api.drawing_adoption import router as drawing_adoption_router  # noqa: E402
 router.include_router(drawing_adoption_router)
 can_read = PermissionChecker("orders.view")

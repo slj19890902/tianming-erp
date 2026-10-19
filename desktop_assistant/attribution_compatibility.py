@@ -2,7 +2,7 @@
 
 Existing delivery attribution facts must not prohibit this unrelated migration
 when the signed previous program has exactly the same attribution reader and
-writer. This exception expires as soon as the new receipt contract has facts.
+writer. The receipt or finished-label exception expires as soon as its new table has facts.
 """
 from contextlib import closing
 import re
@@ -21,8 +21,11 @@ SOURCES = (
 
 
 def unchanged_attribution_reader(manager, release, revision, authority=None):
-    if revision != 'es1019ra':
+    contracts = {'es1019ra': ('er1016pa', 'incoming_receipt_actual_specs'),
+                 'et1019fl': ('es1019ra', 'finished_product_label_print_jobs')}
+    if revision not in contracts:
         return False
+    parent, added_table = contracts[revision]
     authority = authority or manager.state.get('schema_authority')
     if not all(isinstance(value, str) and re.fullmatch('[0-9a-f]{64}', value)
                for value in (release, authority)):
@@ -35,24 +38,29 @@ def unchanged_attribution_reader(manager, release, revision, authority=None):
             return False
         old, old_schema = schema_contract_from_signed_release(packages[0], manager.public_key)
         new, new_schema = schema_contract_from_signed_release(packages[1], manager.public_key)
-        if (old['revision'] != 'er1016pa' or new['revision'] != revision
+        if (old['revision'] != parent or new['revision'] != revision
                 or new.get('migration') != {
-                    'policy': 'preserve_existing_facts_v1', 'from_revision': 'er1016pa',
+                    'policy': 'preserve_existing_facts_v1', 'from_revision': parent,
                     'rollback_package_sha256': release}):
             return False
+        proof_sources = SOURCES + (('app/models/incoming_actual_spec.py',
+            'app/services/incoming_actual_specs.py', 'app/services/incoming_receipts.py',
+            'app/services/stock_preparation_processing.py',
+            'alembic/versions/es1019ra_incoming_actual_specs.py') if revision == 'et1019fl' else ())
         if any(not old['files'].get(name) or old['files'][name] != new['files'].get(name)
-               for name in SOURCES):
+               for name in proof_sources):
             return False
         before, after = old_schema['tables'], new_schema['tables']
-        if (set(after) != set(before) | {'incoming_receipt_actual_specs'}
-                or 'incoming_receipt_actual_specs' in before
+        if (set(after) != set(before) | {added_table}
+                or added_table in before
+                or (revision == 'et1019fl' and 'incoming_receipt_actual_specs' not in before)
                 or 'unordered_delivery_order_attributions' not in before
                 or any(after[name] != columns for name, columns in before.items())):
             return False
         database = manager.root / 'shared/data/carton_erp.sqlite3'
         with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
             db.execute('PRAGMA query_only=ON')
-            return (bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='incoming_receipt_actual_specs'").fetchone())
-                    and db.execute('SELECT 1 FROM incoming_receipt_actual_specs LIMIT 1').fetchone() is None)
+            return (bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (added_table,)).fetchone())
+                    and db.execute('SELECT 1 FROM '+added_table+' LIMIT 1').fetchone() is None)
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
         return False

@@ -76,93 +76,162 @@
   const component = {
     props:{actorId:{type:Number,default:0},snapshotId:{type:Number,default:0},orderItemId:{type:Number,default:0}, componentType:{type:String,default:'whole'},disabled:{type:Boolean,default:false}},
     emits:['reserved','operation-state'],
-    data() {return {opened:false,loading:false,busy:false,error:'',message:'',preview:null,rows:[],uncertain:false};},
+    data() {return {opened:false,loading:false,busy:false,error:'',message:'',preview:null,rows:[],uncertain:false,matchMode:'exact',readSequence:0};},
     created() {this.uncertain=pending.has(this.identity);},
     computed:{identity() {return `${this.actorId || 0}:${this.snapshotId?'bom':'order'}:${this.snapshotId || this.orderItemId}:${this.componentType}`;}},
-    watch:{identity() {this.loading=false;this.busy=false;this.opened=false;this.preview=null;this.rows=[];this.error='';this.message='';this.uncertain=pending.has(this.identity);}},
+    watch:{identity() {this.readSequence++;this.loading=false;this.busy=false;this.opened=false;this.preview=null;this.rows=[];this.error='';this.message='';this.uncertain=pending.has(this.identity);}},
     methods:{
       endpoint() {return `/api/warehouse/semi-finished/${this.snapshotId ? 'bom-components/'+this.snapshotId : 'order-items/'+this.orderItemId}`;},
       quantity:chosenQuantity,
-      differences(row) {return (row.signature_differences || []).map(name=>differenceNames[name] || name).join('、');},
+      differences(row) {return (row.signature_differences || []).filter(name=>!['board_length_mm','board_width_mm'].includes(name)).map(name=>differenceNames[name] || name).join('、');},
       credit(row) {return Math.min(chosenQuantity(row) * Number(row.stock_yield_per_sheet), this.preview?.remaining_required_piece_qty || 0);},
+      selection() {return this.rows.filter(row=>row.selected);},
+      totals() {
+        const selected=this.selection(),need=Number(this.preview?.remaining_required_piece_qty || 0);
+        const pieces=selected.reduce((sum,row)=>sum+chosenQuantity(row)*Number(row.stock_yield_per_sheet),0);
+        const stock=selected.reduce((sum,row)=>sum+chosenQuantity(row),0);
+        let remaining=need;
+        const valid=selected.length>0 && selected.every(row=>{
+          const quantity=chosenQuantity(row),output=Number(row.stock_yield_per_sheet);
+          const credit=Math.min(quantity*output,remaining);remaining-=credit;
+          return row.selectable && quantity>0 && output>0 && Math.ceil(credit/output)===quantity;
+        });
+        const perBox=Math.max(Number(this.preview?.pieces_per_box || 1),1);
+        return {stock,pieces,credit:Math.min(pieces,need),remaining:Math.max(need-pieces,0),
+          boxes:Math.floor(pieces/perBox),excess:Math.max(pieces-need,0),valid};
+      },
+      choose(row) {
+        if(this.busy || this.uncertain)return;
+        if(row.selected && !chosenQuantity(row)) {
+          const other=this.selection().filter(item=>item!==row).reduce((sum,item)=>sum+chosenQuantity(item)*Number(item.stock_yield_per_sheet),0);
+          const need=Math.max(Number(this.preview?.remaining_required_piece_qty || 0)-other,0);
+          row.inputQuantity=Math.min(row.max_stock_quantity,Math.ceil(need/Number(row.stock_yield_per_sheet))) || '';
+        }
+      },
+      yieldText(row) {
+        const output=Number(row.stock_yield_per_sheet),perBox=Math.max(Number(this.preview?.pieces_per_box || 1),1);
+        if(this.preview?.is_bom || this.componentType!=='whole')return `一开${output} · 每片出${output}片部件`;
+        const unit=this.preview?.output_unit || '只';
+        return perBox===1 ? `一开${output} · 每片可做${output}${unit}` : `一开${output} · 每${perBox}片箱片做1${unit}`;
+      },
       async open() {
-        if (this.busy || (this.disabled && !this.uncertain)) return;
+        if(this.busy || (this.disabled && !this.uncertain))return;
         this.opened=true;this.error='';this.message='';
+        this.focusDialog();
         const held=pending.get(this.identity);
-        if (held) {this.preview=held.preview;this.rows=held.rows;this.uncertain=true;return;}
-        this.loading=true;const identity=this.identity;
+        if(held) {this.preview=held.preview;this.rows=held.rows;this.matchMode=held.matchMode || 'exact';this.uncertain=true;return;}
+        await this.load('exact');
+      },
+      async load(mode='exact') {
+        if(this.busy || this.uncertain)return;
+        if(mode==='swapped' && (!this.preview?.can_further_match || this.matchMode!=='exact' || this.rows.length))return;
+        this.loading=true;this.error='';this.rows=[];this.matchMode=mode;
+        const identity=this.identity,sequence=++this.readSequence;
         try {
-          const {data}=await root.axios.get(this.endpoint()+'/manual-inventory', {params:{component_type:this.componentType}});
-          if(this.identity!==identity)return;
-          this.preview=data;this.rows=(data.items || []).map(row=>({...row,inputQuantity:''}));this.uncertain=false;
-        } catch(error) {if(this.identity===identity)this.error=this.errorText(error);}
-        finally {if(this.identity===identity)this.loading=false;}
+          const {data}=await root.axios.get(this.endpoint()+'/manual-inventory',{params:{component_type:this.componentType,match_mode:mode}});
+          if(this.identity!==identity || sequence!==this.readSequence)return;
+          this.preview=data;this.rows=(data.items || []).map(row=>({...row,inputQuantity:'',selected:false}));this.uncertain=false;
+          this.$nextTick?.(()=>this.$refs?.dialog?.focus());
+        } catch(error) {if(this.identity===identity && sequence===this.readSequence)this.error=this.errorText(error);}
+        finally {if(this.identity===identity && sequence===this.readSequence)this.loading=false;}
+      },
+      focusDialog() {
+        this.returnFocus=root.document?.activeElement;
+        this.$nextTick?.(()=>this.$refs?.dialog?.focus());
+      },
+      close() {
+        if(this.busy)return;
+        this.opened=false;this.readSequence++;this.loading=false;
+        this.$nextTick?.(()=>{if(this.returnFocus?.isConnected)this.returnFocus.focus();});
+      },
+      keydown(event) {
+        if(event.key==='Escape') {event.preventDefault();event.stopPropagation();this.close();return;}
+        if(event.key!=='Tab')return;
+        const panel=this.$refs?.dialog;
+        const controls=Array.from(panel?.querySelectorAll('button:not([disabled]),input:not([disabled]),summary,[href]') || []).filter(el=>el.getClientRects().length);
+        const first=controls[0],last=controls.at(-1),active=root.document?.activeElement;
+        if(!first) {event.preventDefault();panel?.focus();}
+        else if(event.shiftKey && (active===first || active===panel)) {event.preventDefault();last.focus();}
+        else if(!event.shiftKey && (active===last || active===panel)) {event.preventDefault();first.focus();}
       },
       errorText(error) {const detail=error.response?.data?.detail;return typeof detail==='string'?detail:(detail?.message || error.message || '库存操作失败');},
+      async confirmSelection() {
+        if(this.busy || this.loading || this.disabled || this.uncertain || !this.totals().valid)return;
+        const payload={component_type:this.componentType,match_mode:this.matchMode,
+          expected_order_item_revision:this.preview.expected_order_item_revision,idempotency_key:operationKey(),
+          items:this.selection().map(row=>({lot_id:row.lot_id,stock_quantity:chosenQuantity(row),expected_version:row.version,
+            review_hash:row.review_hash,warning_acknowledged_codes:row.warning_codes || []}))};
+        pending.set(this.identity,{preview:this.preview,rows:this.rows,payload,matchMode:this.matchMode,batch:true});
+        await this.submitHeld();
+      },
       async reserve(row) {
-        if (this.busy || this.loading || (this.disabled && !this.uncertain)) return;
-        const identity=this.identity;
-        let held=pending.get(identity);
-        if (!held) {
+        if(this.busy || this.loading || (this.disabled && !this.uncertain))return;
+        if(!pending.has(this.identity)) {
           const quantity=chosenQuantity(row);
-          if (!row.selectable || !quantity) {this.error='请填写不超过可用库存及需求上限的正整数张数';return;}
-          held={preview:this.preview,rows:this.rows,payload:{component_type:this.componentType,
-            lot_id:row.lot_id,stock_quantity:quantity,expected_version:row.version,
-            expected_order_item_revision:this.preview.expected_order_item_revision,
-            review_hash:row.review_hash,warning_acknowledged_codes:row.warning_codes || [],idempotency_key:operationKey()}};
-          pending.set(identity,held);
+          if(!row.selectable || !quantity) {this.error='请填写不超过可用库存及需求上限的正整数片数';return;}
+          pending.set(this.identity,{preview:this.preview,rows:this.rows,matchMode:this.matchMode,payload:{component_type:this.componentType,
+            match_mode:this.matchMode,lot_id:row.lot_id,stock_quantity:quantity,expected_version:row.version,
+            expected_order_item_revision:this.preview.expected_order_item_revision,review_hash:row.review_hash,
+            warning_acknowledged_codes:row.warning_codes || [],idempotency_key:operationKey()}});
         }
-        this.busy=true;this.error='';this.message='';
-        this.$emit('operation-state',{identity,blocked:true});
+        await this.submitHeld();
+      },
+      async submitHeld() {
+        const identity=this.identity,held=pending.get(identity);
+        if(!held || this.busy)return;
+        this.busy=true;this.error='';this.message='';this.$emit('operation-state',{identity,blocked:true});
         try {
-          const {data}=await root.axios.post(this.endpoint()+'/manual-reserve',held.payload);
+          const {data}=await root.axios.post(this.endpoint()+(held.batch?'/manual-reserve-batch':'/manual-reserve'),held.payload);
           pending.delete(identity);
           if(this.identity!==identity)return;
-          this.uncertain=false;
-          this.message=data.message;this.preview={...this.preview,...data};
-          // A successful write remains successful even when its refresh fails.
-          this.rows=[];this.$emit('reserved',data);
-          try {const {data:fresh}=await root.axios.get(this.endpoint()+'/manual-inventory',{params:{component_type:this.componentType}});
+          this.uncertain=false;this.message=data.message;this.preview={...this.preview,...data};this.rows=[];this.opened=false;
+          this.$nextTick?.(()=>{if(this.returnFocus?.isConnected)this.returnFocus.focus();});
+          this.$emit('reserved',data);
+          try {
+            const {data:fresh}=await root.axios.get(this.endpoint()+'/manual-inventory',{params:{component_type:this.componentType,match_mode:'exact'}});
             if(this.identity!==identity)return;
-            this.preview=fresh;this.rows=(fresh.items || []).map(item=>({...item,inputQuantity:''}));this.$emit('reserved',fresh);
+            this.preview=fresh;this.rows=(fresh.items || []).map(item=>({...item,inputQuantity:'',selected:false}));this.matchMode='exact';this.$emit('reserved',fresh);
           } catch(error) {if(this.identity===identity)this.error='抵扣已成功；库存列表刷新失败，请点击重新查看，不要重复抵扣。';}
         } catch(error) {
           const status=error.response?.status;
           if(status && status<500)pending.delete(identity);
           if(this.identity!==identity)return;
-          if (status && status<500) {pending.delete(identity);this.uncertain=false;this.rows=[];this.error=this.errorText(error)+'；请重新查看库存。';}
-          else {this.uncertain=true;this.error='抵扣结果暂未确认。请点击“核对上次抵扣结果”，保留原批次和数量。';}
+          if(status && status<500) {this.uncertain=false;this.rows=[];this.error=this.errorText(error)+'；请重新查看库存。';}
+          else {this.uncertain=true;this.error='抵扣结果暂未确认，请核对上次抵扣结果。';}
         } finally {if(this.identity===identity)this.busy=false;this.$emit('operation-state',{identity,blocked:pending.has(identity)});}
       }
     },
-    template:`<section class="manual-sheet-deduction" style="margin-top:6px">
-      <button type="button" class="btn small" :disabled="busy || (disabled && !uncertain)" @click="open">{{uncertain?'查看上次抵扣':'使用库存片料'}}</button>
-      <div v-if="opened" style="border:1px solid #d1d5db;padding:10px;margin-top:6px;min-width:260px;max-width:480px;white-space:normal">
-        <strong>选择片料，自己填写本次张数</strong>
-        <div v-if="preview" class="muted">{{preview.product_code}} · {{preview.board_length_mm}}×{{preview.board_width_mm}} mm · {{preview.material_code}}<br>已承诺 {{preview.committed_piece_qty || 0}} 片 · 未合并仍需 {{preview.remaining_required_piece_qty}} 片<br>库存已安排 {{preview.semi_finished_reserved_piece_qty || 0}} 片 · 每只用 {{preview.pieces_per_box}} 片</div>
-        <div v-if="loading">正在查询库存…</div>
-        <div v-if="message" class="status green" style="white-space:normal">{{message}}</div>
-        <div v-if="error" class="status orange" style="white-space:normal">{{error}}</div>
-        <button v-if="uncertain" type="button" class="btn small" :disabled="busy" @click="reserve(null)">{{busy?'正在核对…':'核对上次抵扣结果'}}</button>
-        <article v-for="row in rows" :key="row.lot_id" style="border-top:1px solid #e5e7eb;margin-top:8px;padding-top:8px">
-          <b>{{row.internal_name || '库存片料'}} · {{row.board_length_mm}}×{{row.board_width_mm}} mm</b>
-          <div>{{row.material_code}} / {{row.flute_type}} · 可用 {{row.available_stock_quantity}} 张</div>
-          <div>{{row.warehouse_location?.location_name || row.warehouse_location?.name || '位置待核对'}}</div>
-          <div v-if="differences(row)" class="status orange" style="white-space:normal">需核对：{{differences(row)}}</div>
-          <div v-for="(warning,index) in row.warning_messages" :key="index" class="muted">{{warning}}</div>
-          <div v-if="row.cut_plan" class="muted">分切后 {{row.cut_plan.target_length_mm}}×{{row.cut_plan.target_width_mm}} mm，每张抵 {{row.stock_yield_per_sheet}} 片</div>
-          <div v-if="row.selectable && row.max_stock_quantity>0">
-            <label>本次使用 <input class="input compact-input" type="number" min="1" step="1" :max="row.max_stock_quantity" v-model="row.inputQuantity" :disabled="busy || uncertain" style="width:90px"> 张</label>
-            <span class="muted">最多 {{row.max_stock_quantity}} 张；抵扣 {{credit(row)}} 片</span>
-            <button type="button" class="btn small success" :disabled="busy || uncertain || disabled || !quantity(row)" @click="reserve(row)">确认抵扣</button>
-            <small class="muted" style="display:block">确认即采用本批次并确认上方差异；只预占填写的张数。</small>
-          </div>
-          <div v-else class="muted">{{row.selectable?'当前需求已覆盖，无需再抵扣':'当前批次不能直接采用，请先核对库存用途或加工资料。'}}</div>
-        </article>
-        <div v-if="!loading && preview && !rows.length && !uncertain" class="muted">没有可列出的片料；请核对库存用途、楞型、面纸和可用量。</div>
-        <button type="button" class="btn small" :disabled="busy || uncertain" @click="open">重新查看</button>
-        <button type="button" class="btn small" :disabled="busy || uncertain" @click="opened=false">收起</button>
-      </div>
+    template:`<section class="manual-sheet-deduction">
+      <button ref="trigger" type="button" class="btn small" :disabled="busy || (disabled && !uncertain)" @click="open">{{uncertain?'查看上次抵扣':'使用库存片料'}}</button>
+      <teleport to="body">
+        <div v-if="opened" class="manual-sheet-backdrop" @click.self="close" @keydown="keydown">
+          <section ref="dialog" class="manual-sheet-dialog" role="dialog" aria-modal="true" :aria-labelledby="'sheet-title-'+identity" tabindex="-1">
+            <header class="manual-sheet-head"><h3 :id="'sheet-title-'+identity">使用库存片料<span v-if="componentType!=='whole'"> · {{componentType==='cover'?'盖片':'底片'}}</span></h3><button class="btn small" type="button" aria-label="关闭使用库存片料" :disabled="busy" @click="close">关闭</button></header>
+            <div class="manual-sheet-body" :aria-busy="loading || busy">
+              <div v-if="preview" class="manual-sheet-demand"><strong>{{preview.product_code}} · {{preview.product_name}}</strong><span>所需箱片 {{preview.board_length_mm}} × {{preview.board_width_mm}} mm · {{preview.flute_type==='NONE'?'卡纸':preview.flute_type+' 瓦'}} · {{preview.material_code}}</span><b>待用箱片 {{preview.remaining_required_piece_qty}} 片</b></div>
+              <p v-if="matchMode==='swapped'" class="manual-sheet-swap">长宽交换匹配 · 请核对本次使用方向</p>
+              <p v-if="loading" role="status">正在查询匹配片料…</p>
+              <p v-if="error" class="status orange" role="alert">{{error}}</p>
+              <template v-if="uncertain"><p>原批次和片数已保留，核对后再继续操作。</p><button class="btn primary" type="button" :disabled="busy" @click="submitHeld">{{busy?'正在核对…':'核对上次抵扣结果'}}</button></template>
+              <div v-else-if="rows.length" class="manual-sheet-table-wrap"><table class="manual-sheet-table"><thead><tr><th>选择</th><th>库存片料尺寸</th><th>可用数量</th><th>库位</th><th>一开几</th><th>本次使用</th></tr></thead><tbody>
+                <tr v-for="row in rows" :key="row.lot_id" :class="{'manual-sheet-selected':row.selected}">
+                  <td><input type="checkbox" v-model="row.selected" :aria-label="'选择 '+row.board_length_mm+' × '+row.board_width_mm+'，'+(row.warehouse_location?.location_name || row.warehouse_location?.name || '位置待核对')" :disabled="busy || !row.selectable || !row.max_stock_quantity" @change="choose(row)"></td>
+                  <td><strong>{{row.board_length_mm}} × {{row.board_width_mm}} mm</strong><details v-if="differences(row) || row.warning_messages?.length" class="manual-sheet-details" :class="{'manual-sheet-review':!!differences(row)}"><summary>{{differences(row)?'需核对：'+differences(row):'查看详情'}}</summary><div>{{row.internal_name || '库存片料'}} · {{row.material_code}} / {{row.flute_type}}</div><p v-for="(warning,index) in row.warning_messages" :key="index">{{warning}}</p></details></td>
+                  <td><b>{{row.available_stock_quantity}}</b> 片</td><td>{{row.warehouse_location?.location_name || row.warehouse_location?.name || '位置待核对'}}</td><td>{{yieldText(row)}}</td>
+                  <td><label><input class="input" type="number" min="1" step="1" :max="row.max_stock_quantity" v-model="row.inputQuantity" :disabled="busy || !row.selected" :aria-label="'本次使用片数，最多 '+row.max_stock_quantity+' 片'"> 片</label></td>
+                </tr>
+              </tbody></table></div>
+              <div v-else-if="!loading && preview && !uncertain" class="manual-sheet-empty">
+                <p v-if="!preview.remaining_required_piece_qty">当前用料需求已覆盖，无需再报料。</p><p v-else>{{matchMode==='swapped'?'暂无长宽交换后可用的同楞型片料。':'暂无同楞型、同长宽的可用片料。'}}</p>
+                <button v-if="matchMode==='exact' && preview.can_further_match" class="btn" type="button" :disabled="busy" @click="load('swapped')">进一步匹配（交换长宽）</button>
+              </div>
+            </div>
+            <footer class="manual-sheet-foot"><div v-if="selection().length && !uncertain" class="manual-sheet-total"><strong>本次使用 {{totals().stock}} 片</strong><span>{{preview?.is_bom || componentType!=='whole'?'可出 '+totals().pieces+' 片部件':'可做 '+totals().boxes+' '+(preview?.output_unit || '只')}}</span><b :class="{'manual-sheet-covered':totals().remaining===0}">{{totals().remaining?'剩余 '+totals().remaining+' 片仍需报料':'抵扣后无需报料'}}</b><span v-if="totals().valid && totals().excess">理论余量 {{totals().excess}} 片</span><span v-if="!totals().valid" class="manual-sheet-invalid">请核对片数，不能超过库存或剩余需求。</span></div>
+              <div class="manual-sheet-buttons"><button v-if="!uncertain" class="btn" type="button" :disabled="busy || loading" @click="load('exact')">重新匹配</button><button class="btn" type="button" :disabled="busy" @click="close">取消</button><button class="btn primary" type="button" :disabled="busy || loading || uncertain || disabled || !totals().valid" @click="confirmSelection">{{busy?'正在抵扣…':'确认使用并抵扣'}}</button></div>
+            </footer>
+          </section>
+        </div>
+      </teleport>
     </section>`
   };
   root.TMManualSheetDeduction={component,chosenQuantity,pending,physicalComponents,orderTargets,reportedTargets,refreshDraftGroup};

@@ -44,7 +44,8 @@ def seed(sessions, *, double=False, yield_factor=1, owned=False):
             pieces_per_box=1,stock_yield_per_sheet=yield_factor,sheet_type='raw_board',internal_name='现有片料'))
         if owned:
             from app.models.warehouse_inventory import SemiFinishedLotAllowedProduct
-            db.add(SemiFinishedLotAllowedProduct(inventory_lot_id=lot.id, product_id=product.id))
+            db.add(SemiFinishedLotAllowedProduct(inventory_lot_id=lot.id, product_id=product.id,
+                confirmed_by=1, confirmed_at=datetime.now()))
         db.commit();return lot.id
 
 
@@ -134,14 +135,14 @@ def test_stale_lot_and_frozen_order_contract(composite_requisition_app):
         assert response.status_code==409,response.text
 
 
-def test_reviewed_raw_material_variance_and_trim_preserve_original_stock(composite_requisition_app):
+def test_reviewed_exact_raw_material_variance_preserves_original_stock(composite_requisition_app):
     from decimal import Decimal
     from app.models.warehouse_inventory import InventoryLot, SemiFinishedInventoryDetail, InventoryReservation
     app,sessions=composite_requisition_app;lot_id=seed(sessions,double=True)
     with sessions() as db:
         detail=db.get(SemiFinishedInventoryDetail,lot_id)
         detail.material_code_snapshot=detail.normalized_material_code='X616X'
-        detail.board_width_mm=724
+        detail.board_width_mm=700
         db.get(InventoryLot,lot_id).estimated_unit_cost_snapshot=Decimal('1.5000')
         db.commit()
     with TestClient(app) as client:
@@ -154,7 +155,7 @@ def test_reviewed_raw_material_variance_and_trim_preserve_original_stock(composi
         assert response.status_code==200,response.text
     with sessions() as db:
         assert db.get(SemiFinishedInventoryDetail,lot_id).material_code_snapshot=='X616X'
-        assert db.get(SemiFinishedInventoryDetail,lot_id).board_width_mm==724
+        assert db.get(SemiFinishedInventoryDetail,lot_id).board_width_mm==700
         assert db.get(InventoryLot,lot_id).estimated_unit_cost_snapshot==Decimal('1.5000')
         reservation=db.scalar(select(InventoryReservation))
         assert reservation.reserved_stock_quantity==7
@@ -335,7 +336,7 @@ def test_ordinary_double_splice_operator_chooses_sheets_and_pending_updates(comp
         lot=db.get(InventoryLot,lot_id);assert (lot.quantity_available,lot.quantity_reserved)==(197,7)
 
 
-def test_ordinary_reviewed_raw_material_trim_and_geometry_yield(composite_requisition_app):
+def test_ordinary_larger_sheet_is_not_a_default_or_swapped_match(composite_requisition_app):
     from app.models.warehouse_inventory import InventoryLot,SemiFinishedInventoryDetail
     app,sessions=composite_requisition_app;lot_id=ordinary_seed(sessions)
     with sessions() as db:
@@ -346,14 +347,10 @@ def test_ordinary_reviewed_raw_material_trim_and_geometry_yield(composite_requis
     with TestClient(app) as client:
         _login(client);read=client.get(base+'/manual-inventory')
         assert read.status_code==200,read.text
-        data=read.json();row=data['items'][0]
-        assert row['cut_plan']['yield_factor']==2
-        result=client.post(base+'/manual-reserve',json=payload(data,3,'ordinary-trim-three'))
-        assert result.status_code==200,result.text
-        assert result.json()['allocated_requirement_quantity']==6
-        assert result.json()['remaining_required_piece_qty']==14
+        assert read.json()['items']==[]
+        assert client.get(base+'/manual-inventory?match_mode=swapped').json()['items']==[]
     with sessions() as db:
-        assert db.get(InventoryLot,lot_id).quantity_available==201
+        assert db.get(InventoryLot,lot_id).quantity_available==204
         assert db.get(SemiFinishedInventoryDetail,lot_id).board_length_mm==2000
 
 

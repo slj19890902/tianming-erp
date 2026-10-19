@@ -17,11 +17,13 @@ def reviewed_reservation(app, sessions):
     with sessions() as db:
         detail = db.get(SemiFinishedInventoryDetail, lot_id)
         detail.material_code_snapshot = detail.normalized_material_code = 'X616X'
-        detail.board_width_mm = 724
+        detail.board_length_mm = 700
+        detail.board_width_mm = 1000
         db.commit()
     with TestClient(app) as client:
         _login(client)
-        response = client.post(BASE + '/manual-reserve', json=payload(preview(client), 7))
+        data = client.get(BASE + '/manual-inventory?match_mode=swapped').json()
+        response = client.post(BASE + '/manual-reserve', json={**payload(data, 7), 'match_mode':'swapped'})
         assert response.status_code == 200, response.text
         reservation_id = response.json()['reservation_ids'][0]
     return lot_id, reservation_id
@@ -43,7 +45,7 @@ def test_confirmed_material_variance_can_be_consumed_once(composite_requisition_
         lot = db.get(InventoryLot, lot_id)
         assert (lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed) == (197, 0, 7)
         assert lot.semi_finished_detail.material_code_snapshot == 'X616X'
-        assert lot.semi_finished_detail.board_width_mm == 724
+        assert lot.semi_finished_detail.board_width_mm == 1000
 
 
 @pytest.mark.parametrize('change', ['no_actor', 'no_warning', 'new_material', 'new_flute', 'new_geometry',

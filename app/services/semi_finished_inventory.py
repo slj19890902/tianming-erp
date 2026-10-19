@@ -760,6 +760,7 @@ def ensure_semi_finished_lot_eligibility(
     customer_id: int,
     expected: SemiFinishedSignature,
     reviewed: bool = False,
+    allow_rotation: bool = False,
 ) -> str:
     """Recheck the lot-level hard authorization independently of client data."""
 
@@ -785,7 +786,7 @@ def ensure_semi_finished_lot_eligibility(
         raise WarehouseInventoryError("加工片料用途或模具版本不符，请先核对原加工记录", 409)
     if rectangular_cut_plan(db, lot, product, expected):
         return "customer_generic"
-    if reviewed and rectangular_cut_plan(db, lot, product, expected, reviewed=True):
+    if reviewed and rectangular_cut_plan(db, lot, product, expected, reviewed=True, allow_rotation=allow_rotation):
         return "customer_generic"
     issues = qualification_issues(db, lot, product, expected_material_code=expected.normalized_material_code)
     if issues:
@@ -1365,6 +1366,8 @@ def browse_semi_finished_inventory(
 def browse_semi_finished_inventory_for_requirement(
     db: Session, requirement: OrderItemSemiRequirement, *, reviewed_raw: bool = False,
     include_ineligible: bool = False,
+    allow_rotation: bool = False,
+    dimension_match: str | None = None,
 ) -> list[SemiFinishedCandidate]:
     """Read candidates for a frozen, optionally unsaved component demand."""
     rows = db.scalars(
@@ -1384,6 +1387,13 @@ def browse_semi_finished_inventory_for_requirement(
                 == requirement.customer_id,
             ),
             SemiFinishedInventoryDetail.component_type == requirement.component_type,
+            SemiFinishedInventoryDetail.flute_type == requirement.flute_type if dimension_match else True,
+            SemiFinishedInventoryDetail.board_length_mm == (
+                requirement.board_width_mm if dimension_match == 'swapped' else requirement.board_length_mm
+            ) if dimension_match else True,
+            SemiFinishedInventoryDetail.board_width_mm == (
+                requirement.board_length_mm if dimension_match == 'swapped' else requirement.board_width_mm
+            ) if dimension_match else True,
         )
         .order_by(*inventory_fifo_order_columns())
     ).all()
@@ -1403,11 +1413,13 @@ def browse_semi_finished_inventory_for_requirement(
             product_id=product_id,
         )
         raw_review = False
-        if scope is None and reviewed_raw and detail.sheet_type == "raw_board":
+        rotated_review = (allow_rotation and expected.board_length_mm != expected.board_width_mm
+            and (detail.board_length_mm, detail.board_width_mm) == (expected.board_width_mm, expected.board_length_mm))
+        if (scope is None or rotated_review) and reviewed_raw and (detail.sheet_type == "raw_board" or rotated_review):
             try:
                 scope = ensure_semi_finished_lot_eligibility(
                     db, lot=lot, product_id=product_id,
-                    customer_id=requirement.customer_id, expected=expected, reviewed=True,
+                    customer_id=requirement.customer_id, expected=expected, reviewed=True, allow_rotation=allow_rotation,
                 )
                 raw_review = True
             except WarehouseInventoryError as error:
@@ -1471,7 +1483,7 @@ def browse_semi_finished_inventory_for_requirement(
                 signature_differences=differences,
                 warning_codes=warning_codes,
                 warning_messages=warning_messages,
-                cut_plan=rectangular_cut_plan(db, lot, db.get(Product, product_id), expected, reviewed=raw_review),
+                cut_plan=rectangular_cut_plan(db, lot, db.get(Product, product_id), expected, reviewed=raw_review, allow_rotation=allow_rotation),
             )
         )
     return _rank_sheet_candidates(db, product_id, expected, candidates)
@@ -1595,6 +1607,7 @@ def confirm_semi_finished_match(
     warning_acknowledged_codes: list[str],
     admin_reverse_crease_override: bool = False,
     reverse_crease_override_reason: str | None = None,
+    allow_rotation: bool = False,
 ) -> SemiFinishedMatchConfirmation:
     requirement = db.get(OrderItemSemiRequirement, requirement_id)
     if requirement is None:
@@ -1614,6 +1627,7 @@ def confirm_semi_finished_match(
         customer_id=requirement.customer_id,
         expected=requirement_signature(requirement),
         reviewed=override and SIGNATURE_OVERRIDE_WARNING in warning_acknowledged_codes,
+        allow_rotation=allow_rotation,
     )
     if scope == "general":
         differences = _physical_signature_differences(
@@ -2383,6 +2397,7 @@ def reserve_semi_finished_inventory(
     warning_acknowledged_codes: list[str] | None = None,
     admin_reverse_crease_override: bool = False,
     reverse_crease_override_reason: str | None = None,
+    allow_rotation: bool = False,
 ) -> SemiFinishedReservationBatch:
     if not confirmed:
         raise WarehouseInventoryError("半成品库存抵扣必须人工确认", 409)
@@ -2496,11 +2511,12 @@ def reserve_semi_finished_inventory(
                 warning_acknowledged_codes=warnings,
                 admin_reverse_crease_override=admin_reverse_crease_override,
                 reverse_crease_override_reason=reverse_crease_override_reason,
+                allow_rotation=allow_rotation,
             )
             detail = lot.semi_finished_detail
             remaining_target = target - allocated
             cut_plan = rectangular_cut_plan(db, lot, db.get(Product, _requirement_product_id(db, requirement)), requirement_signature(requirement),
-                reviewed=override and SIGNATURE_OVERRIDE_WARNING in warnings)
+                reviewed=override and SIGNATURE_OVERRIDE_WARNING in warnings, allow_rotation=allow_rotation)
             allocation_yield = cut_plan["yield_factor"] if cut_plan else detail.stock_yield_per_sheet
             capacity = lot.quantity_available * allocation_yield
             credited = min(remaining_target, capacity)
@@ -2911,7 +2927,7 @@ def consume_semi_finished_reservation(
                 raise WarehouseInventoryError("原板材质或楞型与本次已确认裁切依据不同，请重新核对", 409)
             if reviewed_cut:
                 current_plan = rectangular_cut_plan(db, lot, db.get(Product, requirement_product_id),
-                    requirement_signature(requirement), reviewed=True)
+                    requirement_signature(requirement), reviewed=True, allow_rotation=frozen_plan.get('rotated') is True)
                 if current_plan != {key: value for key, value in frozen_plan.items() if key != 'review_contract'}:
                     raise WarehouseInventoryError("当前原板裁切条件与已确认方案不一致，请重新核对", 409)
         from app.services.raw_purchase_plans import validate_reservation
@@ -2935,6 +2951,7 @@ def consume_semi_finished_reservation(
                 customer_id=order.customer_id,
                 expected=expected,
                 reviewed=reviewed_cut,
+                allow_rotation=reviewed_cut and frozen_plan.get('rotated') is True,
             )
         if lot.version != expected_version:
             raise WarehouseInventoryError("库存已被其他人修改，请刷新后重试", 409)

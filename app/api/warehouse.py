@@ -2237,6 +2237,7 @@ def adopt_bom_paper(snapshot_id: int, payload: BomPaperAdoptPayload,
 
 class ManualSheetReservationPayload(BaseModel):
     component_type: Literal["whole", "cover", "base"] = "whole"
+    match_mode: Literal["exact", "swapped"] = "exact"
     lot_id: int = Field(gt=0)
     stock_quantity: int = Field(gt=0, strict=True)
     expected_version: int = Field(gt=0)
@@ -2244,6 +2245,22 @@ class ManualSheetReservationPayload(BaseModel):
     review_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     warning_acknowledged_codes: list[str] = Field(default_factory=list)
     idempotency_key: str = Field(min_length=8, max_length=80)
+
+
+class ManualSheetBatchItem(BaseModel):
+    lot_id: int = Field(gt=0)
+    stock_quantity: int = Field(gt=0, strict=True)
+    expected_version: int = Field(gt=0)
+    review_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    warning_acknowledged_codes: list[str] = Field(default_factory=list)
+
+
+class ManualSheetBatchPayload(BaseModel):
+    component_type: Literal["whole", "cover", "base"] = "whole"
+    match_mode: Literal["exact", "swapped"] = "exact"
+    expected_order_item_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    idempotency_key: str = Field(min_length=8, max_length=80)
+    items: list[ManualSheetBatchItem] = Field(min_length=1, max_length=50)
 
 
 class SemiReleasePayload(BaseModel):
@@ -4086,9 +4103,35 @@ def _revise_manual_internal_demand(db, item, component, remaining, user, *, snap
     return changes
 
 
-def _bom_manual_sheet_state(db, snapshot_id, component_type, user):
-    """Build a read-only frozen demand; opening/cancelling creates no records."""
+def _manual_sheet_candidates(db, requirement, user, match_mode):
+    """This explicit workflow only accepts exact axes, then opt-in swapped axes."""
     from app.services.semi_finished_inventory import browse_semi_finished_inventory_for_requirement
+    from decimal import Decimal
+
+    def matching(rows, swapped=False):
+        length, width = requirement.board_length_mm, requirement.board_width_mm
+        if swapped:
+            length, width = width, length
+        return [row for row in rows if row.get('selectable')
+            and str(row.get('flute_type') or '').strip().upper() == str(requirement.flute_type or '').strip().upper()
+            and bool(requirement.flute_type)
+            and Decimal(str(row['board_length_mm'])) == Decimal(str(length))
+            and Decimal(str(row['board_width_mm'])) == Decimal(str(width))
+            and (not swapped or (row.get('cut_plan') or {}).get('rotated') is True)]
+
+    exact = matching(_semi_candidate_dicts(db, _visible_semi_candidates(
+        browse_semi_finished_inventory_for_requirement(db, requirement, reviewed_raw=True, dimension_match='exact'), user, db)))
+    if match_mode == 'exact':
+        return exact, not bool(exact)
+    if exact or requirement.board_length_mm == requirement.board_width_mm:
+        return [], False
+    swapped = matching(_semi_candidate_dicts(db, _visible_semi_candidates(
+        browse_semi_finished_inventory_for_requirement(db, requirement, reviewed_raw=True, allow_rotation=True, dimension_match='swapped'), user, db)), swapped=True)
+    return swapped, True
+
+
+def _bom_manual_sheet_state(db, snapshot_id, component_type, user, match_mode='exact'):
+    """Build a read-only frozen demand; opening/cancelling creates no records."""
     from app.services.sheet_cutting_settings import component_settings
     from app.services.bom_physical_quantities import resolve_bom_sheet_yield
     snapshot = db.get(SalesOrderItemBomComponent, snapshot_id)
@@ -4121,9 +4164,9 @@ def _bom_manual_sheet_state(db, snapshot_id, component_type, user):
     coverage = component_inventory_coverage(db, snapshot.id, component_type=component)
     procurement = _manual_sheet_procurement_state(db, item, component, snapshot=snapshot)
     remaining = max(required - coverage["total_piece_quantity"] - procurement["committed_piece_qty"], 0)
-    candidates = browse_semi_finished_inventory_for_requirement(db, requirement, reviewed_raw=True, include_ineligible=True)
-    rows = _semi_candidate_dicts(db, _visible_semi_candidates(candidates, user, db))
+    rows, can_further_match = _manual_sheet_candidates(db, requirement, user, match_mode)
     for row in rows:
+        row['match_mode'] = match_mode
         yield_factor = max(int(row["stock_yield_per_sheet"]), 1)
         row["max_stock_quantity"] = min(int(row["available_stock_quantity"]), (remaining + yield_factor - 1) // yield_factor)
         row["review_hash"] = _manual_sheet_digest({
@@ -4134,6 +4177,8 @@ def _bom_manual_sheet_state(db, snapshot_id, component_type, user):
     return snapshot, item, requirement, {
         "product_code": snapshot.snapshot_component_product_code,
         "product_name": snapshot.snapshot_component_product_name,
+        "match_mode": match_mode, "can_further_match": can_further_match and remaining > 0, "is_bom": True,
+        "flute_type": requirement.flute_type, "output_unit": "片",
         "order_item_id": item.id, "expected_order_item_revision": _manual_order_revision(item),
         "required_piece_quantity": required,
         "remaining_required_piece_qty": remaining,
@@ -4146,11 +4191,11 @@ def _bom_manual_sheet_state(db, snapshot_id, component_type, user):
     }
 
 
-def _order_manual_sheet_state(db, item_id, component_type, user):
+def _order_manual_sheet_state(db, item_id, component_type, user, match_mode='exact'):
+    from app.services.product_unit_labels import order_unit_label
     from app.api.requisition import (_semi_component_specs_for_requisition, _current_requisition_requirements,
         ORDER_ITEM_ACTIVE_ORDER_STATUSES,
         theoretical_order_yield, _active_requisition_hold)
-    from app.services.semi_finished_inventory import browse_semi_finished_inventory_for_requirement
     _require_order_item_customer_access(db, item_id, user)
     item = db.get(OrderItem, item_id, populate_existing=True)
     order = db.get(Order, item.order_id)
@@ -4178,17 +4223,19 @@ def _order_manual_sheet_state(db, item_id, component_type, user):
         stock_yield_per_sheet=theoretical_order_yield(item,component_type), required_piece_quantity=current["required_piece_qty"])
     if requirement.board_length_mm <= 0 or requirement.board_width_mm <= 0 or not requirement.normalized_material_code or not requirement.flute_type:
         raise WarehouseInventoryError("订单缺少冻结的报料尺寸、材质或楞型，请先完善资料", 409)
-    candidates = browse_semi_finished_inventory_for_requirement(db, requirement, reviewed_raw=True, include_ineligible=True)
-    rows = _semi_candidate_dicts(db, _visible_semi_candidates(candidates, user, db))
     procurement = _manual_sheet_procurement_state(db, item, component_type)
     remaining = max(current["remaining_required_piece_qty"] - procurement["committed_piece_qty"], 0)
+    rows, can_further_match = _manual_sheet_candidates(db, requirement, user, match_mode)
     for row in rows:
+        row['match_mode'] = match_mode
         output = max(int(row["stock_yield_per_sheet"]),1)
         row["max_stock_quantity"] = min(int(row["available_stock_quantity"]),(remaining+output-1)//output)
         row["review_hash"] = _manual_sheet_digest({"order_item_id":item.id,"component":component_type,
             "order_revision":_manual_order_revision(item),"procurement_revision":procurement["revision"],"requirement":_semi_requirement_dict(requirement),
             "remaining":remaining,"row":row})
     return None, item, requirement, {"product_code":item.snapshot_product_code,"product_name":item.snapshot_product_name,
+        "match_mode":match_mode,"can_further_match":can_further_match and remaining > 0,"is_bom":False,
+        "flute_type":requirement.flute_type,"output_unit":order_unit_label(item,product),
         "order_item_id":item.id,"expected_order_item_revision":_manual_order_revision(item),
         "required_piece_quantity":requirement.required_piece_quantity,"remaining_required_piece_qty":remaining,
         "committed_piece_qty":procurement["committed_piece_qty"],
@@ -4202,10 +4249,11 @@ def _order_manual_sheet_state(db, item_id, component_type, user):
 @router.get("/semi-finished/bom-components/{bom_snapshot_id}/manual-inventory")
 def bom_manual_sheet_inventory(
     bom_snapshot_id: int, component_type: Literal["whole", "cover", "base"] = "whole",
+    match_mode: Literal['exact', 'swapped'] = 'exact',
     db: Session = Depends(get_db), user: User = Depends(can_view_reservations),
 ) -> dict:
     try:
-        return _bom_manual_sheet_state(db, bom_snapshot_id, component_type, user)[3]
+        return _bom_manual_sheet_state(db, bom_snapshot_id, component_type, user, match_mode)[3]
     except WarehouseInventoryError as error:
         _handle(error)
 
@@ -4220,9 +4268,10 @@ def reserve_bom_manual_sheet_inventory(
 
 @router.get("/semi-finished/order-items/{order_item_id}/manual-inventory")
 def order_manual_sheet_inventory(order_item_id: int, component_type: Literal["whole", "cover", "base"] = "whole",
+    match_mode: Literal['exact', 'swapped'] = 'exact',
     db: Session = Depends(get_db), user: User = Depends(can_view_reservations)) -> dict:
     try:
-        return _order_manual_sheet_state(db, order_item_id, component_type, user)[3]
+        return _order_manual_sheet_state(db, order_item_id, component_type, user, match_mode)[3]
     except WarehouseInventoryError as error:
         _handle(error)
 
@@ -4244,7 +4293,9 @@ def _reserve_manual_sheet_inventory(target_id, payload, db, user, *, is_bom, com
     _require_lot_customer_access(db, payload.lot_id, user)
     action = "bom_manual_sheet_reserve" if is_bom else "order_manual_sheet_reserve"
     operation_id = _manual_sheet_digest(payload.idempotency_key)
-    request_digest = _manual_sheet_digest({"target_id": target_id, "is_bom": is_bom, **payload.model_dump()})
+    # Preserve original single-lot replay receipts issued before match_mode existed.
+    request_data = payload.model_dump(exclude={'match_mode'} if payload.match_mode == 'exact' else set())
+    request_digest = _manual_sheet_digest({"target_id": target_id, "is_bom": is_bom, **request_data})
     try:
         from app.services.production_workflow import lock_order_rows_for_production_transition, ProductionWorkflowError
         current_item = db.get(OrderItem, item_id)
@@ -4265,7 +4316,7 @@ def _reserve_manual_sheet_inventory(target_id, payload, db, user, *, is_bom, com
         if conflicting is not None:
             raise WarehouseInventoryError("该抵扣凭证已用于其他库存预占，请重新查看库存", 409)
         state_builder = _bom_manual_sheet_state if is_bom else _order_manual_sheet_state
-        snapshot, item, temporary, preview = state_builder(db, target_id, payload.component_type, user)
+        snapshot, item, temporary, preview = state_builder(db, target_id, payload.component_type, user, payload.match_mode)
         if preview["expected_order_item_revision"] != payload.expected_order_item_revision:
             raise WarehouseInventoryError("订单已修改，请重新查看片料后抵扣", 409)
         candidate = next((row for row in preview["items"] if row["lot_id"] == payload.lot_id), None)
@@ -4292,6 +4343,7 @@ def _reserve_manual_sheet_inventory(target_id, payload, db, user, *, is_bom, com
             operator_id=user.id, idempotency_key=payload.idempotency_key, confirmed=True,
             override=SIGNATURE_OVERRIDE_WARNING in candidate["warning_codes"],
             warning_acknowledged_codes=payload.warning_acknowledged_codes,
+            allow_rotation=payload.match_mode == 'swapped',
         )
         if sum(row.reserved_stock_quantity for row in result.reservations) != payload.stock_quantity:
             raise WarehouseInventoryError("本次实际预占张数与填写数量不一致，已取消抵扣", 409)
@@ -4328,6 +4380,107 @@ def _reserve_manual_sheet_inventory(target_id, payload, db, user, *, is_bom, com
             db.commit()
         else:
             db.flush()
+        return response
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post('/semi-finished/bom-components/{bom_snapshot_id}/manual-reserve-batch')
+def reserve_bom_manual_sheet_batch(bom_snapshot_id: int, payload: ManualSheetBatchPayload,
+    db: Session = Depends(get_db), user: User = Depends(can_reserve)) -> dict:
+    return _reserve_manual_sheet_batch(bom_snapshot_id, payload, db, user, is_bom=True)
+
+
+@router.post('/semi-finished/order-items/{order_item_id}/manual-reserve-batch')
+def reserve_order_manual_sheet_batch(order_item_id: int, payload: ManualSheetBatchPayload,
+    db: Session = Depends(get_db), user: User = Depends(can_reserve)) -> dict:
+    return _reserve_manual_sheet_batch(order_item_id, payload, db, user, is_bom=False)
+
+
+def _reserve_manual_sheet_batch(target_id, payload, db, user, *, is_bom):
+    """Validate the whole displayed selection before one atomic reservation."""
+    from math import ceil
+    from app.models.audit import OperationLog
+    from app.services.production_workflow import lock_order_rows_for_production_transition, ProductionWorkflowError
+    snapshot = db.get(SalesOrderItemBomComponent, target_id) if is_bom else None
+    if is_bom and snapshot is None:
+        raise HTTPException(404, '组件快照不存在')
+    item_id = snapshot.sales_order_item_id if is_bom else target_id
+    _require_order_item_customer_access(db, item_id, user)
+    for row in payload.items:
+        _require_lot_customer_access(db, row.lot_id, user)
+    action = 'bom_manual_sheet_batch' if is_bom else 'order_manual_sheet_batch'
+    operation_id = _manual_sheet_digest(payload.idempotency_key)
+    digest = _manual_sheet_digest(dict(target_id=target_id, is_bom=is_bom, **payload.model_dump()))
+    builder = _bom_manual_sheet_state if is_bom else _order_manual_sheet_state
+    try:
+        item = db.get(OrderItem, item_id)
+        if item is None:
+            raise WarehouseInventoryError('订单明细不存在', 404)
+        try:
+            lock_order_rows_for_production_transition(db, [item.order_id])
+        except ProductionWorkflowError as error:
+            raise WarehouseInventoryError(str(error), error.status_code) from error
+        previous = db.scalar(select(OperationLog).where(OperationLog.action_code == action,
+            OperationLog.request_id == operation_id))
+        if previous is not None:
+            saved = json.loads(previous.details)
+            if saved['request_digest'] != digest or previous.user_id != user.id:
+                raise WarehouseInventoryError('同一抵扣凭证不能更改批次、数量或确认依据', 409)
+            return {**saved['response'], 'replayed': True}
+        if len({row.lot_id for row in payload.items}) != len(payload.items):
+            raise WarehouseInventoryError('同一片料批次不能重复选择', 409)
+        _, item, requirement, preview = builder(db, target_id, payload.component_type, user, payload.match_mode)
+        if preview['expected_order_item_revision'] != payload.expected_order_item_revision:
+            raise WarehouseInventoryError('订单已修改，请重新查看片料后抵扣', 409)
+        candidates = {row['lot_id']: row for row in preview['items']}
+        remaining = preview['remaining_required_piece_qty']
+        for selected in payload.items:
+            row = candidates.get(selected.lot_id)
+            if (row is None or not row['selectable'] or row['version'] != selected.expected_version
+                or row['review_hash'] != selected.review_hash
+                or set(row['warning_codes']) != set(selected.warning_acknowledged_codes)):
+                raise WarehouseInventoryError('库存或匹配依据已变化，请重新查看片料后抵扣', 409)
+            output = int(row['stock_yield_per_sheet'])
+            if selected.stock_quantity > row['max_stock_quantity'] or remaining <= 0:
+                raise WarehouseInventoryError('所选片数超过可用库存或剩余需求', 409)
+            credited = min(selected.stock_quantity * output, remaining)
+            if ceil(credited / output) != selected.stock_quantity:
+                raise WarehouseInventoryError('所选片数超过剩余需求，请减少本次使用片数', 409)
+            remaining -= credited
+        responses = []
+        for selected in payload.items:
+            # The initial hashes were all checked above. Only this transaction's
+            # prior reservations may reduce the demand used by the next preview.
+            fresh = builder(db, target_id, payload.component_type, user, payload.match_mode)[3]
+            row = next((row for row in fresh['items'] if row['lot_id'] == selected.lot_id), None)
+            if row is None or set(row['warning_codes']) != set(selected.warning_acknowledged_codes):
+                raise WarehouseInventoryError('本次库存适用条件已变化，整次抵扣已取消', 409)
+            single = ManualSheetReservationPayload(component_type=payload.component_type,
+                match_mode=payload.match_mode, expected_order_item_revision=payload.expected_order_item_revision,
+                idempotency_key='sheet-batch-'+_manual_sheet_digest([payload.idempotency_key, selected.lot_id])[:48],
+                **{**selected.model_dump(), 'review_hash': row['review_hash']})
+            responses.append(_reserve_manual_sheet_inventory(target_id, single, db, user, is_bom=is_bom, commit=False))
+        response = {**responses[-1], 'stock_quantity': sum(row['stock_quantity'] for row in responses),
+            'allocated_requirement_quantity': sum(row['allocated_requirement_quantity'] for row in responses),
+            'reservation_ids': [rid for row in responses for rid in row['reservation_ids']],
+            'internal_requisition_changes': [change for row in responses for change in row['internal_requisition_changes']]}
+        response['message'] = (f"已使用 {response['stock_quantity']} 片库存片料，" +
+            ('本项无需再报料' if response['remaining_required_piece_qty'] == 0 else
+             f"剩余 {response['remaining_required_piece_qty']} 片仍需报料"))
+        append_audit_event(db, event_category='business', result='success', source='web',
+            module_code='warehouse', action_code=action, resource='semi_finished_inventory',
+            actor=user, entity_type='bom_component' if is_bom else 'order_item', entity_id=target_id,
+            customer_id=requirement.customer_id, request_id=operation_id,
+            description='弹窗确认多批次库存片料抵扣', details={'request_digest':digest,'response':response})
+        db.commit()
         return response
     except WarehouseInventoryError as error:
         db.rollback()

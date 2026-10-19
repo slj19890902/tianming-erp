@@ -5,7 +5,7 @@ from app.services.warehouse_goods import goods_profile, qualification_issues, lo
 from app.services.sheet_measurement import crease_match
 
 
-def rectangular_cut_plan(db, lot, product, expected, *, reviewed=False):
+def rectangular_cut_plan(db, lot, product, expected, *, reviewed=False, allow_rotation=False):
     detail = lot.semi_finished_detail
     profile = goods_profile(db, lot)
     if profile and (profile.get("output_piece") or profile.get("dimension_basis") == "source_board"):
@@ -45,17 +45,23 @@ def rectangular_cut_plan(db, lot, product, expected, *, reviewed=False):
             "材质不一致，不能抵扣", "替代材质尚未确认适用，不能按尺寸推断强度合格"}]
     if issues:
         return None
+    rotated = bool(allow_rotation and reviewed
+        and expected.board_length_mm != expected.board_width_mm
+        and (detail.board_length_mm, detail.board_width_mm) == (expected.board_width_mm, expected.board_length_mm))
     if (lot_face(db, lot, profile) != product_face(product)
             or detail.flute_type != expected.flute_type
             or detail.component_type != expected.component_type
             or not detail.layer_count or not (product.layer_count or (product.material and product.material.layer_count))
             or detail.layer_count != (product.layer_count or product.material.layer_count)
-            or detail.stock_yield_per_sheet != 1):
+            or (detail.stock_yield_per_sheet != 1
+                and not (rotated and detail.stock_yield_per_sheet == expected.stock_yield_per_sheet))):
         return None
     rule = get_box_type_rule(product.box_style)
     # The requirement's frozen report dimensions define one production blank. For
     # plain one-up flat pieces net dimensions must agree; never guess old cm fields.
     length, width = expected.board_length_mm, expected.board_width_mm
+    if rotated:
+        length, width = width, length
     if detail.sheet_type != "raw_board" and rule and rule.code in {"liner", "divider", "die_cut_partition"}:
         if expected.stock_yield_per_sheet != 1 or (product.length_mm, product.width_mm) != (length, width):
             return None
@@ -81,8 +87,10 @@ def rectangular_cut_plan(db, lot, product, expected, *, reviewed=False):
     output = across * down * expected.stock_yield_per_sheet
     return dict(schema=1, method="fixed_direction_grid", product_id=product.id,
         lot_id=lot.id, source_length_mm=detail.board_length_mm, source_width_mm=detail.board_width_mm,
-        target_length_mm=int(length), target_width_mm=int(width), rows=across, columns=down,
-        trim_mm=str(trim), kerf_mm=str(kerf), rotated=False,
+        # Keep existing unrotated allocation serialization stable for readback.
+        target_length_mm=expected.board_length_mm if rotated else int(length),
+        target_width_mm=expected.board_width_mm if rotated else int(width), rows=across, columns=down,
+        trim_mm=str(trim), kerf_mm=str(kerf), rotated=rotated,
         blank_yield=expected.stock_yield_per_sheet, yield_factor=output,
         material_code=detail.material_code_snapshot, flute_type=detail.flute_type,
         requires_production=True, allowance_basis="recorded" if "cut_trim_mm" in profile or "cut_kerf_mm" in profile else "zero_allowance_theoretical",

@@ -122,7 +122,7 @@ test('cache fingerprints match manual and dispatch source and product index trac
     const digest=crypto.createHash('sha256').update(fs.readFileSync('static/ui/'+path+'.js')).digest('hex').slice(0,12);
     assert.ok(html.includes('/static/ui/'+path+'.js?v='+digest),path+' stale cache');
   }
-  assert.ok(html.includes('product-workbench.js?v=902a32bc5f41'));
+  assert.ok(html.includes('product-workbench.js?v=20261019origins01'));
 });
 
 test('a covered child contributes no zero supplier payload; uncovered sibling retains its own fingerprint',()=>{

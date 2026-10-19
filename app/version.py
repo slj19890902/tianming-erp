@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.671"
-APP_VERSION_NAME = "订单规格来源及模具位置显示修复"
-APP_BUILD_DATE = "2026-10-17"
+APP_VERSION = "v0.22.672"
+APP_VERSION_NAME = "今日工作台产品资料读取修复"
+APP_BUILD_DATE = "2026-10-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -6612,3 +6612,15 @@ APP_VERIFICATION_STEPS = [
     "核对模具位置只显示当前位置标签；新建和编辑订单缺失规格不会再生成模具身份文字。",
 ]
 APP_CHANGELOG = [*(f"v0.22.671：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.672：产品采购动态时间来源修复。
+APP_CHANGES = [
+    "修复今日工作台部分已有采购记录的产品无法查看资料的问题，采购动态使用采购单真实创建时间。",
+    "产品资料读取遇到服务器非JSON错误时显示可读提示，保留登录、权限及取消请求处理。",
+    "本版无数据库迁移，不修改产品资料、历史采购、库存数量、成本或预占。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新今日工作台，搜索此前无法打开的产品，点击查看资料，核对生产资料、库存、订单和采购记录可正常显示。",
+    "抽查一个原本正常的产品，确认资料及权限保持正常。",
+]
+APP_CHANGELOG = [*(f"v0.22.672：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

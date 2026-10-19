@@ -6489,6 +6489,16 @@ def test_name_only_applies_legacy_mixed_area_without_capacity_or_inventory_chang
                 operation_key='name-only-mixed-area', area_name='东侧货架区')
             ids = [row.id for row in rows]
             before = editor.snapshot_warehouse_twin_publish_state()
+            if not with_draft:
+                # The old simple form round-trips "mixed" as pallet_ground,
+                # so a name edit is rejected as a storage-policy transition.
+                with pytest.raises(warehouse_api.HTTPException) as old_form:
+                    warehouse_api.confirm_twin_zone_area('3F', 'zone-f1',
+                        _confirm_area_payload(revision=pub_revision, operation_key='old-form-name',
+                            storage_layout='pallet_ground', capacity=20, area_name='东侧货架区', existing_area_id=area.id),
+                        _request(), db, admin)
+                assert old_form.value.status_code == 409
+                assert editor.snapshot_warehouse_twin_publish_state() == before
             with pytest.raises(warehouse_api.HTTPException) as stale:
                 warehouse_api.rename_twin_zone('3F', 'zone-f1',
                     body.model_copy(update={'expected_version': 999}), _request(), db, admin)
@@ -6517,6 +6527,8 @@ def test_name_only_applies_legacy_mixed_area_without_capacity_or_inventory_chang
                 remaining = editor.load_warehouse_twin_layout_draft('3F')['features'][0]
                 assert remaining['points'][0] == [100,100]
                 assert remaining['formal_area_name'] == '东侧货架区'
+                assert remaining['allowed_inventory_types'] == ['finished']
+                assert remaining['storage_layout'] == 'mixed'
             replay = warehouse_api.rename_twin_zone('3F', 'zone-f1', body, _request(), db, admin)
             assert replay['applied'] is False
             assert db.scalar(select(func.count(OperationLog.id)).where(OperationLog.action == 'TWIN_ZONE_RENAME')) == 1

@@ -576,6 +576,9 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
             # Pending usage/layout changes still face the normal publish gates.
             for key in ("formal_area_id", "formal_floor_id", "legacy_v11_name_only"):
                 rebased_feature[key] = deepcopy(published_feature[key])
+            for key in ("allowed_inventory_types", "storage_layout"):
+                if not rebased_feature.get(key):
+                    rebased_feature[key] = deepcopy(published_feature[key])
         rebased_feature["version"] = max(
             int(rebased_feature.get("version") or 1),
             int(published_feature.get("version") or 1),

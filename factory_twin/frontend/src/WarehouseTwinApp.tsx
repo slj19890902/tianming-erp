@@ -5737,6 +5737,7 @@ export function WarehouseTwinApp() {
       && formalAreaNameDraft.trim() !== employeeAreaName(selectedAreaFeature, { floorCode })
       && simpleAreaUsage === ((selectedAreaFeature.allowed_inventory_types || [])[0] || "finished")
       && simpleAreaLayout === (selectedAreaFeature.storage_layout === "rack" ? "rack" : "pallet_ground")
+      && simpleAreaCapacity.trim() !== ""
       && Number(simpleAreaCapacity) === originalCapacity
       && simpleAreaRotation === (selectedAreaFeature.pallet_rotation_deg === 90 ? 90 : 0)) {
       await saveSelectedAreaName(formalAreaNameDraft);

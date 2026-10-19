@@ -1,5 +1,15 @@
 # WAREHOUSE-AREA-NAME-20261019
 
+## 最新状态：已正式发布 v0.22.683（2026-10-19 13:24）
+
+用户明确批准后，区域名称修复随已协调的单一发布队列上线。冻结源码 `a0e5b092d540923a12fad044f8067eff04b0de32`，签名包 `263e06e736b9b99d08605598c09bfedd1b02ccdd663b8e8c063debb83a1ba001`，正式进程 PID45475。13:22:31 健康就绪，13:24:40 原生备份复读与临时恢复副本收尾完成，发布协调器和 worker 已退出；服务继续运行。统一候选还含此前已批准的成品标签及模具显示修复，未额外发布清理版本。
+
+精确签名候选使用最新正式 DB/地图配对副本验证：区域新名称保存及 formal/employee 名称回读、刷新草稿、同键幂等重放全部通过，全部发布区 points/racks 及库存/库位/预占/流水/订单原行指纹不变。地图发布相关 59 项、区域接口 5 项、前端处理/选择器 4 项通过。已安装 6 份源码/资源与签名清单、冻结 Git 字节一致，本机和常用 LAN `192.168.3.80:8000` 共 22 项只读 HTTP/页面实际引用资源检查通过；另一网卡 `192.168.3.106` 被既有 trusted-host 规则以精确 `400 Invalid host header` 拒绝，未更改业务配置、未将其算作可用地址。
+
+发布前完整加密备份保留在 `/Library/TianmingERP/instance/backups/20261019-131506-5d612018.tmbackup`，SHA-256 `80d3164f4b00e23cf2cbab1d752e20d2bfb875da30a7c2d26471631f114cc7cc`；原生收尾确认 `backup_preserved=true`、`backup_work_retained=false`。正式只读核验完整性正常、外键错误 0、库存数量/版本和打印记录不变；未向正式库写入测试名称。后台技术验收完成，管理员实际点击、改名与刷新人工验收仍待执行。操作：刷新页面 → 区域规划 → 选择区域 → 调整区域名称 → 保存并应用名称 → 刷新确认地图与选择列表。
+
+发布回执：`/Users/kimiyf/ERP-Migration/evidence/warehouse-area-name-20261019/PUBLISHED.md`，机器核验 `independent-live-verification.json`、`publication-progress.json`；受保护原生最终结果 `/Library/TianmingERP-Release-20261019-v683/final-result.json`。以下内容为开发及发布前的历史记录，其“尚未发布”描述不代表当前状态。
+
 ## 范围和验收
 
 用户要求在区域规划的“调整区域尺寸”“调整货位数量”旁增加“调整区域名称”。名称保存后应用于地图和选择列表，刷新不丢失；同名区域、货架选择按稳定身份区分。

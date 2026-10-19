@@ -41,9 +41,11 @@ def processing_block(db, item, lot):
             if (not child or child['product_version'] != product.version or not parent
                     or parent.version != contract['parent_product_version']):
                 return '采购后产品或BOM版本已变化，请核对冻结加工身份'
+        from app.services.incoming_actual_specs import for_lot, effective_item
+        item = effective_item(item, for_lot(db, lot))
         if item.sheet_cutting_snapshot:
             from app.services.sheet_cutting_contract import SheetCuttingContract
-            cutting = SheetCuttingContract.from_snapshot(item.sheet_cutting_snapshot)
+            cutting = SheetCuttingContract.from_snapshot(json.loads(item.sheet_cutting_snapshot) if isinstance(item.sheet_cutting_snapshot,str) else item.sheet_cutting_snapshot)
             if cutting.yield_per_supplier_sheet != item.stock_yield_per_sheet:
                 return '冻结开料与每张产出不一致，请核对'
     except prep.WarehouseInventoryError as error:
@@ -66,11 +68,16 @@ def freeze_snapshot(db, item, lot):
     from app.services.stock_completion_basis import completion_basis
     output_basis, basis_proof = completion_basis(db, item, dict(
         physical_basis=identity['physical_basis'], product_id=product.id, purchase_identity=identity))
+    from app.services.incoming_actual_specs import for_lot
+    actual = for_lot(db, lot)
+    if actual:
+        value = json.loads(output_basis);value.update(material=actual["material_code"], flute=actual["flute_type"], layer_count=str(actual["layer_count"]))
+        output_basis = encode(value)
     return dict(product_id=product.id, code=item.product_code_snapshot or product.product_code,
-        name=item.product_name_snapshot or product.product_name, factor=item.stock_yield_per_sheet,
+        name=item.product_name_snapshot or product.product_name, factor=actual['yield'] if actual else item.stock_yield_per_sheet,
         pieces_per_box=item.pieces_per_box, physical_basis=output_basis, completion_basis_proof=basis_proof,
         purchase_identity=identity, product_version=identity['product_version'], planned_location=None, preparation_group=None,
-        frozen_bom_plan=contract, sheet_cutting_snapshot=item.sheet_cutting_snapshot,
+        frozen_bom_plan=contract, sheet_cutting_snapshot=encode(actual["cutting"]) if actual else item.sheet_cutting_snapshot,
         bom_parent_basis=(identity.get('bom_parent_basis') or product_basis(db.get(Product,contract['parent_product_id']))) if contract else None,
         auto_planned=True)
 
@@ -106,45 +113,49 @@ def auto_complete_receipt(db, receipt, lot, actor):
         return json.loads(previous.result_json)
     snapshot = freeze_snapshot(db, item, lot)
     factor = int(snapshot['factor']); pieces = int(snapshot['pieces_per_box'])
-    planned = int(receipt.planned_quantity)
-    cumulative = min(int(receipt.cumulative_received_quantity), planned)
-    target_output = cumulative * factor // pieces
-    receipt_ids = list(db.scalars(select(IncomingReceiptItem.id).where(
+    db.flush()
+    all_receipts = list(db.scalars(select(IncomingReceiptItem).where(
         IncomingReceiptItem.stock_replenishment_item_id == item.id,
         IncomingReceiptItem.status == 'posted').order_by(IncomingReceiptItem.id)))
-    completed = list(db.scalars(select(Job).where(
-        Job.receipt_item_id.in_(receipt_ids), Job.status == 'completed')))
+    factors = {}; scope_ids = []
+    for received in all_receipts:
+        raw_lot = db.get(InventoryLot, received.received_inventory_lot_id)
+        if raw_lot is None: continue
+        frozen = freeze_snapshot(db, item, raw_lot)
+        if frozen['physical_basis'] != snapshot['physical_basis']: continue
+        factors[received.id] = int(frozen['factor']); scope_ids.append(received.id)
+    cumulative = sum(r.received_quantity for r in all_receipts if r.id in scope_ids)
+    target_output = sum(r.received_quantity*factors[r.id] for r in all_receipts if r.id in scope_ids)//pieces
+    completed = list(db.scalars(select(Job).where(Job.receipt_item_id.in_(scope_ids), Job.status == 'completed')))
+    completed = [j for j in completed if json.loads(j.product_snapshot)['physical_basis'] == snapshot['physical_basis']]
     produced = sum(int(row.actual_output or 0) for row in completed)
-    output_delta = target_output - produced
-    if output_delta < 0:
-        prep.fail('累计已产数量超过冻结实收应产数量，请核对原任务，不能重复收料')
-    if output_delta == 0:
-        return None
-    target_consumed = min(ceil(target_output * pieces / factor), planned)
-    consumed = sum(int(row.input_quantity or 0) for row in completed)
-    input_delta = target_consumed - consumed
-    if input_delta <= 0:
-        prep.fail('累计实收产出增加但冻结投入没有增加，请核对数量换算')
+    output_delta = target_output-produced
+    if output_delta < 0: prep.fail('累计已产数量超过实际收料应产数量，请核对原任务')
+    if output_delta == 0: return None
+    unused_credit = sum(int(j.input_quantity)*int(json.loads(j.product_snapshot)['factor']) for j in completed)-produced*pieces
+    required_units = output_delta*pieces-unused_credit
     candidates = list(db.scalars(select(InventoryLot).join(IncomingReceiptItem,
         IncomingReceiptItem.received_inventory_lot_id == InventoryLot.id).where(
         IncomingReceiptItem.stock_replenishment_item_id == item.id,
         IncomingReceiptItem.status == 'posted', InventoryLot.status == 'active',
         InventoryLot.inventory_type == 'semi_finished', InventoryLot.quantity_available > 0)
         .order_by(IncomingReceiptItem.id, InventoryLot.id)))
-    remaining=input_delta;sources=[]
+    remaining=required_units;sources=[]
     for source in candidates:
         if remaining<=0:break
-        take=min(remaining,int(source.quantity_available or 0))
+        source_factor=factors.get(next((r.id for r in all_receipts if r.received_inventory_lot_id==source.id),0),1)
+        take=min(int(source.quantity_available or 0),(remaining+source_factor-1)//source_factor)
         source_receipt=db.scalar(select(IncomingReceiptItem).where(
             IncomingReceiptItem.received_inventory_lot_id==source.id,
             IncomingReceiptItem.stock_replenishment_item_id==item.id,
             IncomingReceiptItem.status=='posted').order_by(IncomingReceiptItem.id).limit(1))
-        if take<=0 or source_receipt is None:continue
+        if take<=0 or source_receipt is None or source_receipt.id not in scope_ids:continue
         if processing_block(db,item,source):
             prep.fail(f'来源批次 {source.lot_number} 已不满足冻结加工条件')
-        sources.append((source_receipt,source,take));remaining-=take
-    if remaining:
+        sources.append((source_receipt,source,take));remaining-=take*factors[source_receipt.id]
+    if remaining>0:
         prep.fail('累计实收原料可用量不足，不能自动形成应产成品')
+    input_delta=sum(take for _,_,take in sources)
     total=Decimal(0);input_rows=[];jobs=[]
     for source_receipt,source,take in sources:
         from app.services.inventory_valuation import require_inherited_entry_cost
@@ -155,9 +166,10 @@ def auto_complete_receipt(db, receipt, lot, actor):
             consumed_by=actor.id,consumed_at=utc_now_naive(),idempotency_key='prep:'+digest([key,source.id])[:60],
             warning_codes='stock_preparation_auto',reservation_group_key=key)
         db.add(reservation);db.flush()
-        expected=max(take*factor//pieces,1)
+        source_snapshot=freeze_snapshot(db,item,source)
+        expected=max(take*factors[source_receipt.id]//pieces,1)
         job=Job(receipt_item_id=source_receipt.id,reservation_id=reservation.id,
-            product_id=snapshot['product_id'],product_snapshot=encode(dict(snapshot,automatic_completion=True,
+            product_id=snapshot['product_id'],product_snapshot=encode(dict(source_snapshot,automatic_completion=True,
                 cumulative_received_quantity=cumulative,cumulative_target_output=target_output)),
             input_quantity=take,expected_output=expected,actual_output=0,status='completed')
         db.add(job);db.flush();before=prep._balances(source)

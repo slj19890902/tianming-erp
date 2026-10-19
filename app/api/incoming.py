@@ -1161,9 +1161,19 @@ def _record_reversal_fact(
     return stable_response
 
 
+class ActualReceiptRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    material_id: int = Field(gt=0)
+    material_version: int = Field(gt=0)
+    length_mm: SheetDimension = Field(gt=0)
+    width_mm: SheetDimension = Field(gt=0)
+    fingerprint: str | None = Field(default=None,min_length=64,max_length=64)
+
+
 class ReceiveRequest(BaseModel):
     model_config = {"extra": "forbid"}
     received_quantity: int | None = None
+    actual_spec: ActualReceiptRequest | None = None
     resolution_action: str | None = None
     resolution_reason: str | None = None
     surplus_disposition: Literal["finished", "semi_finished_reserve"] | None = None
@@ -1194,6 +1204,7 @@ class BatchReceiveLine(BaseModel):
     model_config = {"extra": "forbid"}
     item_id: int | str
     received_quantity: int
+    actual_spec: ActualReceiptRequest | None = None
     resolution_action: str | None = None
     resolution_reason: str | None = None
     surplus_disposition: Literal["finished", "semi_finished_reserve"] | None = None
@@ -3643,6 +3654,8 @@ def _receipt_fact_rows(
         _apply_component_crease(row, component)
         rows.append(row)
     _decorate_received_rows_with_purpose(db, rows=rows, user=user)
+    from app.services.incoming_actual_specs import decorate
+    decorate(db, rows)
     return rows
 
 
@@ -3714,7 +3727,7 @@ def _filter_received_history_rows(
                 "receipt_number",
                 "order_number",
                 "customer_po",
-                "supplier_order_number",
+                "supplier_order_number", "actual_material_code", "actual_material_display",
             )
         ):
             return False
@@ -4537,6 +4550,8 @@ def _new_receipt_response(
             raise HTTPException(status_code=409, detail="补库来料收货事实关联不完整")
         response.update(receipt_item_dict(fact))
         response.update(stock_source_summary(db, f"sr{fact.stock_replenishment_item_id}"))
+        from app.services.incoming_actual_specs import decorate
+        decorate(db,[response])
         return response
     item_key: int | str = (
         supplier_order_item_key(fact.supplier_order_item_id)
@@ -4647,6 +4662,22 @@ def _preflight_receipt_item_customer_access(
         )
 
 
+@router.get("/actual-materials/{item_id}")
+def actual_receipt_materials(item_id: str, db: Session = Depends(get_db), user: User = Depends(can_operate)):
+    _preflight_item_customer_access(db,item_id=item_id,user=user)
+    from app.services.incoming_actual_specs import catalog
+    try:return catalog(db,item_id)
+    except IncomingReceiptError as error:_raise_receipt_error(error,user)
+
+
+@router.post("/actual-preview/{item_id}")
+def actual_receipt_preview(item_id: str, payload: ActualReceiptRequest, db: Session = Depends(get_db), user: User = Depends(can_operate)):
+    _preflight_item_customer_access(db,item_id=item_id,user=user)
+    from app.services.incoming_actual_specs import preview, public
+    try:return public(preview(db,item_id,payload.model_dump(mode="json"),user))
+    except IncomingReceiptError as error:_raise_receipt_error(error,user)
+
+
 @router.put("/receive/{item_id}")
 def receive_item(
     item_id: str,
@@ -4664,6 +4695,7 @@ def receive_item(
             received_quantity=(
                 payload.received_quantity if payload is not None else None
             ),
+            actual_spec=payload.actual_spec.model_dump(mode="json") if payload and payload.actual_spec else None,
             resolution_action=(payload.resolution_action if payload else None),
             resolution_reason=(payload.resolution_reason if payload else None),
             surplus_disposition=(payload.surplus_disposition if payload else None),
@@ -4832,6 +4864,7 @@ def batch_receive_items(
                     user=user,
                     item_key=line.item_id,
                     received_quantity=line.received_quantity,
+                    actual_spec=line.actual_spec.model_dump(mode="json") if line.actual_spec else None,
                     resolution_action=line.resolution_action,
                     resolution_reason=line.resolution_reason,
                     surplus_disposition=line.surplus_disposition,

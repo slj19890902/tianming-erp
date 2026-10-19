@@ -341,7 +341,7 @@ def main():
                                                     'stock_purchase_identity_v1': 1,
                                                     'delivery_dispatch_v1': 1,
                                                     'unused_mold_deletion_v1': 1,
-                                                    'supplier_sheet_trim_v1': 1,
+                                                    'supplier_sheet_trim_v1': 1, 'actual_receipt_specs_v1': 1,
                                                     'restore_provenance_v1': 1,
                                                     'physical_kit_correction_20261014_v1': 1,
                                                     **({'factory_cutover_v1': 1} if args.runtime_platform == 'macos-arm64' else {})},

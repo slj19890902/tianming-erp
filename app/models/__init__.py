@@ -328,3 +328,5 @@ from app.models.company_profile import CompanyProfile, CompanySelection, Contrac
 from app.models.shared_finished_stock import (SharedFinishedGroup, SharedFinishedMember,
     SharedFinishedLot, SharedFinishedReservation, SharedFinishedPolicy, SharedFinishedMutation,
     SharedFinishedOrderBasis)  # noqa: E402,F401
+
+from app.models.incoming_actual_spec import IncomingActualSpec  # noqa: E402,F401

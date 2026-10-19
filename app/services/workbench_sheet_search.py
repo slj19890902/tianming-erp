@@ -17,7 +17,7 @@ SHORTFALL_MM = Decimal('10')
 NEAR_SIZE_FACTOR = Decimal('1.10')
 
 
-def _axis_fit(actual, required):
+def _axis_fit(actual, required, shortfall_mm):
     """Best original-axis grid; tolerance is per whole sheet, never per cut."""
     whole = int(actual // required)
     candidates = []
@@ -25,23 +25,23 @@ def _axis_fit(actual, required):
         if count < 1:
             continue
         planned = required * count
-        if planned - actual > SHORTFALL_MM:
+        if planned - actual > shortfall_mm:
             continue
         candidates.append((min(actual, planned) / max(actual, planned), -count))
     score, negative_count = max(candidates)
     return score, -negative_count
 
 
-def sheet_fit(actual_length, actual_width, length, width):
+def sheet_fit(actual_length, actual_width, length, width, *, shortfall_mm=SHORTFALL_MM):
     """Read-only size ranking, not an execution yield or inventory conversion."""
     actual_length, actual_width, length, width = map(
         lambda value: Decimal(str(value)), (actual_length, actual_width, length, width))
     if min(actual_length, actual_width, length, width) <= 0:
         return None
-    if actual_length < length - SHORTFALL_MM or actual_width < width - SHORTFALL_MM:
+    if actual_length < length - shortfall_mm or actual_width < width - shortfall_mm:
         return None
-    length_score, length_cuts = _axis_fit(actual_length, length)
-    width_score, width_cuts = _axis_fit(actual_width, width)
+    length_score, length_cuts = _axis_fit(actual_length, length, shortfall_mm)
+    width_score, width_cuts = _axis_fit(actual_width, width, shortfall_mm)
     raw_score = length_score * width_score * 100
     score = raw_score.quantize(Decimal('.01'), rounding=ROUND_HALF_UP)
     if raw_score < 100:

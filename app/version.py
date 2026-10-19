@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.687"
-APP_VERSION_NAME = "片料近尺寸优先与扩大匹配"
+APP_VERSION = "v0.22.688"
+APP_VERSION_NAME = "片料用途按开数匹配"
 APP_BUILD_DATE = "2026-10-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6729,3 +6729,17 @@ APP_VERIFICATION_STEPS = [
     "选中一批查用途后返回，核对原尺寸、匹配度筛选及范围保留。",
 ]
 APP_CHANGELOG = [*(f"v0.22.687：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.688：片料找用途按一开几计算利用率。
+APP_CHANGES = [
+    "片料找用途按一开几的报料片总面积计算匹配度，2000×200匹配1000×200显示一开二、100%。",
+    "手填尺寸及实际库存推荐均显示匹配度与开数，匹配度筛选和排序在分页前执行。",
+    "实际裁切计划沿用已登记修边和刀缝，分切开数与模数分开显示。",
+]
+APP_VERIFICATION_STEPS = [
+    "今日工作台片料找用途输入2000×200和楞型，核对报料1000×200产品显示一开二、100%。",
+    "选择100%筛选，核对一开多且完全利用的产品仍在结果中；检查图纸和查看资料。",
+    "选中实际库存查用途，核对匹配度和开数，返回库存查询条件保持。",
+]
+APP_CHANGELOG = [*(f"v0.22.688：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

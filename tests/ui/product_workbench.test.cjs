@@ -19,10 +19,11 @@ function click(h,selector){const el=h.root.querySelector(selector);assert.ok(el,
 function fill(h,name,value){const e=h.root.querySelector(`[name="${name}"]`);assert.ok(e,name);if(e.tagName==='SELECT'){for(const o of e.options)o.removeAttribute('selected');e.querySelector(`[value="${value}"]`).setAttribute('selected','');}else e.value=value;e.dispatchEvent(new h.window.Event('change',{bubbles:true}));}
 test('sheet discovery selects actual batch, filters recommendations and returns to the same inventory page',async()=>{
  const paths=[],sheet={lot_id:97,name:'空白库存片料',length:1600,width:600,match_score:100,cuts_per_sheet:2,flute_type:'B',layer_count:3,material_code:'K=A',actual:10,available:8,reserved:2,unit:'张',location_label:'三楼原料区',reverse_source:{lot_id:97,length:1600,width:600,flute_type:'B'}};
- const match={...product,match_score:100,report_material:'K=A',report_length_mm:800,report_width_mm:600,match_reasons:['尺寸一致'],check_items:[]};
+ const match={...product,match_score:100,cuts_per_sheet:2,report_material:'K=A',report_length_mm:800,report_width_mm:600,match_reasons:['尺寸一致'],check_items:[]};
  const h=harness(async path=>{paths.push(path);return path.includes('/products/')?details:path.includes('/sheets?')?{items:[sheet],total:13,page:2,page_size:12,has_more:false}:{items:[match],total:1,page:1,page_size:12,has_more:false};});
  await h.instance.query({length:800,width:600,min_score:90,expand_scope:true},2,'sheets');assert.match(paths.at(-1),/\/sheets\?/);assert.match(h.root.textContent,/可用 8 张/);assert.match(h.root.textContent,/三楼原料区/);assert.match(h.root.textContent,/100%/);assert.match(h.root.textContent,/一开二/);assert.doesNotMatch(h.root.textContent,/精确查找|待核对/);
  click(h,'[data-sheet="0"]');await tick();let q=new URL(paths.at(-1),'http://localhost').searchParams;assert.equal(q.get('lot_id'),'97');assert.equal(q.get('length'),'1600');assert.equal(q.get('width'),'600');assert.equal(q.get('processed_state'),null);
+ assert.match(h.root.querySelector('.pw-reverse-results').textContent,/一开二/);
  for(const text of ['存货编码 / 产品','成品尺寸','报料材质','报料尺寸','匹配度','图纸','查看资料','100%','K=A'])assert.ok(h.root.textContent.includes(text),text);
  assert.equal(h.root.querySelector('.pw-match-details'),null);assert.doesNotMatch(h.root.textContent,/匹配说明|待核对|仅供查找|核对实际/);
  assert.equal(h.root.querySelector('[name="length"]').readOnly,true);assert.equal(h.root.querySelector('[name="flute_type"]').disabled,true);

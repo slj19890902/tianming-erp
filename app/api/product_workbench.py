@@ -1,7 +1,7 @@
 """Unified read-only product search and actual-lot reverse discovery."""
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -18,7 +18,7 @@ from app.models.warehouse_inventory import InventoryLot
 from app.models.warehouse_inventory import SemiFinishedLotAllowedProduct
 from app.services.material_candidates import candidate_items
 from app.services.mobile_product_drawings import product_drawing_metadata
-from app.services.workbench_sheet_search import find_sheets, flute_layers
+from app.services.workbench_sheet_search import find_sheets, flute_layers, sheet_fit
 from app.services.product_workbench import (
     action_card, dimension_match, find_products, inventory_details, inventory_summary,
     order_card, product_card, production_card, visible_products,
@@ -207,9 +207,27 @@ def reverse_products(response: Response,
                 actual_state == "net_raw" and processed_state == "raw") and not net_identity_unverified:
             raise HTTPException(422, "加工状态与所选批次登记事实不一致")
         matches = candidate_items(db, lot, scope)
+        for row in matches:
+            row['cuts_per_sheet'] = None
+            plan = row.get('cut_plan')
+            if plan and plan.get('method') == 'fixed_direction_grid':
+                # Report-blank cuts are separate from the mold's piece yield.
+                row['cuts_per_sheet'] = plan['rows'] * plan['columns']
+                row['score'] = plan['utilization']
+            elif (row['match_kind'] == 'dimensions' and actual_state in {None, 'raw', 'net_raw'}
+                  and not (profile or {}).get('output_piece')
+                  and (profile or {}).get('dimension_basis') != 'source_board'
+                  and not any((profile or {}).get(key) for key in ('cut_trim_mm', 'cut_kerf_mm'))
+                  and not any((detail.crease_left_mm, detail.crease_middle_mm, detail.crease_right_mm))):
+                fit = sheet_fit(length, width, row['length_mm'], row['width_mm'], shortfall_mm=0)
+                if fit:
+                    row['cuts_per_sheet'] = fit['cuts_per_sheet']
+                    row['score'] = float(fit['match_score'])
         if known_customer_id is not None:
             matches = [row for row in matches if row["customer_id"] == known_customer_id]
         matches = [row for row in matches if Decimal(str(row["score"])) >= min_score]
+        matches.sort(key=lambda row: (-row['score'], not row.get('exact_dimension_match'),
+                     row.get('cuts_per_sheet') or 0, row['customer_id'], row['product_id']))
         total = len(matches)
         selected = matches[(page - 1) * page_size:page * page_size]
         products = {p.id: p for p in db.scalars(visible_products(db, scope).where(
@@ -230,6 +248,7 @@ def reverse_products(response: Response,
                 match_class = "review"
             item.update({"match_class": match_class, "match_kind": row["match_kind"],
                          "match_score": row["score"],
+                         "cuts_per_sheet": row['cuts_per_sheet'],
                          "match_reasons": [row["match_reason"]],
                          "check_items": [*row.get("warnings", []), *(
                              ["净片身份未由库存加工事实确认，请核对供应商来料和实物"]
@@ -248,8 +267,8 @@ def reverse_products(response: Response,
                 "has_more": page * page_size < total, "source": "actual_lot",
                 "registered_owner_customer_id": detail.owner_customer_id if owner_visible else None}
     # A free measurement has no real material, processing, identity, or quantity
-    # evidence. Use dimensions for discovery only; never claim a cut plan.
-    from sqlalchemy import func, or_, case
+    # evidence. Rank theoretical grids without creating an execution cut plan.
+    from sqlalchemy import func, or_
     processed_state = processed_state or "raw"
     query = visible_products(db, scope).outerjoin(Material, Material.id == Product.material_id).where(
         Product.is_active.is_(True), Product.supply_mode == "corrugated_production",
@@ -267,17 +286,20 @@ def reverse_products(response: Response,
                                 func.upper(Product.legacy_material_text) == code))
     query = query.where(Product.report_length_mm > 0, Product.report_width_mm > 0,
                         Product.report_length_mm <= length, Product.report_width_mm <= width)
-    # Size similarity only: free measurements do not establish cutting yield.
-    score = Product.report_length_mm * Product.report_width_mm * 100 / (length * width)
-    query = query.where(score >= min_score)
     if processed_state != "raw":
         query = query.where(Product.report_length_mm == length, Product.report_width_mm == width)
-    total = int(db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0)
-    exact_rank = case((Product.report_length_mm == length, 0), else_=1) + case(
-        (Product.report_width_mm == width, 0), else_=1)
-    products = list(db.scalars(query.order_by(exact_rank,
-        (Product.report_length_mm * Product.report_width_mm).desc(), Product.customer_id, Product.id)
-                               .offset((page - 1) * page_size).limit(page_size)))
+    ranked = []
+    for product_id, report_l, report_w, customer_id in db.execute(query.with_only_columns(
+            Product.id, Product.report_length_mm, Product.report_width_mm, Product.customer_id)):
+        fit = sheet_fit(length, width, report_l, report_w, shortfall_mm=0)
+        if fit and fit['match_score'] >= min_score:
+            ranked.append((product_id, fit, customer_id))
+    ranked.sort(key=lambda row: (-row[1]['match_score'], row[1]['cuts_per_sheet'], row[2], row[0]))
+    total = len(ranked)
+    selected = ranked[(page - 1) * page_size:page * page_size]
+    fits = {row[0]: row[1] for row in selected}
+    loaded = {p.id: p for p in db.scalars(query.where(Product.id.in_(fits)))} if selected else {}
+    products = [loaded[row[0]] for row in selected if row[0] in loaded]
     summaries = inventory_summary(db, products) if has_permission(user, "warehouse.view") else {}
     drawings = product_drawing_metadata(db, [p.id for p in products], user=user, visible_customer_ids=scope)
     items = []
@@ -294,8 +316,8 @@ def reverse_products(response: Response,
         elif processed_state != "raw":
             check_items.append("已加工片料需核对印刷/压线/模具形状，不按矩形分切")
         item.update({"match_class": "review" if exact or processed_state != "raw" else "cut_candidate",
-                     "match_score": float((Decimal(str(product.report_length_mm)) * Decimal(str(product.report_width_mm))
-                                           * 100 / (length * width)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)),
+                     "match_score": float(fits[product.id]['match_score']),
+                     "cuts_per_sheet": fits[product.id]['cuts_per_sheet'],
                      "match_kind": "free_measurement", "cut_plan": None,
                      "match_reasons": ["报料尺寸相同，仅供查找用途" if exact else
                                        "原片尺寸可容纳目标报料尺寸，裁切方向与产出待核"],

@@ -9,6 +9,8 @@
     if(!Number.isSafeInteger(Number(productId))||Number(productId)<=0)return null;
     active?.close();
     const focus=global.document.activeElement;
+    const viewport={left:global.scrollX||0,top:global.scrollY||0},scrollParents=[];
+    for(let node=focus;node;node=node.parentElement){if(Number.isFinite(node.scrollTop))scrollParents.push([node,node.scrollLeft,node.scrollTop]);}
     const host=global.document.createElement('div');host.className='stock-origins';
     host.innerHTML=`<section class="so-dialog" role="dialog" aria-modal="true" aria-label="产品库存来源详情"><header><div><strong>库存来源与批次</strong><small>${esc(label)}</small></div><button type="button" data-so-close>关闭 ×</button></header><div class="so-content" aria-live="polite"></div></section>`;
     global.document.body.append(host);
@@ -16,7 +18,7 @@
     let live=true,sequence=0,controller=null,page=1,history=false,category=Object.hasOwn(names,sourceKind)?sourceKind:'all',listing=null,mode=lotId?'batch':'list',lastLot=lotId;
     let guard=null;
     const current=()=>live&&isCurrent();
-    const handle={close(){if(!live)return;live=false;sequence++;controller?.abort();if(guard!==null)global.clearInterval(guard);host.remove();global.document.removeEventListener('keydown',keyboard,true);if(active===handle)active=null;focus?.focus?.({preventScroll:true});}};
+    const handle={close(){if(!live)return;const restore=isCurrent();live=false;sequence++;controller?.abort();if(guard!==null)global.clearInterval(guard);host.remove();global.document.removeEventListener('keydown',keyboard,true);if(active===handle)active=null;if(restore){focus?.focus?.({preventScroll:true});for(const [node,left,top] of scrollParents){if(node.isConnected){node.scrollLeft=left;node.scrollTop=top;}}global.scrollTo?.({...viewport,behavior:'instant'});}}};
     active=handle;
     if(typeof global.setInterval==='function')guard=global.setInterval(()=>{if(!isCurrent())handle.close();},500);
     async function get(path){

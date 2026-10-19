@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.673"
+APP_VERSION = "v0.22.674"
 APP_VERSION_NAME = "产品库存来源与生产入库分流"
 APP_BUILD_DATE = "2026-10-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -6639,3 +6639,15 @@ APP_VERIFICATION_STEPS = [
     "抽查有印刷与模切工艺的产品，核对图纸、模具和印版位置按权限显示。",
 ]
 APP_CHANGELOG = [*(f"v0.22.673：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.674：来源详情关闭恢复长列表与手机滚动位置。
+APP_CHANGES = [
+    "保留v673首页自有库存、共用数量单列、来源底色、生产入库分流和批次时间线。",
+    "关闭来源详情恢复原视口及嵌套列表滚动位置，阻止弹窗滚动传递到背景；账号或页面切换不恢复旧页坐标。",
+    "无数据库结构迁移，不修改任何业务数量、成本、预占或历史。",
+]
+APP_VERIFICATION_STEPS = [
+    "首页搜索产品，在较长列表中滚动后打开库存数字和批次详情，再关闭，确认仍返回原行位置。",
+    "核对盘点、补库生产和订单生产来源及生产入库分流正常。",
+]
+APP_CHANGELOG = [*(f"v0.22.674：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

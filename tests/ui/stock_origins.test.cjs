@@ -29,3 +29,13 @@ test('error is not zero inventory and retry recovers; shared stock is separate',
  assert.match(h.root.textContent,/无权读取/);assert.doesNotMatch(h.root.textContent,/没有匹配批次/);click(h,'[data-so-retry]');await tick();
  assert.match(h.root.querySelector('.so-summary').textContent,/1/);assert.match(h.root.querySelector('.so-shared').textContent,/290/);assert.equal(h.root.querySelectorAll('[data-so-batch]').length,1);h.module.close();
 });
+test('closing restores viewport and scrolling panel while account change does not move the new page',async()=>{
+ const h=setup(),row=h.root.querySelector('#row'),panel=h.root.querySelector('#original'),moves=[];
+ Object.defineProperty(h.window.document,'activeElement',{value:row,configurable:true});
+ h.window.scrollX=0;h.window.scrollY=480;h.window.scrollTo=p=>moves.push(p);
+ panel.scrollTop=125;panel.scrollLeft=6;
+ h.module.open({productId:3886,request:async()=>fixture});await tick();panel.scrollTop=900;
+ h.module.close();assert.equal(panel.scrollTop,125);assert.equal(panel.scrollLeft,6);assert.equal(moves.at(-1).top,480);
+ let current=true;h.module.open({productId:3886,isCurrent:()=>current,request:async()=>fixture});await tick();current=false;panel.scrollTop=200;const n=moves.length;
+ h.module.close();assert.equal(panel.scrollTop,200);assert.equal(moves.length,n);
+});

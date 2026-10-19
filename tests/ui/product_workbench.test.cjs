@@ -16,6 +16,30 @@ function harness(request){
  return {root,instance,states,opened,window,module:sandbox.ERPProductWorkbench};
 }
 function click(h,selector){const el=h.root.querySelector(selector);assert.ok(el,selector);el.dispatchEvent(new h.window.Event('click',{bubbles:true}));}
+function fill(h,name,value){const e=h.root.querySelector(`[name="${name}"]`);assert.ok(e,name);if(e.tagName==='SELECT'){for(const o of e.options)o.removeAttribute('selected');e.querySelector(`[value="${value}"]`).setAttribute('selected','');}else e.value=value;e.dispatchEvent(new h.window.Event('change',{bubbles:true}));}
+test('sheet discovery selects actual batch, filters recommendations and returns to the same inventory page',async()=>{
+ const paths=[],sheet={lot_id:97,name:'空白库存片料',length:800,width:600,flute_type:'B',layer_count:3,material_code:'K=A',actual:10,available:8,reserved:2,unit:'张',location_label:'三楼原料区',reverse_source:{lot_id:97,length:800,width:600,flute_type:'B'}};
+ const match={...product,match_score:100,report_material:'K=A',report_length_mm:800,report_width_mm:600,match_reasons:['尺寸一致'],check_items:[]};
+ const h=harness(async path=>{paths.push(path);return path.includes('/products/')?details:path.includes('/sheets?')?{items:[sheet],total:13,page:2,page_size:12,has_more:false}:{items:[match],total:1,page:1,page_size:12,has_more:false};});
+ await h.instance.query({length:800,width:600},2,'sheets');assert.match(paths.at(-1),/\/sheets\?/);assert.match(h.root.textContent,/可用 8 张/);assert.match(h.root.textContent,/三楼原料区/);
+ click(h,'[data-sheet="0"]');await tick();let q=new URL(paths.at(-1),'http://localhost').searchParams;assert.equal(q.get('lot_id'),'97');assert.equal(q.get('processed_state'),null);
+ for(const text of ['存货编码 / 产品','成品尺寸','报料材质','报料尺寸','匹配度','图纸','查看资料','100%','K=A'])assert.ok(h.root.textContent.includes(text),text);
+ assert.equal(h.root.querySelector('[name="length"]').readOnly,true);assert.equal(h.root.querySelector('[name="flute_type"]').disabled,true);
+ fill(h,'min_score','90');await tick();q=new URL(paths.at(-1),'http://localhost').searchParams;assert.equal(q.get('min_score'),'90');assert.equal(q.get('lot_id'),'97');assert.equal(q.get('flute_type'),'B');assert.equal(q.get('page'),'1');
+ click(h,'[data-product="17"]');await tick();assert.equal(h.instance.snapshot().productId,17);click(h,'[data-back]');assert.ok(h.root.querySelector('.pw-reverse-results'));
+ click(h,'[data-reselect-sheet]');await tick();q=new URL(paths.at(-1),'http://localhost').searchParams;assert.equal(q.get('page'),'2');assert.ok(h.root.querySelector('.pw-sheet-results'));h.instance.destroy();
+});
+test('free sheet search shows inferred layers with no material, state or layer input',async()=>{
+ const paths=[],h=harness(async path=>{paths.push(path);return {items:[],total:0,page:1,page_size:12,has_more:false};});click(h,'[data-mode="reverse"]');
+ for(const name of ['material_code','processed_state','layer_count'])assert.equal(h.root.querySelector(`[name="${name}"]`),null);
+ fill(h,'length','800');fill(h,'width','600');fill(h,'flute_type','AB');assert.equal(h.root.querySelector('.pw-auto-layers').textContent,'5 层');
+ h.root.querySelector('form').dispatchEvent(new h.window.Event('submit',{cancelable:true}));await tick();const q=new URL(paths.at(-1),'http://localhost').searchParams;
+ assert.equal(q.get('flute_type'),'AB');for(const key of ['material_code','processed_state','layer_count'])assert.equal(q.get(key),null);h.instance.destroy();
+});
+test('late sheet list cannot overwrite newer recommendations',async()=>{
+ let resolve;const pending=new Promise(r=>resolve=r);const h=harness(path=>path.includes('/sheets?')?pending:Promise.resolve({items:[{...product,match_score:100}],total:1,page:1,page_size:12,has_more:false}));
+ const old=h.instance.query({length:800,width:600},1,'sheets');await h.instance.query({length:800,width:600,flute_type:'B'},1,'reverse');resolve({items:[],total:0,page:1,page_size:12,has_more:false});await old;assert.ok(h.root.querySelector('.pw-reverse-results'));assert.match(h.root.textContent,/C000017/);h.instance.destroy();
+});
 test('exact product retains C prefix, actual versus available, and authenticated drawing thumbnail',async()=>{
  const h=harness(async()=>({items:[product],total:1,page:1,page_size:12,has_more:false}));await h.instance.search();
  assert.match(h.root.textContent,/C000017/);assert.match(h.root.textContent,/200 片/);assert.match(h.root.textContent,/可用 100/);

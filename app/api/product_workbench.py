@@ -1,7 +1,7 @@
 """Unified read-only product search and actual-lot reverse discovery."""
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -18,6 +18,7 @@ from app.models.warehouse_inventory import InventoryLot
 from app.models.warehouse_inventory import SemiFinishedLotAllowedProduct
 from app.services.material_candidates import candidate_items
 from app.services.mobile_product_drawings import product_drawing_metadata
+from app.services.workbench_sheet_search import find_sheets, flute_layers
 from app.services.product_workbench import (
     action_card, dimension_match, find_products, inventory_details, inventory_summary,
     order_card, product_card, production_card, visible_products,
@@ -102,6 +103,25 @@ def search_products(response: Response,
             "has_more": page * page_size < total}
 
 
+@router.get("/sheets")
+def search_sheets(response: Response,
+                  length: Decimal = Query(gt=0, decimal_places=2),
+                  width: Decimal = Query(gt=0, decimal_places=2),
+                  flute_type: str | None = Query(default=None, max_length=20),
+                  page: int = Query(default=1, ge=1),
+                  page_size: int = Query(default=20, ge=1, le=50),
+                  db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
+    _headers(response)
+    if not has_permission(user, "warehouse.view"):
+        raise HTTPException(403, "当前账号无权查看实际库存片料")
+    _pagination_offset(page, page_size)
+    flute = flute_type.strip().upper() if flute_type else None
+    if flute and flute_layers(flute) is None:
+        raise HTTPException(422, "请选择有效楞型")
+    return find_sheets(db, _visible_customer_ids(user, db), length=length, width=width,
+                       flute_type=flute, page=page, page_size=page_size)
+
+
 @router.get("/reverse")
 def reverse_products(response: Response,
                      length: Decimal = Query(gt=0, decimal_places=2),
@@ -109,7 +129,8 @@ def reverse_products(response: Response,
                      material_code: str | None = Query(default=None, max_length=100),
                      flute_type: str | None = Query(default=None, max_length=20),
                      layer_count: int | None = Query(default=None, ge=1, le=7),
-                     processed_state: Literal["raw", "net_raw", "printed", "creased", "die_cut", "output_piece"] = "raw",
+                     processed_state: Literal["raw", "net_raw", "printed", "creased", "die_cut", "output_piece"] | None = None,
+                     min_score: Decimal = Query(default=Decimal(0), ge=0, le=100, decimal_places=2),
                      known_customer_id: int | None = Query(default=None, gt=0),
                      lot_id: int | None = Query(default=None, gt=0),
                      page: int = Query(default=1, ge=1),
@@ -119,6 +140,14 @@ def reverse_products(response: Response,
     _require_view(user)
     _database_id(known_customer_id)
     _pagination_offset(page, page_size)
+    if flute_type:
+        flute_type = flute_type.strip().upper()
+        inferred_layers = flute_layers(flute_type)
+        if inferred_layers is None:
+            raise HTTPException(422, "请选择有效楞型")
+        if layer_count is not None and layer_count != inferred_layers:
+            raise HTTPException(422, "层数与楞型不一致")
+        layer_count = inferred_layers
     if known_customer_id is not None:
         require_customer_access(known_customer_id, user, db)
     scope = _visible_customer_ids(user, db)
@@ -148,7 +177,7 @@ def reverse_products(response: Response,
         detail = lot.semi_finished_detail
         if detail is None or lot.inventory_type != "semi_finished":
             raise HTTPException(422, "请选择实际片料批次")
-        if Decimal(detail.board_length_mm) != length or Decimal(detail.board_width_mm) != width:
+        if Decimal(str(detail.board_length_mm)) != length or Decimal(str(detail.board_width_mm)) != width:
             raise HTTPException(422, "实测长宽与所选批次不一致，请重新核对")
         if material_code and material_code.strip().upper() != detail.material_code_snapshot.strip().upper():
             raise HTTPException(422, "材质与所选批次登记事实不一致")
@@ -168,6 +197,8 @@ def reverse_products(response: Response,
         else:
             actual_state = processing or {
                 "raw_board": "raw", "creased_sheet": "creased"}.get(detail.sheet_type)
+        if processed_state is None:
+            processed_state = actual_state or "raw"
         net_identity_unverified = actual_state == "raw" and processed_state == "net_raw"
         if actual_state and actual_state != processed_state and not (
                 actual_state == "net_raw" and processed_state == "raw") and not net_identity_unverified:
@@ -175,6 +206,7 @@ def reverse_products(response: Response,
         matches = candidate_items(db, lot, scope)
         if known_customer_id is not None:
             matches = [row for row in matches if row["customer_id"] == known_customer_id]
+        matches = [row for row in matches if Decimal(str(row["score"])) >= min_score]
         total = len(matches)
         selected = matches[(page - 1) * page_size:page * page_size]
         products = {p.id: p for p in db.scalars(visible_products(db, scope).where(
@@ -194,6 +226,7 @@ def reverse_products(response: Response,
                 # cutting marker. Dimensions alone cannot prove that identity.
                 match_class = "review"
             item.update({"match_class": match_class, "match_kind": row["match_kind"],
+                         "match_score": row["score"],
                          "match_reasons": [row["match_reason"]],
                          "check_items": [*row.get("warnings", []), *(
                              ["净片身份未由库存加工事实确认，请核对供应商来料和实物"]
@@ -203,6 +236,10 @@ def reverse_products(response: Response,
                          "lot_unit": "片" if (profile or {}).get("output_piece") is True else "张",
                          "deductible": False, "selection_requires_existing_validation": True,
                          "source_processed_state": actual_state})
+            if detail.component_type == "base":
+                item["report_length_mm"] = product.base_report_length_mm
+                item["report_width_mm"] = product.base_report_width_mm
+                item["report_component"] = "底料"
             items.append(item)
         return {"items": items, "total": total, "page": page, "page_size": page_size,
                 "has_more": page * page_size < total, "source": "actual_lot",
@@ -210,6 +247,7 @@ def reverse_products(response: Response,
     # A free measurement has no real material, processing, identity, or quantity
     # evidence. Use dimensions for discovery only; never claim a cut plan.
     from sqlalchemy import func, or_, case
+    processed_state = processed_state or "raw"
     query = visible_products(db, scope).outerjoin(Material, Material.id == Product.material_id).where(
         Product.is_active.is_(True), Product.supply_mode == "corrugated_production",
         Product.is_composite.is_(False), Product.is_virtual_composite_parent.is_(False))
@@ -226,6 +264,9 @@ def reverse_products(response: Response,
                                 func.upper(Product.legacy_material_text) == code))
     query = query.where(Product.report_length_mm > 0, Product.report_width_mm > 0,
                         Product.report_length_mm <= length, Product.report_width_mm <= width)
+    # Size similarity only: free measurements do not establish cutting yield.
+    score = Product.report_length_mm * Product.report_width_mm * 100 / (length * width)
+    query = query.where(score >= min_score)
     if processed_state != "raw":
         query = query.where(Product.report_length_mm == length, Product.report_width_mm == width)
     total = int(db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0)
@@ -239,10 +280,10 @@ def reverse_products(response: Response,
     items = []
     for product in products:
         item = product_card(product, summaries.get(product.id, {"visibility": "hidden_by_permission"}), drawings[product.id])
-        exact = Decimal(product.report_length_mm) == length and Decimal(product.report_width_mm) == width
+        exact = Decimal(str(product.report_length_mm)) == length and Decimal(str(product.report_width_mm)) == width
         check_items = ["核对实际批次、楞向、压线、面纸与客户用途"]
         if not material_code:
-            check_items.append("补录或核对实际材质")
+            check_items.append("核对实际材质")
         if not flute_type or not layer_count:
             check_items.append("补录或核对实际楞型和层数")
         if processed_state == "net_raw":
@@ -250,6 +291,8 @@ def reverse_products(response: Response,
         elif processed_state != "raw":
             check_items.append("已加工片料需核对印刷/压线/模具形状，不按矩形分切")
         item.update({"match_class": "review" if exact or processed_state != "raw" else "cut_candidate",
+                     "match_score": float((Decimal(str(product.report_length_mm)) * Decimal(str(product.report_width_mm))
+                                           * 100 / (length * width)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)),
                      "match_kind": "free_measurement", "cut_plan": None,
                      "match_reasons": ["报料尺寸相同，仅供查找用途" if exact else
                                        "原片尺寸可容纳目标报料尺寸，裁切方向与产出待核"],

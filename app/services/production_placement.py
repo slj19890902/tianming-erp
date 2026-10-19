@@ -16,7 +16,8 @@ from app.services.warehouse_location_address import employee_location_name
 
 def page(db, *, allowed_customer_ids, page=1, page_size=20, customer_id=None,
          order_keyword=None, product_code=None, product_name=None,
-         completed_date_from=None, completed_date_to=None, placement_state='pending', count_only=False):
+         completed_date_from=None, completed_date_to=None, placement_state='pending', count_only=False, source_kind=None):
+    from app.services.product_stock_origins import production_lot_ids, Origins
     physical = InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged
     staging = exists(select(ReceiptStagingArea.area_id).join(WarehouseArea,
         WarehouseArea.id == ReceiptStagingArea.area_id).join(WarehouseFloor,
@@ -29,7 +30,7 @@ def page(db, *, allowed_customer_ids, page=1, page_size=20, customer_id=None,
         Product, Product.id == FinishedGoodsInventoryDetail.product_id).join(
         WarehouseLocation, WarehouseLocation.id == InventoryLot.warehouse_location_id).where(
         InventoryLot.inventory_type == 'finished', InventoryLot.status.in_(['active','frozen']),
-        physical > 0)
+        physical > 0, InventoryLot.id.in_(production_lot_ids()))
     if placement_state == 'pending':
         query = query.where(staging)
     elif placement_state == 'placed':
@@ -38,6 +39,14 @@ def page(db, *, allowed_customer_ids, page=1, page_size=20, customer_id=None,
         query = query.where(Customer.id.in_(allowed_customer_ids))
     if customer_id is not None:
         query = query.where(Customer.id == customer_id)
+    if source_kind:
+        from app.models.warehouse_inventory import InventoryLotTransfer
+        ancestry = select(InventoryLot.id.label('leaf'), InventoryLot.id.label('ancestor')).cte('placement_source_filter', recursive=True)
+        ancestry = ancestry.union(select(ancestry.c.leaf, InventoryLotTransfer.source_lot_id).join(
+            InventoryLotTransfer, InventoryLotTransfer.target_lot_id == ancestry.c.ancestor))
+        references = ('stock_preparation','stock_preparation_finish','preparation_assembly','stock_replenishment_receipt') if source_kind == 'replenishment' else ('production_completion','bom_assembly')
+        query = query.where(InventoryLot.id.in_(select(ancestry.c.leaf).join(InventoryLot,
+            InventoryLot.id == ancestry.c.ancestor).where(InventoryLot.source_ref_type.in_(references))))
     for term, columns in ((product_code, (Product.product_code, Product.customer_material_code, FinishedGoodsInventoryDetail.inventory_code_snapshot)),
                           (product_name, (Product.product_name, FinishedGoodsInventoryDetail.product_name_snapshot))):
         if term and term.strip():
@@ -57,15 +66,24 @@ def page(db, *, allowed_customer_ids, page=1, page_size=20, customer_id=None,
         return int(total)
     rows=db.execute(query.order_by(InventoryLot.stock_date.desc(),InventoryLot.id.desc()).offset((page-1)*page_size).limit(page_size)).all()
     result=[]
+    origins = Origins(db)
     for lot,detail,customer,product,location in rows:
+        from app.models.production import ProductionCompletion
+        root_lots = origins.roots(lot)
+        roots = [root.id for root in root_lots]
+        source_items = select(ProductionCompletion.order_item_id).where(
+            or_(ProductionCompletion.inventory_lot_id.in_(roots), ProductionCompletion.id.in_(
+                [root.source_ref_id for root in root_lots if root.source_ref_type=='production_completion'])))
         orders=list(db.execute(select(Order.customer_po,Order.order_number).join(OrderItem,OrderItem.order_id==Order.id).join(
-            InventoryReservation,InventoryReservation.order_item_id==OrderItem.id).where(
-            InventoryReservation.inventory_lot_id==lot.id,
-            InventoryReservation.status.notin_(['cancelled','released','consumed']),
-            InventoryReservation.reserved_stock_quantity > InventoryReservation.consumed_stock_quantity + InventoryReservation.released_stock_quantity).distinct().order_by(Order.id)))
+            InventoryReservation,InventoryReservation.order_item_id==OrderItem.id,isouter=True).where(or_(
+            OrderItem.id.in_(source_items), (InventoryReservation.inventory_lot_id==lot.id) &
+            InventoryReservation.status.notin_(['cancelled','released','consumed']) &
+            (InventoryReservation.reserved_stock_quantity > InventoryReservation.consumed_stock_quantity + InventoryReservation.released_stock_quantity),
+            )).where(Order.customer_id==customer.id).distinct().order_by(Order.id)))
         pending = is_staging_location(db, location)
         block='库存已冻结' if lot.status!='active' else ('含报损或报废数量，请先处理' if lot.quantity_damaged or lot.quantity_scrapped else '')
         result.append(dict(id=f'lot:{lot.id}',inventory_lot_id=lot.id,inventory_version=lot.version,
+            product_id=product.id, **origins.describe(lot),
             customer_id=customer.id,customer_short_name=customer.chinese_short_name or customer.name,
             customer_order_number=' / '.join(dict.fromkeys(o.customer_po for o in orders if o.customer_po)),
             order_number=' / '.join(dict.fromkeys(o.order_number for o in orders)),

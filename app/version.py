@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.673"
+APP_VERSION = "v0.22.674"
 APP_VERSION_NAME = "实际来料规格与超收自动加工"
 APP_BUILD_DATE = "2026-10-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -6624,3 +6624,18 @@ APP_VERIFICATION_STEPS = [
     "抽查一个原本正常的产品，确认资料及权限保持正常。",
 ]
 APP_CHANGELOG = [*(f"v0.22.672：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.673：库存来源与生产入库分流。
+APP_CHANGES = [
+    "首页产品查询优先显示自有现存、可用及占用，已授权共用库存单列，避免按同码重复相加。",
+    "点击库存数字查看盘点、补库生产和订单生产来源，按底色区分并追溯原始批次与时间节点。",
+    "生产入库排除盘点及外购成品，保留订单生产和补库生产来源、入库时间及详情。",
+    "详情独立弹窗，关闭保留原筛选、分页及所在行；工艺资料补充印版版本与位置。",
+    "无数据库结构迁移，不改写业务数量、库存成本、预占或历史单据。",
+]
+APP_VERIFICATION_STEPS = [
+    "首页搜索80012139，核对海外与研光分客户显示，点击库存数字查看来源与批次详情，关闭后停留原行。",
+    "生产工作台已入库列表核对仅显示订单／补库生产成品，可筛选来源并查看入库时间及详情。",
+    "抽查有印刷与模切工艺的产品，核对图纸、模具和印版位置按权限显示。",
+]
+APP_CHANGELOG = [*(f"v0.22.673：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

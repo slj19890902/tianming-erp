@@ -31,6 +31,7 @@
    beforeUnmount(){if(!this.$parent)global.removeEventListener('message',this.acceptStockLocation);},
    data(){return this.$parent?{}:{stockPrepDialog:null,stockAssemblyDialog:null,stockLocations:[],stockLocationsLoading:false,stockLocationsError:'',stockPrepPendingCount:0,productionPendingSource:'all',stockDialogSequence:0,stockLocationMap:null};},
    methods:{
+    openProductionStockDetails(row){const auth=this.authGeneration,actor=this.user?.id;global.ERPStockOrigins?.open({productId:row.product_id,lotId:row.inventory_lot_id,label:[row.customer_short_name,row.product_code,row.product_name].filter(Boolean).join(' · '),isCurrent:()=>auth===this.authGeneration&&actor===this.user?.id&&this.activePage==='production'});},
     groupStockLocked(row){if(!['group_job','group_stock'].includes(row?.entry_type))return false;return !this.stockGroupLocked||this.stockGroupLocked(row)||(row.entry_type==='group_stock'&&!this.stockAssembleLocked)||!!this.stockAssembleLocked?.(row);},
     restoreStockDialogRecovery(dialog){const key=dialog.row?.task?.group?.key,dispose=(this.stockGroupRows||[]).filter(r=>r.groupKey===key&&!r.cacheCleared),assembly=(this.stockAssembleRows||[]).filter(r=>r.groupKey===key&&!r.cacheCleared);if(dispose.length+assembly.length>1){dialog.error='本组有多笔原请求待核对，请在恢复卡逐笔查原结果';return;}if(dispose.length)this.restoreStockGroupDialog(dialog);else this.restoreStockAssembleDialog?.(dialog);},
     async ensureStockLocations({force=false,completion=false,groupCompletion=false,assemblyCompletion=false}={}){

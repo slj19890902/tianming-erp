@@ -3536,7 +3536,10 @@ def reserve_finished_inventory(
     idempotency_key: str,
     warning_acknowledged_codes: list[str],
     replenishment_source_id: int | None = None,
+    recovery_reason: str | None = None,
 ) -> InventoryReservation:
+    if recovery_reason not in (None, "stocktake_rebalance", "dispatch_rebalance"):
+        raise WarehouseInventoryError("库存预占接续来源无效", 409)
     existing = db.scalar(
         select(InventoryReservation).where(
             InventoryReservation.idempotency_key == idempotency_key
@@ -3584,7 +3587,17 @@ def reserve_finished_inventory(
     if row is None:
         raise WarehouseInventoryError("订单明细不存在或已被删除", 409)
     item, order = row
-    if has_production_completion_facts(db, [item.id]):
+    if recovery_reason is not None:
+        released_finished = db.scalar(select(InventoryReservation.id).where(
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            InventoryReservation.released_stock_quantity > 0,
+            InventoryReservation.release_reason.like("盘点单 %"),
+        ).limit(1))
+        if released_finished is None:
+            raise WarehouseInventoryError("没有可接续的原成品预占释放记录", 409)
+    if has_production_completion_facts(db, [item.id]) and recovery_reason is None:
         raise WarehouseInventoryError(
             "订单明细已完成生产，不能再新增成品库存抵扣", 409
         )
@@ -3592,9 +3605,9 @@ def reserve_finished_inventory(
         from app.services.order_replenishment_supply import authorize_output
         authorize_output(db, source_id=replenishment_source_id, order_item_id=item.id,
             snapshot_id=None, lot_id=inventory_lot_id, quantity=quantity)
-    if not _finished_reservation_pre_requisition(item) and not (replenishment_source_id is not None and item.requisition_status == "已报料"):
+    if recovery_reason is None and not _finished_reservation_pre_requisition(item) and not (replenishment_source_id is not None and item.requisition_status == "已报料"):
         raise WarehouseInventoryError("订单已进入报料，请先取消报料后再抵扣成品库存", 409)
-    if item.material_status == "received" or item.delivered_quantity > 0:
+    if recovery_reason is None and (item.material_status == "received" or item.delivered_quantity > 0):
         raise WarehouseInventoryError("订单明细已进入后续流程，不能新增成品库存抵扣", 409)
     active_semi_reservation = db.scalar(
         select(InventoryReservation.id)
@@ -3733,7 +3746,8 @@ def reserve_finished_inventory(
     # task after the reservation write has succeeded.
     from app.services.production_workflow import refresh_existing_production_task
 
-    refresh_existing_production_task(db, item.id)
+    if recovery_reason is None:
+        refresh_existing_production_task(db, item.id)
     return reservation
 
 

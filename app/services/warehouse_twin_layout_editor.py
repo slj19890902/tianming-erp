@@ -494,6 +494,7 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
     feature_id: str,
     *,
     geometry_only: bool = False,
+    name_only: bool = False,
     remaining_location_drafts: dict[str, Any] | None = None,
     published_feature_snapshot: dict[str, Any] | None = None,
     published_path: Path | None = None,
@@ -563,11 +564,21 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
         # but consume the selected zone's storage-policy draft.  The freshly
         # published policy is authoritative for these fields.
         rebased_feature = deepcopy(advanced_features[advanced_index])
-        for key in (("points", "ground_location_draft") if geometry_only else _ZONE_POLICY_FIELDS):
+        fields = (("formal_area_name",) if name_only else
+                  ("points", "ground_location_draft") if geometry_only else _ZONE_POLICY_FIELDS)
+        for key in fields:
             if key in published_feature:
                 rebased_feature[key] = deepcopy(published_feature[key])
             else:
                 rebased_feature.pop(key, None)
+        if name_only and published_feature.get("legacy_v11_name_only"):
+            # Preserve the proven identity marker for a policy-less V11 zone.
+            # Pending usage/layout changes still face the normal publish gates.
+            for key in ("formal_area_id", "formal_floor_id", "legacy_v11_name_only"):
+                rebased_feature[key] = deepcopy(published_feature[key])
+            for key in ("allowed_inventory_types", "storage_layout"):
+                if not rebased_feature.get(key):
+                    rebased_feature[key] = deepcopy(published_feature[key])
         rebased_feature["version"] = max(
             int(rebased_feature.get("version") or 1),
             int(published_feature.get("version") or 1),
@@ -591,7 +602,7 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
             receipt
             for receipt in (advanced_floor.get("layout_edit_receipts") or [])
             if not (
-                receipt.get("action") == "zone.policy.update"
+                not name_only and receipt.get("action") == "zone.policy.update"
                 and str((receipt.get("result") or {}).get("id") or "") == feature_id
             )
         ]

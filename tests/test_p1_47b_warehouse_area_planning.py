@@ -6398,7 +6398,8 @@ def test_precise_rack_area_save_counts_cells_not_racks(tmp_path):
         engine.dispose()
 
 
-def test_precise_rack_area_rename_full_confirm(tmp_path, monkeypatch):
+@pytest.mark.parametrize('name_only', [False, True])
+def test_precise_rack_area_rename_full_confirm(tmp_path, monkeypatch, name_only):
     published, _ = _isolate_layout_paths(tmp_path, monkeypatch)
     runtime = Path(editor.TWIN_LAYOUT_PATH)
     monkeypatch.setattr(warehouse_api, 'load_warehouse_twin_floor',
@@ -6421,12 +6422,130 @@ def test_precise_rack_area_rename_full_confirm(tmp_path, monkeypatch):
             published.write_text(json.dumps(document, ensure_ascii=False), encoding='utf-8')
             db.commit()
             ids = [row.id for row in rows[2:]]
-            result = warehouse_api.confirm_twin_zone_area('3F', 'zone-f1',
-                _confirm_area_payload(revision=floor['revision'], operation_key='rack-rename',
-                    storage_layout='rack', capacity=1, area_name='新货架区域名称'),
-                _request(), db, admin)
-            assert result['available_location_count'] == 9
+            if name_only:
+                row_snapshot = [{c.name: getattr(row, c.name) for c in row.__table__.columns} for row in rows]
+                def forbidden_sync(*args, **kwargs):
+                    raise AssertionError('name-only must not reconcile or create locations')
+                monkeypatch.setattr(warehouse_api, 'sync_published_rack_cells', forbidden_sync)
+                monkeypatch.setattr(warehouse_api, '_ensure_one_step_pallet_locations', forbidden_sync)
+                result = warehouse_api.rename_twin_zone('3F', 'zone-f1',
+                    warehouse_api.TwinZoneNamePayload(expected_revision=floor['revision'],
+                        expected_published_revision=floor['revision'], expected_version=1,
+                        operation_key='rack-name-only', area_name='新货架区域名称'), _request(), db, admin)
+                assert db.scalar(select(func.count(WarehouseLocation.id))) == len(rows)
+                db.expire_all()
+                assert [{c.name: getattr(row, c.name) for c in row.__table__.columns} for row in rows] == row_snapshot
+            else:
+                result = warehouse_api.confirm_twin_zone_area('3F', 'zone-f1',
+                    _confirm_area_payload(revision=floor['revision'], operation_key='rack-rename',
+                        storage_layout='rack', capacity=1, area_name='新货架区域名称'),
+                    _request(), db, admin)
+                assert result['available_location_count'] == 9
             assert area.area_name == '新货架区域名称'
             assert all(db.get(WarehouseLocation, i).is_active for i in ids)
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize('with_draft', [False, True])
+def test_name_only_applies_legacy_mixed_area_without_capacity_or_inventory_changes(tmp_path, monkeypatch, with_draft):
+    published, draft_path = _isolate_layout_paths(tmp_path, monkeypatch)
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(warehouse_api, 'load_warehouse_twin_floor',
+        lambda code: json.loads((runtime if runtime.exists() else published).read_text(encoding='utf8'))['floors'][code])
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            floor = db.scalar(select(WarehouseFloor))
+            area = WarehouseArea(floor_id=floor.id, area_code='F1', area_name='相同名称',
+                construction_status='enabled', capacity_review_status='pending',
+                capacity_eligible=False, planned_pallet_capacity=20)
+            other = WarehouseArea(floor_id=floor.id, area_code='F2', area_name='相同名称',
+                construction_status='not_started', capacity_review_status='pending')
+            db.add_all([area, other]); db.flush()
+            rows = [WarehouseLocation(location_code=f'F1-RENAME-{i}', location_name=f'旧位置{i}',
+                warehouse_type='finished', is_active=True, warehouse_floor=3,
+                area_code='F1', storage_type=kind, sort_order=i,
+                source_version='V11', placement_status='placed') for i, kind in enumerate(['ground', 'rack'], 1)]
+            db.add_all(rows); db.flush()
+            lot = InventoryLot(lot_number='NAME-ONLY-LOT', inventory_type='finished',
+                warehouse_location_id=rows[0].id, quantity_available=12, quantity_reserved=3,
+                unit='boxes', status='active', source_type='stocktake', version=1,
+                stock_date=date(2026,10,19), last_movement_at=datetime(2026,10,19,9,0))
+            db.add(lot); db.commit()
+            pub_revision = _revision(published)
+            effective_revision = pub_revision
+            if with_draft:
+                advanced = editor._new_draft_document(published)
+                feature = advanced['floors']['3F']['features'][0]
+                feature['points'] = [[100,100],[9900,100],[9900,9900],[100,9900]]
+                feature['version'] = 2
+                advanced['floors']['3F']['revision'] = _floor_revision(advanced['floors']['3F'])
+                editor._mark_draft_changed(advanced, '3F'); editor._write_document(draft_path, advanced)
+                effective_revision = advanced['floors']['3F']['revision']
+            body = warehouse_api.TwinZoneNamePayload(expected_revision=effective_revision,
+                expected_published_revision=pub_revision, expected_version=2 if with_draft else 1,
+                operation_key='name-only-mixed-area', area_name='东侧货架区')
+            ids = [row.id for row in rows]
+            before = editor.snapshot_warehouse_twin_publish_state()
+            if not with_draft:
+                # The old simple form round-trips "mixed" as pallet_ground,
+                # so a name edit is rejected as a storage-policy transition.
+                with pytest.raises(warehouse_api.HTTPException) as old_form:
+                    warehouse_api.confirm_twin_zone_area('3F', 'zone-f1',
+                        _confirm_area_payload(revision=pub_revision, operation_key='old-form-name',
+                            storage_layout='pallet_ground', capacity=20, area_name='东侧货架区', existing_area_id=area.id),
+                        _request(), db, admin)
+                assert old_form.value.status_code == 409
+                assert editor.snapshot_warehouse_twin_publish_state() == before
+            with pytest.raises(warehouse_api.HTTPException) as stale:
+                warehouse_api.rename_twin_zone('3F', 'zone-f1',
+                    body.model_copy(update={'expected_version': 999}), _request(), db, admin)
+            assert stale.value.status_code == 409
+            assert editor.snapshot_warehouse_twin_publish_state() == before
+            with monkeypatch.context() as fault:
+                fault.setattr(db, 'commit', lambda: (_ for _ in ()).throw(RuntimeError('injected commit failure')))
+                with pytest.raises(RuntimeError, match='injected commit failure'):
+                    warehouse_api.rename_twin_zone('3F', 'zone-f1', body, _request(), db, admin)
+            assert editor.snapshot_warehouse_twin_publish_state() == before
+            assert area.area_name == '相同名称'
+            result = warehouse_api.rename_twin_zone('3F', 'zone-f1', body, _request(), db, admin)
+            assert result['area']['area_name'] == '东侧货架区'
+            assert result['inventory_changed'] is False
+            db.expire_all()
+            assert area.area_name == '东侧货架区' and other.area_name == '相同名称'
+            assert area.planned_pallet_capacity == 20 and area.capacity_review_status == 'pending'
+            assert area.storage_policy is None
+            assert [row.id for row in rows] == ids and all(row.is_active for row in rows)
+            assert lot.quantity_available == 12 and lot.quantity_reserved == 3
+            assert lot.warehouse_location_id == ids[0]
+            current = json.loads(runtime.read_text(encoding='utf8'))['floors']['3F']
+            assert current['features'][0]['formal_area_name'] == '东侧货架区'
+            assert current['features'][0]['points'] == json.loads(published.read_text())['floors']['3F']['features'][0]['points']
+            if with_draft:
+                remaining = editor.load_warehouse_twin_layout_draft('3F')['features'][0]
+                assert remaining['points'][0] == [100,100]
+                assert remaining['formal_area_name'] == '东侧货架区'
+                assert remaining['allowed_inventory_types'] == ['finished']
+                assert remaining['storage_layout'] == 'mixed'
+            replay = warehouse_api.rename_twin_zone('3F', 'zone-f1', body, _request(), db, admin)
+            assert replay['applied'] is False
+            assert db.scalar(select(func.count(OperationLog.id)).where(OperationLog.action == 'TWIN_ZONE_RENAME')) == 1
+            with pytest.raises(warehouse_api.HTTPException) as conflict:
+                warehouse_api.rename_twin_zone('3F', 'zone-f1', body.model_copy(update={'area_name':'不同请求'}), _request(), db, admin)
+            assert conflict.value.status_code == 409
+    finally:
+        engine.dispose()
+
+
+def test_name_only_payload_rejects_blank_and_policy_fields():
+    from pydantic import ValidationError
+    values = dict(expected_revision='r', expected_published_revision='r', expected_version=1,
+                  operation_key='name-only-validation', area_name='  ')
+    with pytest.raises(ValidationError):
+        warehouse_api.TwinZoneNamePayload(**values)
+    with pytest.raises(ValidationError):
+        warehouse_api.TwinZoneNamePayload(**{**values, 'area_name':'区域', 'max_pallet_capacity':0})
+    route = next(r for r in warehouse_api.router.routes if r.endpoint is warehouse_api.rename_twin_zone)
+    assert any(d.call is warehouse_api.admin_only for d in route.dependant.dependencies)

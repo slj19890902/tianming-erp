@@ -607,6 +607,41 @@ def build_receipt(db,delivery_id,payload,user,api,first_movement_id):
     return receipt
 
 
+def _restore_released_order_coverage(db, payload, user):
+    """Bind later-arriving compatible stock before claiming it as dispatched."""
+    from app.services.finished_stock_rebalance import reserve_released_finished
+    from app.services.warehouse_inventory import active_finished_reserved_qty
+    originals = {row['delivery_item_id']: row for row in payload.snapshot['items']}
+    for line in payload.snapshot['expected_final_items']:
+        source = originals[line['delivery_item_id']]
+        if source['source_type'] != 'order' or line['customer_quantity'] <= 0:
+            continue
+        item = db.get(OrderItem, source['order_item_id'])
+        if item is None:
+            continue
+        # This recovery only covers a formerly real reservation that a later
+        # stocktake released. Unreserved demand uses its existing workflow.
+        released = db.scalar(select(InventoryReservation.id).where(
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.reservation_type == 'finished_order',
+            InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            InventoryReservation.released_stock_quantity > 0,
+            InventoryReservation.release_reason.like('盘点单 %')).limit(1))
+        if released is None:
+            continue
+        target = int(item.delivered_quantity or 0) + int(line['customer_quantity'])
+        missing = max(target - int(active_finished_reserved_qty(db, item.id)), 0)
+        if not missing:
+            continue
+        restored = reserve_released_finished(
+            db, order_item_id=item.id, quantity=missing, operator_id=user.id,
+            operation_key=f"dispatch:{payload.idempotency_key}:item:{item.id}",
+            reason='dispatch_rebalance')
+        if restored < missing:
+            product_code = item.snapshot_product_code or item.product.product_code or item.id
+            raise HTTPException(409, f"存货编码 {product_code} 当前可用成品不足：本次还需 {missing}，可重新预占 {restored}；请核对该产品有效库存和其他订单占用。")
+
+
 def execute(db,delivery_id,payload,user,api):
     actor_guard(user,payload.expected_actor_id);require_activation(db)
     payload=verified_original(delivery_id,payload)
@@ -637,6 +672,7 @@ def execute(db,delivery_id,payload,user,api):
                 raise HTTPException(409,'拿货存在异常，请先明确确认实际拿货结果。')
             api._apply_delivery_pick_task(actual['pick_task']['id'],db=db,user=user,commit=False)
         api._prepare_legacy_accompany(db,row,user)
+        _restore_released_order_coverage(db,payload,user)
         api._dispatch_delivery(delivery_id,db=db,user=user,commit=False,advance_version=True)
         receipt=build_receipt(db,delivery_id,payload,user,api,first_movement_id)
         value=dict(schema_version=1,result='completed',current_actor_id=user.id,dispatch_receipt=receipt,current=None)

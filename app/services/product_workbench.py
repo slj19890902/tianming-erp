@@ -561,6 +561,8 @@ def inventory_details(db: Session, product: Product):
     origins = Origins(db)
     finished_facts = {lot.id: stock_row(lot, origins, {product.customer_id}) for lot in finished}
     shared_ids = {lot.id for lot in shared}
+    for identity in shared_ids:
+        finished_facts[identity]["shared_confirmed"] = True
     cross_semi_ids = {lot.id for lot in cross_semi}
     semi_lots = {lot.id: lot for lot in [*semi, *processed]}
     for kind, group in groups.items():

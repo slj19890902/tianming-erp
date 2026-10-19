@@ -1687,6 +1687,33 @@ class MoldLabelPreviewOption(BaseModel):
     title_text: str | None = Field(default=None, min_length=1, max_length=250)
 
 
+class MoldLabelTextItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mold_id: int = Field(gt=0)
+    product_id: int | None = Field(default=None, gt=0)
+    expected_version: int = Field(gt=0)
+    expected_product_version: int | None = Field(default=None, gt=0)
+    texts: dict[str, str]
+
+    @field_validator('texts')
+    @classmethod
+    def validate_texts(cls, value):
+        from app.services.mold_label_content import normalize_label_texts
+        return normalize_label_texts(value)
+
+
+class MoldLabelTextSave(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[MoldLabelTextItem] = Field(min_length=1, max_length=100)
+    idempotency_key: str = Field(min_length=8, max_length=100)
+
+    @model_validator(mode='after')
+    def distinct_molds(self):
+        if len({i.mold_id for i in self.items}) != len(self.items):
+            raise ValueError('每次保存不能重复同一模具')
+        return self
+
+
 class MoldLabelTitlePayload(BaseModel):
     product_id: int = Field(gt=0)
     expected_version: int = Field(gt=0)
@@ -22112,7 +22139,12 @@ def _mold_label_dict(
             str(p.customer_drawing_number or '待完善') if drawing else
             titles.get(str(p.id)) or result['label_overrides'].get('product_name') or p.product_name
             for p in products)) or '待完善'
+        from app.services.mold_label_content import label_text_overrides
+        text_product_id = selected_product_id or (products[0].id if len(products) == 1 else None)
+        result['label_text_overrides'] = label_text_overrides(row.label_overrides_json, text_product_id)
+        result['label_text_editable'] = allowed_customer_ids is None
         for choice in choices:
+            choice['label_text_overrides'] = label_text_overrides(row.label_overrides_json, choice['id'])
             choice['label_title_kind'] = 'drawing' if choice['customer_code'].upper() in ('YG', 'GY') else 'name'
             choice['label_title_text'] = (choice['drawing_number'] or '待完善') if choice['label_title_kind'] == 'drawing' else titles.get(str(choice['id'])) or result['label_overrides'].get('product_name') or choice['product_name']
     return result
@@ -23901,6 +23933,65 @@ def register_mold_label_print(
         return _mold_label_print_job_dict(replay, replayed=True)
     db.refresh(job)
     return _mold_label_print_job_dict(job, replayed=False)
+
+
+@router.post('/molds/label-texts')
+def save_mold_label_texts(payload: MoldLabelTextSave, request: Request,
+                          db: Session = Depends(get_db), user: User = Depends(can_operate)):
+    from app.services.mold_label_content import with_label_texts, label_text_overrides
+    import hashlib
+    if _mold_customer_scope(user, db) is not None:
+        raise HTTPException(status_code=403, detail='模具标签文字仅允许全客户仓库账号维护')
+    fingerprint = hashlib.sha256(json.dumps(payload.model_dump(), ensure_ascii=False,
+                                           sort_keys=True).encode()).hexdigest()
+    replay = _mold_master_replay(db, action='update', idempotency_key=payload.idempotency_key,
+                                request_hash=fingerprint, actor_id=user.id)
+    if replay is not None:
+        return replay
+    results = []
+    try:
+        for item in payload.items:
+            row = db.get(MoldTool, item.mold_id)
+            if row is None or row.deleted_at is not None or not row.is_active or row.archive_status != 'active':
+                raise HTTPException(status_code=409, detail='模具已停用、归档或移除，请刷新核对')
+            if item.product_id:
+                product = db.get(Product, item.product_id)
+                if (product is None or product.deleted_at is not None or product.mold_tool_id != row.id
+                        or item.expected_product_version is None or product.version != item.expected_product_version):
+                    raise HTTPException(status_code=409, detail='绑定产品资料已变化，请刷新预览')
+            updated = with_label_texts(row.label_overrides_json, item.texts, item.product_id)
+            claimed = db.execute(update(MoldTool).where(
+                MoldTool.id == row.id, MoldTool.version == item.expected_version,
+                MoldTool.deleted_at.is_(None), MoldTool.is_active.is_(True), MoldTool.archive_status == 'active',
+            ).values(version=MoldTool.version + 1, label_overrides_json=updated, updated_by=user.id))
+            if claimed.rowcount != 1:
+                raise HTTPException(status_code=409, detail='模具版本已变化，本次修改未保存，请重新读取')
+            db.refresh(row)
+            result = dict(mold_id=row.id, product_id=item.product_id, version=row.version, texts=item.texts, effective_texts=label_text_overrides(updated, item.product_id))
+            results.append(result)
+            append_audit_event(db, request=request, actor=user, event_category='business', result='success',
+                source='web', module_code='warehouse', action_code='mold.label.text.update', legacy_action='UPDATE',
+                resource=f'warehouse/molds/{row.id}/label-texts', entity_type='mold_tool', entity_id=row.id,
+                object_ref=row.mold_code, description='保存标签预览文字（不改产品或真实位置）', details=result)
+        response = {'id': payload.items[0].mold_id, 'items': results}
+        db.add(MoldMasterMutation(mold_tool_id=payload.items[0].mold_id, action='update',
+            idempotency_key=payload.idempotency_key, request_hash=fingerprint, actor_id=user.id,
+            result_version=results[0]['version'], result_snapshot_json=json.dumps(response, ensure_ascii=False, sort_keys=True)))
+        db.commit()
+        return response
+    except IntegrityError:
+        db.rollback()
+        replay = _mold_master_replay(db, action='update', idempotency_key=payload.idempotency_key,
+                                    request_hash=fingerprint, actor_id=user.id)
+        if replay is not None:
+            return replay
+        raise
+    except MoldLabelContentError as error:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post('/molds/{mold_id}/label-title')

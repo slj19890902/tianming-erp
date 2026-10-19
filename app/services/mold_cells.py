@@ -85,5 +85,10 @@ def reconcile_mold_cells(rack: dict, previous: dict | None = None) -> dict:
     return rack
 
 def projected_cells(rack: dict) -> list[dict]:
-    return [{**c,"location_code":cell_code(c["id"]),"location_id":c["id"],"short_label":c["alias"]}
-            for c in rack.get("mold_cells") or []]
+    result = []
+    code = str(rack.get('mold_rack_code') or '')
+    for c in rack.get('mold_cells') or []:
+        short = f"{code}-{c['level']}-{c['grid']}" if code in {'R01','R02','R03','R04'} else c['alias']
+        result.append({**c, 'stored_alias': c['alias'], 'alias': short,
+                       'location_code': cell_code(c['id']), 'location_id': c['id'], 'short_label': short})
+    return result

@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pytest
 
@@ -8,6 +9,9 @@ from desktop_assistant.manager import Manager
 def fixture_manager(tmp_path, monkeypatch, *, capabilities=None, activation=True):
     import desktop_assistant.manager as module
     manager = Manager(tmp_path, b'test')
+    database = tmp_path / 'shared/data/carton_erp.sqlite3'
+    database.parent.mkdir(parents=True, exist_ok=True)
+    sqlite3.connect(database).close()  # Valid empty legacy DB, never a missing-database bypass.
     state = {'current': 'old', 'previous': 'older'}
     if activation:
         state['order_inventory_activation'] = {'reader_capability': 'order_inventory_v1', 'version': 1}

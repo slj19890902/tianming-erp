@@ -54,15 +54,21 @@ test('打印入口直接显示在整架与每格，空架空格禁用并保留�
   assert.equal(f.render().find(node=>node.props['aria-label']==='模具标签纸型').props.value,'mold_80x40_v1');
 });
 
-test('正视图单格按钮提交该格全部模具，目录搜索不会漏打，整架包括其余格',async()=>{
+test('正视图单格与整架先打开选择页，筛选不误登记打印任务',async()=>{
   const f=fixture({response:{floor_code:'3F',rack:{rack_id:'rack-a',blocked_levels:[],cells:[{id:'c1',level:1,grid:1,alias:'A1'},{id:'c2',level:1,grid:2,alias:'A2'}]},items:[1,2,3].map(id=>({id,mold_name:`模具${id}`,products:[],location_guide:{level:1,grid:id===3?2:1,cell_id:id===3?'c2':'c1'}})),total:3,truncated:false}});
   f.render().find(node=>node.type==='input'&&node.props.placeholder==='编码、图号、名称或客户').props.onChange({target:{value:'模具1'}});
   f.render().find(node=>node.props['aria-label']==='打印A1模具标签').props.onClick();
   await new Promise(setImmediate);
-  assert.deepEqual(f.calls.find(call=>call.body).body.mold_ids,[1,2]);
-  assert.match(f.windows[0].location.href,/mold_ids=1,2&/);
+  const cellUrl=new URL(f.windows[0].location.href,'http://fixture');
+  assert.equal(cellUrl.pathname,'/static/mold-print-select.html');
+  assert.equal(cellUrl.searchParams.get('cell_id'),'c1');
+  assert.equal(cellUrl.searchParams.get('rack_id'),'rack-a');
+  assert.equal(f.calls.filter(call=>call.body).length,0);
   button(f,'打印整架模具标签').props.onClick();await new Promise(setImmediate);
-  assert.deepEqual(f.calls.filter(call=>call.body)[1].body.mold_ids,[1,2,3]);
+  const rackUrl=new URL(f.windows[1].location.href,'http://fixture');
+  assert.equal(rackUrl.searchParams.get('rack_id'),'rack-a');
+  assert.equal(rackUrl.searchParams.get('cell_id'),null);
+  assert.equal(f.calls.filter(call=>call.body).length,0);
 });
 
 test('移动未选目标不会回退源格，取消后仍能向空格放入',async()=>{

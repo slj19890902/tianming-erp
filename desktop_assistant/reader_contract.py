@@ -30,6 +30,19 @@ def has_supplier_trim_facts(db):
     return False
 
 
+MOLD_LABEL_TEXT_READER = 'mold_label_text_v3'
+
+
+def has_mold_label_text_facts(db):
+    if any(r[1] == 'label_overrides_json' for r in db.execute('PRAGMA table_info(mold_tools)')):
+        if db.execute("SELECT 1 FROM mold_tools WHERE json_valid(label_overrides_json) AND json_extract(label_overrides_json, '$.v')=3 LIMIT 1").fetchone():
+            return True
+    if any(r[1] == 'label_layout_payload_json' for r in db.execute('PRAGMA table_info(mold_label_print_jobs)')):
+        if db.execute("SELECT 1 FROM mold_label_print_jobs j, json_each(CASE WHEN json_valid(j.label_layout_payload_json) THEN j.label_layout_payload_json ELSE '{}' END, '$.content_snapshots') s WHERE json_type(s.value, '$.label_text_overrides')='object' LIMIT 1").fetchone():
+            return True
+    return False
+
+
 def capabilities(manifest):
     value = manifest.get('reader_capabilities', {})
     if (not isinstance(value, dict) or any(not isinstance(k, str) or type(v) is not int or v != 1
@@ -54,6 +67,10 @@ def target_readers(database, source, target, inventory_record, dispatch_record, 
         if 'shared_finished_mutations' in tables and db.execute(
                 "SELECT 1 FROM shared_finished_mutations WHERE json_valid(result_json) AND json_type(result_json, '$.member_states') = 'object' LIMIT 1").fetchone():
             required.add('shared_customer_members_v1')
+        if has_mold_label_text_facts(db):
+            required.add(MOLD_LABEL_TEXT_READER)
+        else:
+            required.discard(MOLD_LABEL_TEXT_READER)
         if has_supplier_trim_facts(db): required.add('supplier_sheet_trim_v1')
         if physical_kit.has_facts(db): required.add(physical_kit.CAPABILITY)
     if inventory_record is not None: required.add(inventory.CAPABILITY)

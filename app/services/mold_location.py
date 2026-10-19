@@ -184,13 +184,13 @@ def find_mold_cell(value: str, *, floors: list[dict] | None = None, include_reti
 def current_mold_cell_alias_codes(value: str, *, floors: list[dict] | None = None) -> list[str]:
     """Resolve a display alias for read-only search, never for a location write."""
     alias = str(value or "").strip().upper()
-    if not re.fullmatch(r"[A-Z]{1,8}[1-9]\d*", alias):
+    if not re.fullmatch(r"(?:[A-Z]{1,8}[1-9]\d*|R0[1-4]-[1-9]\d*-[1-9]\d*)", alias):
         return []
     return sorted({cell_code(cell["id"])
         for floor in (floors if floors is not None else published_mold_floors())
         for rack in floor.get("racks") or []
-        for cell in rack.get("mold_cells") or []
-        if str(cell.get("alias") or "").strip().upper() == alias})
+        for cell in projected_cells(rack)
+        if alias in {str(cell.get("alias") or "").strip().upper(), str(cell.get("stored_alias") or "").strip().upper()}})
 
 
 def dynamic_mold_location_options(floor_layout: dict) -> list[dict]:
@@ -526,7 +526,7 @@ def order_mold_location(value: str | None) -> str:
     return str(guide.get('short_label') or raw).strip()
 
 
-def describe_mold_location(value: str) -> dict:
+def _describe_mold_location(value: str) -> dict:
     """Turn a stable rack code into a prompt a workshop worker can follow."""
 
     raw = (value or "").strip()
@@ -1099,3 +1099,20 @@ def confirm_mold_location_batch(db: Session, *, items: list[dict], target_locati
             return replay(existing)
         raise
     return results,False
+
+
+def describe_mold_location(value: str) -> dict:
+    guide = _describe_mold_location(value)
+    rack = str(guide.get('rack_code') or guide.get('rack') or '')
+    if rack.isdigit():
+        rack = f'R{int(rack):02d}'
+    level, grid = guide.get('level'), guide.get('grid')
+    if (str(guide.get('floor') or '').upper() == '1F' and rack in {'R01','R02','R03','R04'}
+            ):
+        short = rack
+        if isinstance(level, int) and level > 0:
+            short += f'-{level}'
+            if isinstance(grid, int) and grid > 0:
+                short += f'-{grid}'
+        guide = {**guide, 'prompt': short, 'short_label': short, 'alias': short}
+    return guide

@@ -15,7 +15,11 @@ def freeze_content(row, option):
         if row['label_title_kind'] != 'name':
             raise ValueError('图号须使用正式产品图号，不能在名称编辑中覆盖')
         row['label_title_text'] = title
-    return {key: row.get(key) for key in CONTENT_FIELDS}
+    result = {key: row.get(key) for key in CONTENT_FIELDS}
+    if row.get('label_text_overrides'):
+        from app.services.mold_label_content import normalize_label_texts
+        result['label_text_overrides'] = normalize_label_texts(row['label_text_overrides'])
+    return result
 
 
 def normalize_content_snapshots(raw):
@@ -23,12 +27,15 @@ def normalize_content_snapshots(raw):
         raise ValueError('打印内容快照无效')
     seen = set()
     for item in raw:
-        if not isinstance(item, dict) or set(item) != set(CONTENT_FIELDS):
+        if not isinstance(item, dict) or set(item) not in (set(CONTENT_FIELDS), {*CONTENT_FIELDS, 'label_text_overrides'}):
             raise ValueError('打印内容快照字段不完整')
         identity = item['mold_id']
         if type(identity) is not int or identity <= 0 or identity in seen:
             raise ValueError('打印内容模具身份无效')
         seen.add(identity)
+        if 'label_text_overrides' in item:
+            from app.services.mold_label_content import normalize_label_texts
+            normalize_label_texts(item['label_text_overrides'])
         if item['label_title_kind'] not in ('name', 'drawing'):
             raise ValueError('打印内容类型无效')
         if item['selected_product_id'] is not None and (type(item['selected_product_id']) is not int or item['selected_product_id'] <= 0):
@@ -47,6 +54,8 @@ def normalize_content_snapshots(raw):
 def apply_frozen_content(row, layout_envelope):
     snapshots = (layout_envelope or {}).get('layout', {}).get('content_snapshots', [])
     content = next((x for x in snapshots if x['mold_id'] == row['mold_id']), None)
+    if layout_envelope:
+        row['label_text_overrides'] = {}
     if content:
         row.update(content)
     return row

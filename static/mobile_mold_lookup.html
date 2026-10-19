@@ -53,21 +53,22 @@
     function positionCode(value){return String(Math.max(1,Number.parseInt(value,10)||1)).padStart(2,"0")}
     function selectedOneFloorRack(){return oneFloorLocationOptions.find(row=>row.rack_code===$("oneFloorRack").value)||null}
     function selectedOneFloorLevel(){const rack=selectedOneFloorRack(),level=Number.parseInt($("oneFloorLevel").value,10);return(rack?.levels||[]).find(row=>Number(row.level)===level)||null}
+    function compactMoldPosition(rack,level,grid){const code=String(rack?.rack_code||"").toUpperCase();if(!/^R0[1-4]$/.test(code))return null;return [code,Number(level)>0?Number(level):null,Number(level)>0&&Number(grid)>0?Number(grid):null].filter(Boolean).join("-")}
     function buildOneFloorLocation(){
       const rack=selectedOneFloorRack();if(!rack)return;let code="";
       if(Array.isArray(rack.cells)){const cell=rack.cells.find(row=>Number(row.level)===Number($("oneFloorLevel").value)&&Number(row.grid)===Number($("oneFloorGrid").value));code=cell?.location_code||(cell?.id?`MCELL-${cell.id}`:"");$("moveLocationDisplay").textContent=cell?.alias||"请选择格位"}
       else if(rack.location_depth==="rack"){code=`1F-M-${rack.rack_code}`}
       else{const level=selectedOneFloorLevel();if(!level)return;if((level.grids||[]).length){const grid=Number.parseInt($("oneFloorGrid").value,10);if(!grid)return;code=`1F-M-${rack.rack_code}-L${level.level}-G${positionCode(grid)}`}else{code=`1F-M-${rack.rack_code}-L${level.level}`}}
-      $("moveLocationCode").value=code;if(!rack.cells)$("moveLocationDisplay").textContent=`${rack.name} · 第${$("oneFloorLevel").value}层第${$("oneFloorGrid").value}格`;moveSource="manual_input";invalidateMovePreview();$("oneFloorBuilderHint").hidden=true;
+      $("moveLocationCode").value=code;if(!rack.cells)$("moveLocationDisplay").textContent=compactMoldPosition(rack,rack.location_depth==="rack"?null:$("oneFloorLevel").value,rack.location_depth==="grid"?$("oneFloorGrid").value:null)||`${rack.name} · 第${$("oneFloorLevel").value}层第${$("oneFloorGrid").value}格`;moveSource="manual_input";invalidateMovePreview();$("oneFloorBuilderHint").hidden=true;
     }
     function renderOneFloorLevels(){
       const rack=selectedOneFloorRack(),levels=rack?.levels||[];$("oneFloorLevel").innerHTML=levels.map(row=>`<option value="${row.level}">第 ${row.level} 层</option>`).join("");$("oneFloorLevelField").style.display=rack?.location_depth==="rack"?"none":"block";renderOneFloorGrids();
     }
     function renderOneFloorGrids(){
-      const rack=selectedOneFloorRack(),level=selectedOneFloorLevel(),grids=level?.grids||[];$("oneFloorGrid").innerHTML=grids.map(grid=>`<option value="${grid}">${h(rack?.cells?.find(cell=>Number(cell.level)===Number(level?.level)&&Number(cell.grid)===Number(grid))?.alias||`第 ${grid} 格`)}</option>`).join("");$("oneFloorGridField").style.display=grids.length?"block":"none";buildOneFloorLocation();
+      const rack=selectedOneFloorRack(),level=selectedOneFloorLevel(),grids=level?.grids||[];$("oneFloorGrid").innerHTML=grids.map(grid=>`<option value="${grid}">${h(rack?.cells?.find(cell=>Number(cell.level)===Number(level?.level)&&Number(cell.grid)===Number(grid))?.alias||compactMoldPosition(rack,level?.level,grid)||`第 ${grid} 格`)}</option>`).join("");$("oneFloorGridField").style.display=grids.length?"block":"none";buildOneFloorLocation();
     }
     async function loadOneFloorLocationOptions(){
-      try{const data=await api("/api/warehouse/molds/location-options");oneFloorLocationOptions=data.racks||[];$("oneFloorRack").innerHTML=oneFloorLocationOptions.map(row=>`<option value="${h(row.rack_code)}">${h(row.floor_code||"1F")} · ${h(row.name)}</option>`).join("");$("oneFloorBuilderHint").hidden=true;renderOneFloorLevels()}catch(error){$("oneFloorBuilderHint").textContent=`模具位置读取失败：${error.message}`;$("oneFloorBuilderHint").hidden=false}
+      try{const data=await api("/api/warehouse/molds/location-options");oneFloorLocationOptions=data.racks||[];$("oneFloorRack").innerHTML=oneFloorLocationOptions.map(row=>`<option value="${h(row.rack_code)}">${h(compactMoldPosition(row)||`${row.floor_code||"1F"} · ${row.name}`)}</option>`).join("");$("oneFloorBuilderHint").hidden=true;renderOneFloorLevels()}catch(error){$("oneFloorBuilderHint").textContent=`模具位置读取失败：${error.message}`;$("oneFloorBuilderHint").hidden=false}
     }
     function loginNext(){const next=location.pathname+location.search;location.href=`/?next=${encodeURIComponent(next)}`}
     async function ensureCustomerReferences(){if(customerReferences)return customerReferences;const data=await api("/api/warehouse/references/customers");customerReferences=data.items||[];return customerReferences}

@@ -312,6 +312,11 @@
     return envelope;
   }
 
+  function compactRackPosition(value) {
+    const raw=String(value||""), match=raw.match(/^1F-M-(R0[1-4])(?:-L([1-9]\d*))?(?:-G(0*[1-9]\d*))?$/i);
+    return match ? [match[1].toUpperCase(),match[2]&&Number(match[2]),match[3]&&Number(match[3])].filter(Boolean).join("-") : raw;
+  }
+
   function valueForElement(row, elementId, catalogVersion = V3_CATALOG_VERSION) {
     if (Object.prototype.hasOwnProperty.call(row?.label_text_overrides||{}, elementId)) return String(row.label_text_overrides[elementId]);
     const product = Array.isArray(row?.products) ? row.products[0] : null;
@@ -321,7 +326,7 @@
       const drawings=[...new Set((row?.label_drawing_numbers?.length ? row.label_drawing_numbers : products.map(p=>p.customer_drawing_number)).map(x=>String(x||"").trim()).filter(Boolean))];
       const code=codes.join(" / ") || String(row?.label_inventory_code||"待完善");
       const values={inventory_code_top:code,drawing_number:catalogVersion === V13_CATALOG_VERSION ? String(row?.label_title_text || "待完善") : drawings.join(" / ")||"待完善",
-        rack_location:String(row?.label_rack_location||"待完善"),
+        rack_location:compactRackPosition(row?.label_rack_location||"待完善"),
         cutting_mode:String(row?.label_mold_count||"几模待核"),
         customer_name:String(row?.label_customer_name||product?.customer_short_name||"待完善"),
         inventory_code_side:code,
@@ -340,7 +345,7 @@
         sizes=[...new Set(products.map(p=>`${p.customer_short_name||""} ${p.product_code||"待完善"}：${p.report_specification||"待完善"}`.trim()))].join(" / ");
       }
       const values={inventory_code_top:code,inventory_code_side:code,customer_name:customer,
-        rack_location:String(row?.label_rack_location||"待完善"),
+        rack_location:compactRackPosition(row?.label_rack_location||"待完善"),
         cutting_mode:catalogVersion === V10_CATALOG_VERSION ? String(row?.label_mold_count || "几模待核") : String(row?.label_display_cutting_mode ?? row?.label_cutting_mode ?? product?.default_cutting_mode ?? "待完善"),
         custom_note:[...new Set(notes.map(x=>String(x).trim()).filter(Boolean))].join(" · "),
         report_specification:`片料尺寸：${sizes.replace(/\s*[×x*]\s*/g,"×").replace(/mm\s*$/i,"")}mm`};

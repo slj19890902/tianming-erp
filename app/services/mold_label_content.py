@@ -156,7 +156,6 @@ LABEL_TEXT_FIELDS = frozenset((
     'product_specification', 'flute_type', 'mold_identity', 'mold_chinese_short_name',
     'mold_label_name', 'mold_number',
 ))
-LABEL_TEXT_READER = 'mold_label_text_v3'
 
 
 def normalize_label_texts(raw):

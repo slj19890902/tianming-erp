@@ -210,7 +210,7 @@ def test_renderer_edits_escape_text_preserve_blank_and_physical_geometry():
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 const window={};vm.runInNewContext(fs.readFileSync('static/assets/mold-label-layout.js','utf8'),{window});
 const layout=JSON.parse(fs.readFileSync(0,'utf8'));
-const row={mold_id:1,qr_data_url:'data:image/png;base64,fixture',label_inventory_code:'21301834',label_title_kind:'drawing',label_title_text:'old',label_rack_location:'R01-2-1',label_text_overrides:{drawing_number:'自定标题<&>',inventory_code_side:'1834',customer_name:''}};
+const row={mold_id:1,qr_data_url:'data:image/png;base64,fixture',label_inventory_code:'21301834',label_title_kind:'drawing',label_title_text:'old',label_rack_location:'1F-M-R01-L2-G01',label_text_overrides:{drawing_number:'自定标题<&>',inventory_code_side:'1834',customer_name:''}};
 const html=window.TmMoldLabelLayout.labelHtml(row,{version:0,layout});
 assert.ok(html.includes('自定标题&lt;&amp;&gt;'));assert.ok(!html.includes('图号自定'));
 assert.match(html,/data-layout-id="customer_name"[^>]*><\/div>/);

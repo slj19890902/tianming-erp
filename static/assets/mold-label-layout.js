@@ -313,7 +313,7 @@
   }
 
   function compactRackPosition(value) {
-    const raw=String(value||""), match=raw.match(/^1F-M-(R0[1-4])(?:-L([1-9]\d*))?(?:-G(0*[1-9]\d*))?$/i);
+    const raw=String(value||""), match=raw.match(/^1F-M-(R0[1-4])(?:-L(0*[1-9]\d*)(?:-G(0*[1-9]\d*))?)?$/i);
     return match ? [match[1].toUpperCase(),match[2]&&Number(match[2]),match[3]&&Number(match[3])].filter(Boolean).join("-") : raw;
   }
 

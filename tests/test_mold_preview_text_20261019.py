@@ -217,6 +217,8 @@ assert.match(html,/data-layout-id="customer_name"[^>]*><\/div>/);
 assert.match(html,/data-layout-id="inventory_code_side"[^>]*font-size:12mm[^>]*>1834<\/div>/);
 assert.match(html,/data-layout-id="mold_qr"[^>]*width:15mm;height:15mm/);
 assert.ok(html.includes('R01-2-1'));assert.ok(!html.includes('位置 R01'));
+assert.ok(window.TmMoldLabelLayout.labelHtml({...row,label_rack_location:'1F-M-R01-G02'},{version:0,layout}).includes('1F-M-R01-G02'));
+assert.ok(window.TmMoldLabelLayout.labelHtml({...row,label_rack_location:'1F-M-R04-L02-G001'},{version:0,layout}).includes('R04-2-1'));
 '''
     result=subprocess.run(['node','-e',script],input=json.dumps(default_layout()),text=True,capture_output=True,cwd=Path(__file__).parents[1])
     assert result.returncode==0,result.stderr

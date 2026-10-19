@@ -238,8 +238,15 @@
   }
   async function read(url,{signal}={}){
     const response=await fetch(url,{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'},signal});
-    const body=await response.json();
-    if(!response.ok)throw Error(typeof body.detail==='string'?body.detail:response.status===401?'登录已失效，请重新登录':'产品资料读取失败');
+    let body;
+    try{body=await response.json();}
+    catch(error){
+      if(error.name==='AbortError')throw error;
+      if(response.ok)throw Error('产品资料响应格式异常，请重试');
+    }
+    if(!response.ok)throw Error(typeof body?.detail==='string'?body.detail:
+      response.status===401?'登录已失效，请重新登录':
+      response.status===403?'无权查看该产品资料':`产品资料读取失败（HTTP ${response.status}），请重试`);
     return body;
   }
   let mobile=null;

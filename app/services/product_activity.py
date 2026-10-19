@@ -176,7 +176,7 @@ def activity(db, product, *, permissions, scope, page=1, page_size=30):
                 add('订单报料',ri.id,str(ri.status),rq.requisition_number,ri.requisition_qty,'张',at=at(ri.created_at),location='报料单')
             for si,so in db.execute(select(SupplierRequisitionOrderItem,SupplierRequisitionOrder).join(SupplierRequisitionOrder).where(SupplierRequisitionOrderItem.order_item_id.in_(ids))):
                 add('订单采购',si.id,'已作废' if si.status == 'voided' or so.status == 'voided' else '已采购',so.order_number,si.quantity,'张',
-                    at=at(si.created_at),location='采购单',frozen_spec=f'{si.report_length_mm}×{si.report_width_mm} mm')
+                    at=at(so.created_at),location='采购单',frozen_spec=f'{si.report_length_mm}×{si.report_width_mm} mm')
         if permissions['incoming']:
             for r in db.scalars(select(Receipt).where(Receipt.order_item_id.in_(ids))):
                 lot = db.get(InventoryLot,r.received_inventory_lot_id) if r.received_inventory_lot_id else None

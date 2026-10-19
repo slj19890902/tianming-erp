@@ -92,3 +92,25 @@ test('search displays exact physical address and unmapped reason as escaped text
  assert.match(h.root.textContent,/三楼·G货架·2层·2格/);assert.match(h.root.textContent,/实存 30 片 \/ 可用 20/);
  assert.match(h.root.textContent,/地图关联待核 <img src=x>/);assert.equal(h.root.querySelector('img[src="x"]'),null);h.instance.destroy();
 });
+
+function responseReader(response){
+ const sandbox={fetch:async()=>response};vm.createContext(sandbox);vm.runInContext(source,sandbox);
+ return sandbox.ERPProductWorkbench.read('/api/product-workbench/products/17');
+}
+test('plain-text 500 and HTML gateway failures remain readable request errors',async()=>{
+ for(const [status,body] of [[500,'Internal Server Error'],[502,'<html>Bad Gateway</html>']]){
+  await assert.rejects(responseReader(new Response(body,{status})),error=>
+   /产品资料读取失败/.test(error.message)&&error.message.includes(String(status))&&!/Unexpected token|not valid JSON/.test(error.message));
+ }
+});
+test('reader preserves JSON permission details and rejects malformed success without an empty product',async()=>{
+ await assert.rejects(responseReader(new Response(JSON.stringify({detail:'无权查看当前客户'}),{status:403})),/无权查看当前客户/);
+ await assert.rejects(responseReader(new Response('Login',{status:401})),/登录已失效/);
+ await assert.rejects(responseReader(new Response('<html>Wrong response</html>',{status:200})),/产品资料响应格式异常/);
+ const result=await responseReader(new Response(JSON.stringify({product:{id:17}}),{status:200}));
+ assert.equal(result.product.id,17);
+});
+test('reader preserves cancellation rather than replacing it with a response error',async()=>{
+ const error=Object.assign(new Error('cancelled'),{name:'AbortError'});
+ await assert.rejects(responseReader({ok:true,status:200,json:async()=>{throw error;}}),e=>e===error);
+});

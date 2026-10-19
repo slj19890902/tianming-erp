@@ -131,3 +131,46 @@ def test_production_read_and_edit_never_revive_seed_map(tmp_path, monkeypatch):
     with pytest.raises(reader.WarehouseTwinLayoutNotFoundError): reader.load_warehouse_twin_floor("1F")
     with pytest.raises(editor.WarehouseTwinLayoutEditNotFoundError): editor.load_published_warehouse_twin_floor_for_edit("1F")
     assert not runtime.exists()
+
+
+def test_exact_floor_prefixed_rack_identity_carries_without_rewriting_source(rack_case):
+    db, _, area, old, new = rack_case
+    for floor in (old, new):
+        floor['racks'][0]['area_code'] = '3F-EDIT-083'
+    old_before, new_before = deepcopy(old), deepcopy(new)
+    assert unchanged_area(area, old, new)
+    assert apply(rack_case) == 1
+    assert_current_floor_bindings(db, new)
+    assert area.storage_policy.version == 5
+    assert old == old_before and new == new_before
+    assert apply(rack_case) == 0
+
+
+@pytest.mark.parametrize('change', ['wrong_floor', 'wrong_area', 'extra_prefix', 'wrong_feature',
+                                   'missing_feature', 'source_target_code_change', 'rack_shape',
+                                   'both_maps_wrong_floor'])
+def test_prefixed_identity_does_not_hide_conflicts_or_real_changes(rack_case, change):
+    db, _, area, old, new = rack_case
+    for floor in (old, new):
+        floor['racks'][0]['area_code'] = '3F-EDIT-083'
+        if change == 'wrong_floor': floor['racks'][0]['area_code'] = '1F-EDIT-083'
+        if change == 'wrong_area': floor['racks'][0]['area_code'] = '3F-EDIT-084'
+        if change == 'extra_prefix': floor['racks'][0]['area_code'] = 'other-3F-EDIT-083'
+        if change == 'wrong_feature': floor['racks'][0]['area_feature_id'] = 'another-zone'
+        if change == 'missing_feature': floor['racks'][0].pop('area_feature_id')
+        if change == 'both_maps_wrong_floor': floor['floor_code'] = '1F'
+    if change == 'source_target_code_change': new['racks'][0]['area_code'] = 'EDIT-083'
+    if change == 'rack_shape': new['racks'][0]['levels'] = 4
+    assert not unchanged_area(area, old, new)
+    assert apply(rack_case) == 0
+    assert area.storage_policy.version == 4
+    assert not list(db.scalars(select(OperationLog)))
+    if change != 'both_maps_wrong_floor':
+        with pytest.raises(WarehouseAreaActivationError): assert_current_floor_bindings(db, new)
+
+
+def test_rack_prefix_compatibility_does_not_expand_pallet_identity(rack_case):
+    _, _, area, old, new = rack_case
+    for floor in (old, new):
+        floor['pallets'] = [dict(id='pallet', area_feature_id='zone-c', area_code='3F-EDIT-083')]
+    assert not unchanged_area(area, old, new)

@@ -654,6 +654,42 @@ def test_approve_applies_difference_preserves_reserved_and_writes_audit(
         ) == 1
 
 
+def test_stocktake_reduction_uses_unreserved_quantity_first(stocktake_api) -> None:
+    application, factory, ids = stocktake_api
+    with factory() as db:
+        lot = db.get(InventoryLot, ids["lot1"])
+        lot.quantity_available = 2700
+        lot.quantity_reserved = 300
+        lot.version += 1
+        db.commit()
+    with TestClient(application) as client:
+        _login(client, "n035-workshop")
+        # 3000 on hand includes 300 reserved. A count of 2700 removes 300
+        # unreserved boxes and preserves the entire delivery reservation.
+        order = _submit(
+            client, ids, key="n035-free-first-submit",
+            counts={ids["lot1"]: 2700, ids["lot2"]: 4},
+        )
+        _logout(client)
+        _login(client, "n035-admin")
+        approved = client.post(
+            f"/api/warehouse/stocktakes/{order['id']}/approve",
+            json={"idempotency_key": "n035-free-first-review"},
+        )
+        assert approved.status_code == 200, approved.text
+
+    with factory() as db:
+        lot = db.get(InventoryLot, ids["lot1"])
+        assert (lot.quantity_available, lot.quantity_reserved) == (2400, 300)
+        movement = db.scalar(select(InventoryMovement).where(
+            InventoryMovement.inventory_lot_id == lot.id,
+            InventoryMovement.movement_type == "adjust",
+        ))
+        assert movement is not None
+        assert (movement.before_available, movement.after_available) == (2700, 2400)
+        assert (movement.before_reserved, movement.after_reserved) == (300, 300)
+
+
 def test_approve_rejects_inventory_restore_after_location_is_disabled(
     stocktake_api,
 ) -> None:

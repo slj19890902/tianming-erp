@@ -1,6 +1,6 @@
 # 工作台片料尺寸匹配修正 · 2026-10-19
 
-状态：开发验证通过，尚未正式发布。正式服务仍运行 v0.22.686（PID78629，签名包 d407b603602330a78993637caa8e9e89d5f803c01b8419b114888a66176f5e01）。
+状态：v0.22.687 技术发布完成，服务正常，原生备份收尾完成；管理员正式页面验收待实际反馈。
 
 ## 问题与修正
 
@@ -14,12 +14,22 @@
 
 先建立失败测试（旧接口没有开数且仅精确命中），最终整合后端43项通过（片料专项20项、已有工作台23项），前端67项通过；新增默认不推荐大片料、空结果不自动扩大、扩大仍先显示接近尺寸、修改尺寸/楞型恢复范围及返回保留范围的回归。覆盖短差两轴边界、卡纸小数、两方向一开二/一开四、大片料、稳定分页/全量排序、分数筛选、认证权限及跨客户脱敏、无库存写入、选中真实尺寸和返回筛选状态。新增合成库存测试曾缺少必填日期/材质，补齐后通过，不涉及正式数据。
 
-Chrome合成数据桌面/手机预览通过，已检查截图及手机无横向溢出；没有对正式页面执行自动点击。Python编译、JavaScript语法、git diff --check通过。唯一Alembic head et1019fl，无DDL。正式数据库未读写、未停服或重启。
+Chrome合成数据桌面/手机预览通过，已检查截图及手机无横向溢出；没有对正式页面执行自动点击。Python编译、JavaScript语法、git diff --check通过。唯一Alembic head et1019fl，无DDL。开发测试未访问正式数据库；正式发布采用已授权Manager串行停启，发布接口/数据库检查只读，未执行库存扣减或其他正式业务写入。
 
 ## 资产与回执
 
-分支 codex/workbench-sheet-fit-20261019，工作树 /Users/kimiyf/ERP-Migration/workbench-sheet-fit-20261019，从实际v686发布回执6e5a2f8d建立。远端正式引用仍是b9a077bc，未以旧远端覆盖已发布源码。NAS未挂载，AI_START不可读，此回执仅保存在本地；未声明NAS归档或远端推送完成。
+分支 codex/workbench-sheet-fit-20261019，工作树 /Users/kimiyf/ERP-Migration/workbench-sheet-fit-20261019，从实际v686发布回执6e5a2f8d建立。已按实际v686签名源码建立候选，未以旧远端覆盖已发布实现；本次实时GitHub查询因HTTP2连接错误失败，未宣称远端核对或推送完成。开发时NAS未挂载；发布时已重新挂载，已读取AI_START及ERP发布与数据边界。NAS回执写入持续等待，已停止本地归档脚本，未确认上传或回读；完整回执及证据已保存在本地，正式发布已完成。
 
-证据目录 /Users/kimiyf/ERP-Migration/evidence/workbench-sheet-fit-20261019，最终证据为near-first-backend.xml/txt、near-first-frontend.txt、near-first-preview-result.json、near-first-desktop.png、expanded-desktop.png、expanded-mobile.png；RESULT.json记录最终资源哈希。正式系统目前仍为v686，此修正尚未发布。
+证据目录 /Users/kimiyf/ERP-Migration/evidence/workbench-sheet-fit-20261019，最终证据为near-first-backend.xml/txt、near-first-frontend.txt、near-first-preview-result.json、near-first-desktop.png、expanded-desktop.png、expanded-mobile.png；RESULT.json记录最终资源哈希。正式技术发布已完成。
 
 人工验收入口：今日工作台 → 按尺寸找片料，输入1000×200和楞型，核对匹配度/开数；选择100%筛选；选中一批查用途后返回核对原筛选和页码。
+
+## v0.22.687 正式发布回执
+
+- 老板本会话明确要求发布。正式源码 `c4541e18cc301a88ceea9b257536bc0cd93b8549`，签名包 `dd5146fabf6ec757574a18909d227e23420ab30c912da7dcf041393efa40dbce`，manifest SHA-256 `b4343f50a781f5de688a875d857dd3e08d3d53502a06eafe4be0e20add19963d`。旧包 `d407b603602330a78993637caa8e9e89d5f803c01b8419b114888a66176f5e01`，schema revision `et1019fl` 保持，无DDL；仅7个应用成员改变，原运行时/依赖及schema契约保持。
+- 完整时点备份 `/Library/TianmingERP/instance/backups/20261019-202959-d174ae7e.tmbackup`，SHA-256 `9716f578cf0437250e435e44dca4c288dcf973dd02205424b860a033c8ed4ef1`；Manager备份及独立恢复验证通过，原生收尾保留备份并回收恢复工作副本。`backup_work_retained=false`、`manual_stop=false`。
+- 在线签名包演练通过；隔离启动及正式只读检查见service.stdout/isolated-startup.stdout，完整性ok、外键错误0，无业务写入。正式PID 84179；健康、桌面/手机页面、JS/CSS均HTTP200，返回字节SHA与签名清单一致。匿名库存接口401，片料范围按钮存在。
+- stop_requested `2026-10-19T12:29:37.916437+00:00`；process_ready `2026-10-19T12:35:56.909588+00:00`，停服约378.99秒。服务正常，独立恢复及演练临时载荷清理完成，正式备份保留。
+- 最终状态 `technical_release_and_native_closure_complete`。最终证据 `/Users/kimiyf/ERP-Migration/evidence/workbench-sheet-fit-20261019/release-v687`；正式页面未自动点击，人工验收待管理员实际反馈。实际token用量不可获取，不估算。
+
+NAS归档状态：网络共享写入未能确认，已保留本地发布记录，待网络恢复后归档；未删除本地证据或备份。

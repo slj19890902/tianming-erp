@@ -14,6 +14,8 @@
 
 分支：`codex/manual-sheet-modal-20261019`，独立工作区 `/Users/kimiyf/ERP-Migration/manual-sheet-modal-20261019`。以实际正式 v0.22.684 源码 0ff57156 及其发布记录 aa96430f 为开发基线；正式签名包 b0722c0c、数据库 revision et1019fl。远端 factory-current-baseline 只读查询仍为 b9a077bc，落后正式实现，因此未从落后代码覆盖正式版本。
 
+功能提交为 `4832196af9103c1055cc6c820536b3c24d1ba7e6`。候选已保存到本地干净分支；GitHub 推送无进展后停止，随后定向远端分支核对也报告网络过慢，远端推送结果未确认，不宣称已推送。
+
 生产实现文件：`app/api/warehouse.py`、`app/services/semi_finished_inventory.py`、`app/services/sheet_cut_plan.py`、`static/index.html`、`static/ui/manual-sheet-deduction.js`、新样式 `static/ui/manual-sheet-deduction.css`。无 schema 变更，无正式数据写入，无停服或重启。
 
 ## 验证与证据

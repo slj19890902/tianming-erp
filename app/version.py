@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.675"
+APP_VERSION = "v0.22.677"
 APP_VERSION_NAME = "已入库成品勾选打印产品标签"
 APP_BUILD_DATE = "2026-10-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -6652,7 +6652,7 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.674：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
-# v0.22.675：已入库成品按真实库存身份打印产品标签。
+# v0.22.677：已入库成品按真实库存身份打印产品标签。
 APP_CHANGES = [
     "生产工作台已入库增加逐行及本页勾选，在筛选查找旁打印产品标签；查询、翻页、刷新和账号切换清空选择。",
     "按所选批次现存成品数分捆，已完成组套打印父件标签，子件独立交付打印自身，不沿报料清单展开未完工子件。",
@@ -6664,4 +6664,4 @@ APP_VERIFICATION_STEPS = [
     "核对组套父件、单独交付子件、现存数量、每捆数量及尾捆；标签机实际出纸后确认已实际打印。",
     "返回列表保留原位置，查询或翻页后勾选清空；重新打印已登记批次时确认补打。",
 ]
-APP_CHANGELOG = [*(f"v0.22.675：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.677：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

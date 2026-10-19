@@ -1812,7 +1812,9 @@ def receive_replenishment_item(
                 raise QuantityContractError('外购库存必须按本次实际收到的实物片数入账')
         except QuantityContractError as error:
             raise StockReplenishmentError(str(error), 409) from error
-    if inventory_quantity < quantity and physical_receipt is None:
+    from app.services.incoming_actual_specs import stored
+    actual_receipt = stored(db,receipt_item_id) if source_ref_type == "stock_replenishment_receipt" else None
+    if inventory_quantity < quantity and physical_receipt is None and actual_receipt is None:
         raise StockReplenishmentError("实际入库数量不能小于计划到货数量。")
     if quantity > remaining:
         raise StockReplenishmentError(
@@ -1944,6 +1946,8 @@ def receive_replenishment_item(
                 f"历史成品补库库位不可使用：{location_issue}", 409
             )
     destination_location_id = destination.id
+    from app.services.incoming_actual_specs import stored, effective_item
+    physical_item = effective_item(item, stored(db, receipt_item_id))
 
     customer_board_preparation = (
         item.target_inventory_type == "semi_finished"
@@ -2021,18 +2025,18 @@ def receive_replenishment_item(
                 )
             lot = manual_semi_finished_in(
                 db,
-                material_code=item.material_code_snapshot or "",
-                layer_count=int(item.layer_count or 0),
-                flute_type=item.flute_type or "",
-                board_length_mm=sheet_dimension_number(item.report_length_mm or 0),
-                board_width_mm=sheet_dimension_number(item.report_width_mm or 0),
-                sheet_type=item.sheet_type,
-                component_type=item.component_type,
-                pieces_per_box=item.pieces_per_box,
-                stock_yield_per_sheet=item.stock_yield_per_sheet,
+                material_code=physical_item.material_code_snapshot or "",
+                layer_count=int(physical_item.layer_count or 0),
+                flute_type=physical_item.flute_type or "",
+                board_length_mm=sheet_dimension_number(physical_item.report_length_mm or 0),
+                board_width_mm=sheet_dimension_number(physical_item.report_width_mm or 0),
+                sheet_type=physical_item.sheet_type,
+                component_type=physical_item.component_type,
+                pieces_per_box=physical_item.pieces_per_box,
+                stock_yield_per_sheet=physical_item.stock_yield_per_sheet,
                 supplier_name=replenishment_supplier_name(item, order),
                 customer_id=item.customer_id,
-                material_id=item.material_id,
+                material_id=physical_item.material_id,
                 crease_type=item.crease_type,
                 crease_left_mm=item.crease_left_mm,
                 crease_middle_mm=item.crease_middle_mm,

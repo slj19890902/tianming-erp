@@ -400,6 +400,11 @@ def _price_plan(
     purchase_receipt_fact: PurchaseReceiptFact | None = None,
 ) -> ReceiptPriceAdoptionPlan:
     context = _receipt_source_context(db, item, allow_historical_dimensions=allow_supplier_code_fallback)
+    from app.services.incoming_actual_specs import stored
+    actual = stored(db, item.id)
+    if actual:
+        context = replace(context, material_id=actual["material_id"], material_code=actual["material_code"], report_length_mm=Decimal(actual["length_mm"]), report_width_mm=Decimal(actual["width_mm"]))
+        purchase_receipt_fact = None  # The actual receipt freezes its own current validated price.
     try:
         supplier = resolve_supplier(
             db,

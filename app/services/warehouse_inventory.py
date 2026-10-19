@@ -2831,8 +2831,8 @@ def manual_finished_in(
         length_mm=round(product.length_mm) if product.length_mm is not None else None,
         width_mm=round(product.width_mm) if product.width_mm is not None else None,
         height_mm=round(product.height_mm) if product.height_mm is not None else None,
-        material_code_snapshot=material_code,
-        flute_type_snapshot=product.flute_type,
+        material_code_snapshot=json.loads(physical_basis_json).get("material") if physical_basis_json else material_code,
+        flute_type_snapshot=json.loads(physical_basis_json).get("flute") if physical_basis_json else product.flute_type,
         physical_basis_json=physical_basis_json or product_basis(product),
     )
     _movement(

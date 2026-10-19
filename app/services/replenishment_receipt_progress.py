@@ -31,9 +31,15 @@ def receipt_progress_map(db, items):
     for item in items:
         facts = grouped.get(item.id, [])
         actual = sum(row.received_quantity for row in facts) if facts else int(item.stocked_quantity or 0)
+        from app.services.incoming_actual_specs import receipt_yield
+        from math import ceil
+        factor=int(item.stock_yield_per_sheet or 1)
+        actual_units=sum(row.received_quantity*receipt_yield(db,row.id,factor) for row in facts) if facts else actual*factor
+        latest_factor=receipt_yield(db,facts[-1].id,factor) if facts else factor
+        remaining=max(0,ceil((item.quantity*factor-actual_units)/latest_factor))
         short_closed = any(row.resolution_action == 'accept_short' and row.resolution_status == 'resolved' for row in facts)
         result[item.id] = dict(received_quantity=actual,
-                remaining_quantity=0 if short_closed else max(0, item.quantity-actual),
+                remaining_quantity=0 if short_closed else remaining,
                 short_closed=short_closed,
                 shortage_quantity=max(0, item.quantity-actual),
                 over_quantity=max(0, actual-item.quantity))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -887,12 +888,23 @@ def source_summary(db: Session, target: IncomingTarget) -> dict:
         .where(_source_filter(target), IncomingReceiptItem.status == "posted")
         .order_by(IncomingReceiptItem.id.desc())
     )
+    remaining=max(planned-received,0)
+    if latest:
+        from app.services.incoming_actual_specs import stored, receipt_yield
+        from math import ceil
+        receipts=list(db.scalars(select(IncomingReceiptItem).where(_source_filter(target),IncomingReceiptItem.status=='posted')))
+        values=[stored(db,r.id) for r in receipts]
+        actual_value=next((v for v in reversed(values) if v),None)
+        if actual_value:
+            original_yield=actual_value['original_yield']
+            physical=sum(r.received_quantity*receipt_yield(db,r.id,original_yield) for r in receipts)
+            remaining=max(0,ceil((planned*original_yield-physical)/receipt_yield(db,latest.id,original_yield)))
     variance = received - planned
     variance_type = "matched" if variance == 0 else "short" if variance < 0 else "over"
     return {
         "planned_quantity": planned,
         "cumulative_received_quantity": received,
-        "remaining_quantity": max(planned - received, 0),
+        "remaining_quantity": remaining,
         "variance_quantity": variance,
         "variance_type": variance_type,
         "resolution_status": latest.resolution_status if latest else "not_required",
@@ -1555,6 +1567,8 @@ def _idempotent_receipt_item(
         expected_disposition = (
             None if stored_disposition == "not_applicable" else stored_disposition
         )
+        if normalized_disposition is None and expected_disposition == "finished":
+            normalized_disposition = "finished"
         expected_action = {
             "finished": "all_to_production",
             "semi_finished_reserve": "transfer_to_semi_inventory",
@@ -1637,6 +1651,7 @@ def _receive_stock_replenishment_one(
     surplus_location_id: int | None,
     idempotency_key: str,
     audit_context: dict[str, object] | None = None,
+    actual_spec: dict | None = None,
 ) -> IncomingReceiptItem:
     order, item = _stock_target(db, item_key, claim_for_receipt=True)
     if not stock_replenishment_uses_paperboard_price(db, item):
@@ -1646,6 +1661,8 @@ def _receive_stock_replenishment_one(
             409,
             code="STOCK_REPLENISHMENT_PROCUREMENT_ROUTE_MISSING",
         )
+    from app.services.incoming_actual_specs import prepare, freeze
+    actual = prepare(db, item_key, actual_spec, user)
     planned = int(item.quantity or 0)
     before = int(
         db.scalar(
@@ -1662,16 +1679,21 @@ def _receive_stock_replenishment_one(
     if quantity <= 0:
         raise IncomingReceiptError("入库数量必须大于0")
     cumulative = before + quantity
+    from app.services.incoming_actual_specs import receipt_yield
+    old_receipts=list(db.scalars(select(IncomingReceiptItem).where(_stock_source_filter(item.id),IncomingReceiptItem.status=='posted')))
+    base_yield=int(item.stock_yield_per_sheet or 1)
+    units=sum(r.received_quantity*receipt_yield(db,r.id,base_yield) for r in old_receipts)+quantity*(actual['yield'] if actual else base_yield)
+    progress_cumulative=units//base_yield
     action = (resolution_action or "").strip() or None
     reason = (resolution_reason or "").strip() or None
-    if cumulative < planned:
+    if progress_cumulative < planned:
         if action not in {"await_supplier", "accept_short"}:
             raise IncomingReceiptError(
                 "短收时请选择继续等补货或按已收数结单"
             )
         resolution_status = "pending" if action == "await_supplier" else "resolved"
         variance_type = "short"
-    elif cumulative > planned:
+    elif progress_cumulative > planned:
         if action:
             raise IncomingReceiptError("补库多收片料按实收统一入库，无需选择生产或另存余量")
         resolution_status = "resolved"
@@ -1714,6 +1736,7 @@ def _receive_stock_replenishment_one(
     )
     receipt.items.append(receipt_item)
     db.flush()
+    freeze(db, receipt_item, actual, actual_spec, user)
     try:
         settlement_price_fact = freeze_receipt_settlement_price(
             db,
@@ -1731,7 +1754,7 @@ def _receive_stock_replenishment_one(
             db,
             order=order,
             item=item,
-            quantity=min(quantity, max(0, planned - int(item.stocked_quantity or 0))),
+            quantity=min(max(progress_cumulative-int(item.stocked_quantity or 0),0), max(0, planned-int(item.stocked_quantity or 0))),
             actual_inventory_quantity=quantity,
             operator_id=user.id,
             receipt_item_id=receipt_item.id,
@@ -1739,6 +1762,17 @@ def _receive_stock_replenishment_one(
     except StockReplenishmentError as error:
         raise IncomingReceiptError(str(error), error.status_code) from error
     receipt_item.received_inventory_lot_id = lot.id
+    if actual:
+        from app.services.purchase_receipt_facts import calculate_purchase_sheet_cost_breakdown
+        price=settlement_price_fact
+        cost=calculate_purchase_sheet_cost_breakdown(unit_price=price.unit_price,price_unit=price.price_unit,
+            tax_included=price.tax_included,tax_rate=price.tax_rate,
+            report_length_mm=price.report_length_mm,report_width_mm=price.report_width_mm).gross_per_sheet
+        lot.estimated_unit_cost_snapshot=cost
+        lot.cost_snapshot_source='receipt_sheet_actual'
+        lot.cost_snapshot_detail_json=json.dumps({'supplier_receipt_price_fact_id':price.id,'source_hash':price.source_hash,'currency':price.currency})
+        lot.cost_snapshot_at=utc_now_naive()
+    db.flush()  # Dependent joins must see the new link with production autoflush=False.
     from app.services.raw_purchase_plans import on_receipt
     on_receipt(db,receipt_item,lot,settlement_price_fact,user)
     # Only this real receipt transaction may create an explicit stock task.
@@ -1827,13 +1861,19 @@ def receive_one(
     actual_material_fingerprint: str | None = None,
     audit_context: dict[str, object] | None = None,
     processed_component_direction: str | None = None,
+    actual_spec: dict | None = None,
 ) -> IncomingReceiptItem:
+    if actual_spec is not None and received_quantity is None:
+        raise IncomingReceiptError("请填写本次供应商纸板实际张数",409)
     submitted_key = (idempotency_key or "").strip()
     key = submitted_key or uuid4().hex
     existing_receipt = db.scalar(
         select(IncomingReceipt).where(IncomingReceipt.idempotency_key == key)
     )
     if existing_receipt is not None:
+        from app.services.incoming_actual_specs import replay
+        existing_item = db.scalar(select(IncomingReceiptItem).where(IncomingReceiptItem.receipt_id == existing_receipt.id))
+        replay(db, existing_item, actual_spec)
         return _idempotent_receipt_item(
             db,
             processed_component_direction=processed_component_direction,
@@ -1867,6 +1907,7 @@ def receive_one(
             surplus_location_id=surplus_location_id,
             idempotency_key=key,
             audit_context=audit_context,
+            actual_spec=actual_spec,
         )
 
     target = _target(
@@ -1879,6 +1920,9 @@ def receive_one(
         select(IncomingReceipt).where(IncomingReceipt.idempotency_key == key)
     )
     if existing_receipt is not None:
+        from app.services.incoming_actual_specs import replay
+        existing_item = db.scalar(select(IncomingReceiptItem).where(IncomingReceiptItem.receipt_id == existing_receipt.id))
+        replay(db, existing_item, actual_spec)
         return _idempotent_receipt_item(
             db,
             processed_component_direction=processed_component_direction,
@@ -1928,6 +1972,8 @@ def receive_one(
         raise IncomingReceiptError(
             str(error), error.status_code, code=error.code
         ) from error
+    from app.services.incoming_actual_specs import prepare, freeze, effective_context
+    actual = prepare(db, item_key, actual_spec, user)
     component_identity = None
     if processed_component_direction is not None:
         if purpose_context is None or surplus_disposition != 'semi_finished_reserve':
@@ -1989,11 +2035,7 @@ def receive_one(
         surplus_quantity = max(quantity - remaining_order_purpose, 0)
         normalized_disposition = (surplus_disposition or "").strip() or None
         if surplus_quantity > 0 and normalized_disposition is None:
-            raise IncomingReceiptError(
-                f"本次实收比订单成品用途多 {surplus_quantity} 片，请先选择多收片料用于做成品还是片料备库。",
-                409,
-                code="INCOMING_SURPLUS_DISPOSITION_REQUIRED",
-            )
+            normalized_disposition = "finished"
         if surplus_quantity == 0 and normalized_disposition is not None:
             raise IncomingReceiptError(
                 "本次没有超出订单成品用途，不能提交多收片料用途。请刷新后重试。",
@@ -2071,6 +2113,7 @@ def receive_one(
     )
     receipt.items.append(receipt_item)
     db.flush()
+    freeze(db, receipt_item, actual, actual_spec, user)
     purpose_allocation = None
     try:
         settlement_price_fact = freeze_receipt_settlement_price(
@@ -2091,7 +2134,7 @@ def receive_one(
                 db,
                 target=target,
                 receipt_item=receipt_item,
-                context=purpose_context,
+                context=effective_context(purpose_context,actual),
                 operator_id=user.id,
                 idempotency_key=key,
                 surplus_disposition=(
@@ -2117,7 +2160,9 @@ def receive_one(
         )
         receipt_item.surplus_inventory_lot_id = lot.id
 
-    closed = cumulative >= target.planned_quantity or action == "accept_short"
+    from app.services.incoming_actual_specs import source_received_pieces
+    original_factor = int(actual["original_yield"]) if actual else 1
+    closed = (source_received_pieces(db, target, actual) >= target.planned_quantity * original_factor if actual else cumulative >= target.planned_quantity) or action == "accept_short"
     _mark_order_progress(db, target, closed=closed, user_id=user.id)
     if closed:
         pending_items = db.scalars(

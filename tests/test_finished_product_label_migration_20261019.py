@@ -20,9 +20,9 @@ def test_empty_migration_roundtrip_preserves_old_facts_and_guards_printed_histor
         actor=db.scalar(text('select id from users limit 1'))
         engine=db.get_bind()
     Job.__table__.drop(engine)
-    spec=importlib.util.spec_from_file_location('finished_label_migration',ROOT/'alembic/versions/es1019fl_finished_product_labels.py')
+    spec=importlib.util.spec_from_file_location('finished_label_migration',ROOT/'alembic/versions/et1019fl_finished_product_labels.py')
     migration=importlib.util.module_from_spec(spec);spec.loader.exec_module(migration)
-    assert ScriptDirectory.from_config(Config(str(ROOT/'alembic.ini'))).get_heads()==['es1019fl']
+    assert ScriptDirectory.from_config(Config(str(ROOT/'alembic.ini'))).get_heads()==['et1019fl']
     with engine.connect() as c:
         names=[r[0] for r in c.execute(text("select name from sqlite_master where type='table' order by name"))]
         before={n:c.execute(text(f'SELECT * FROM "{n}" ORDER BY rowid')).fetchall() for n in names if n!='sqlite_sequence'}

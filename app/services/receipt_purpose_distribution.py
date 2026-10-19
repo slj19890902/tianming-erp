@@ -393,6 +393,7 @@ def _finished_capacity(
     order_sheet_deltas: dict[int, int],
     *,
     semi_piece_credits_by_component: dict[str, int] | None = None,
+    current_actual_receipt: tuple | None = None,
 ) -> int:
     # Parent cartons and assembled liners are separate inventory outputs. The
     # receipt preview must use the same parent-only basis as actual posting.
@@ -402,6 +403,8 @@ def _finished_capacity(
         OrderSubkit.order_item_id.in_(order_ids)))) if order_ids else set()
     snapshots = [row for row in snapshots if not (
         row.source_order_item_id in grouped_ids and row.source_bom_requisition_source_id is not None)]
+    from app.services.incoming_actual_specs import piece_corrections
+    corrections=piece_corrections(db,order_sheet_deltas,current_actual_receipt)
     by_component: dict[str, Decimal] = {}
     pieces_per_finished_by_component: dict[str, int] = {}
     for snapshot in snapshots:
@@ -413,7 +416,7 @@ def _finished_capacity(
             pieces_per_finished,
         )
         capacity = (
-            Decimal(sheets * int(snapshot.yield_per_sheet_snapshot or 1))
+            Decimal(sheets * int(snapshot.yield_per_sheet_snapshot or 1)+corrections.get(snapshot.id,0))
             / Decimal(pieces_per_finished)
         )
         by_component[key] = by_component.get(key, Decimal("0")) + capacity
@@ -1279,6 +1282,7 @@ def post_receipt_purpose_allocation(
         snapshots,
         after_sheets,
         semi_piece_credits_by_component=semi_piece_credits,
+        current_actual_receipt=(snapshot.id,receipt_item.id,order_delta),
     )
     finished_delta = finished_after - finished_before
     if finished_delta < 0:
@@ -1288,6 +1292,9 @@ def post_receipt_purpose_allocation(
         )
 
     board_length, board_width = _source_dimensions(source)
+    from app.services.incoming_actual_specs import stored
+    actual = stored(db,receipt_item.id)
+    if actual:board_length,board_width=Decimal(actual["length_mm"]),Decimal(actual["width_mm"])
     sheet_cost = _money(
         calculate_per_sheet_cost(
             unit_price=fact.unit_price,
@@ -1323,7 +1330,7 @@ def post_receipt_purpose_allocation(
     if graph_context is not None:
         graph_plan = node_receipt_plan(db, graph_context, snapshots=snapshots,
             allocations=active_item_allocations, current_snapshot=snapshot,
-            order_delta=order_delta, order_cost=order_cost, currency=fact.currency)
+            order_delta=order_delta, order_cost=order_cost, currency=fact.currency, current_receipt_id=receipt_item.id)
         finished_before, finished_after = graph_plan["before"], graph_plan["after"]
         finished_delta = finished_after - finished_before
         capitalized_cost = graph_plan["total_cost"]
@@ -1351,7 +1358,7 @@ def post_receipt_purpose_allocation(
                 capitalized_material_cost=capitalized_cost,
                 cost_detail={
                     **(graph_plan["detail"] if graph_plan else {}),
-                    **({"incoming_receipt_item_id": receipt_item.id} if graph_plan else {}),
+                    **({"incoming_receipt_item_id": receipt_item.id} if graph_plan or actual else {}),
                     "purchase_receipt_fact_id": fact.id,
                     "purchase_purpose_source_snapshot_id": snapshot.id,
                     "currency": fact.currency,

@@ -108,6 +108,7 @@ def search_sheets(response: Response,
                   length: Decimal = Query(gt=0, decimal_places=2),
                   width: Decimal = Query(gt=0, decimal_places=2),
                   flute_type: str | None = Query(default=None, max_length=20),
+                  min_score: Decimal = Query(default=0, ge=0, le=100),
                   page: int = Query(default=1, ge=1),
                   page_size: int = Query(default=20, ge=1, le=50),
                   db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
@@ -119,7 +120,7 @@ def search_sheets(response: Response,
     if flute and flute_layers(flute) is None:
         raise HTTPException(422, "请选择有效楞型")
     return find_sheets(db, _visible_customer_ids(user, db), length=length, width=width,
-                       flute_type=flute, page=page, page_size=page_size)
+                       flute_type=flute, page=page, page_size=page_size, min_score=min_score)
 
 
 @router.get("/reverse")

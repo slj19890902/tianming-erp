@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+import pytest
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
@@ -8,12 +9,97 @@ from app.models.access_control import UserCustomerScope, UserPermissionOverride
 from app.models.product import Product
 from app.models.user import User
 from app.models.warehouse_goods import WarehouseGoodsProfile
-from app.models.warehouse_inventory import InventoryLot, SemiFinishedLotAllowedProduct
+from app.models.warehouse_inventory import InventoryLot, SemiFinishedInventoryDetail, SemiFinishedLotAllowedProduct
 from test_p1_21b_mobile_admin_product_search import _login, mobile_erp_app
 from test_product_workbench import _app
 
 
-def test_sheet_search_exact_axes_all_batches_paging_and_no_writes(mobile_erp_app):
+@pytest.mark.parametrize('stock_length,stock_width,expected_cuts,expected_score', [
+    (1000, 200, 1, 100), (991, 200, 1, 99.1), (990, 200, 1, 99),
+    (989, 200, None, None), (1000, 190, 1, 95), (1000, 189, None, None),
+    (2000, 200, 2, 100), (1000, 400, 2, 100), (2000, 400, 4, 100),
+    (1100, 200, 1, 90.91), (1991, 200, 2, 99.55),
+    (200, 1000, None, None), (3000, 1000, 15, 100),
+])
+def test_sheet_size_fit_examples(mobile_erp_app, stock_length, stock_width, expected_cuts, expected_score):
+    app, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        lot = db.scalar(select(InventoryLot).where(InventoryLot.lot_number == 'SF-MOBILE-001'))
+        lot.semi_finished_detail.board_length_mm = stock_length
+        lot.semi_finished_detail.board_width_mm = stock_width
+        db.commit()
+        before = db.execute(text('select * from inventory_lots order by id')).all()
+    with TestClient(app) as client:
+        _login(client, 'mobile-admin')
+        response = client.get('/api/product-workbench/sheets?length=1000&width=200&flute_type=B')
+        assert response.status_code == 200, response.text
+        rows = response.json()['items']
+        if expected_cuts is None:
+            assert rows == []
+        else:
+            assert len(rows) == 1
+            assert rows[0]['cuts_per_sheet'] == expected_cuts
+            assert rows[0]['match_score'] == expected_score
+            assert rows[0]['reverse_source']['length'] == stock_length
+            assert rows[0]['reverse_source']['width'] == stock_width
+    with factory() as db:
+        assert db.execute(text('select * from inventory_lots order by id')).all() == before
+
+
+def test_sheet_fit_ranks_and_filters_all_batches_before_paging(mobile_erp_app):
+    app, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        original = db.scalar(select(InventoryLot).where(InventoryLot.lot_number == 'SF-MOBILE-001'))
+        dimensions = [(1100, 200), (2000, 400), (1000, 400), (991, 200), (1000, 200),
+                      (2000, 200), (1000, 200), (100000, 200)]
+        lot_ids = []
+        for index, (length, width) in enumerate(dimensions):
+            lot = InventoryLot(lot_number=f'FIT-{index}', inventory_type='semi_finished',
+                               warehouse_location_id=original.warehouse_location_id,
+                               quantity_available=10, quantity_reserved=0, unit='sheets',
+                               status='active', source_type='manual', stock_date=original.stock_date,
+                               last_movement_at=original.last_movement_at)
+            db.add(lot)
+            db.flush()
+            db.add(SemiFinishedInventoryDetail(inventory_lot_id=lot.id,
+                   owner_customer_id=original.semi_finished_detail.owner_customer_id,
+                   material_code_snapshot='K=A', normalized_material_code='K=A', sheet_type='raw_board',
+                   board_length_mm=length, board_width_mm=width, flute_type='B', layer_count=3,
+                   component_type='whole', pieces_per_box=1, stock_yield_per_sheet=1))
+            lot_ids.append(lot.id)
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, 'mobile-admin')
+        params = dict(length=1000, width=200, flute_type='B', page_size=2)
+        rows = []
+        for page in range(1, 5):
+            response = client.get('/api/product-workbench/sheets', params={**params, 'page': page})
+            assert response.status_code == 200, response.text
+            body = response.json()
+            assert body['total'] == 8
+            assert body['has_more'] == (page < 4)
+            rows.extend(body['items'])
+        assert [r['lot_id'] for r in rows] == [lot_ids[i] for i in (4, 6, 2, 5, 1, 7, 3, 0)]
+        filtered = client.get('/api/product-workbench/sheets', params={**params, 'min_score': 100}).json()
+        assert filtered['total'] == 6 and filtered['has_more']
+        assert all(r['match_score'] == 100 for r in filtered['items'])
+        assert client.get('/api/product-workbench/sheets', params={**params, 'page': 5}).json()['items'] == []
+        for score in (-1, 101):
+            assert client.get('/api/product-workbench/sheets', params={**params, 'min_score': score}).status_code == 422
+
+
+def test_sheet_fit_decimal_boundary_and_tolerance_is_not_multiplied():
+    from app.services.workbench_sheet_search import sheet_fit
+    assert sheet_fit('110.10', '80.20', '120.10', '80.20') is not None
+    assert sheet_fit('110.09', '80.20', '120.10', '80.20') is None
+    assert sheet_fit(1980, 200, 1000, 200)['cuts_per_sheet'] == 1
+    assert sheet_fit(1990, 200, 1000, 200)['cuts_per_sheet'] == 2
+    assert sheet_fit(1000, 400, 1000, 200)['length_cuts'] == 1
+    assert sheet_fit(1000, 400, 1000, 200)['width_cuts'] == 2
+    assert sheet_fit(0, 200, 1000, 200) is None
+
+
+def test_sheet_search_original_axes_all_batches_paging_and_no_writes(mobile_erp_app):
     app, ids, factory = _app(mobile_erp_app)
     with factory() as db:
         before = db.execute(text('select * from inventory_lots order by id')).all()
@@ -33,7 +119,8 @@ def test_sheet_search_exact_axes_all_batches_paging_and_no_writes(mobile_erp_app
         assert second['items'][0]['lot_id'] != body['items'][0]['lot_id']
         assert second['items'][0]['actual'] == 88  # unbound stock is discoverable too
         assert client.get('/api/product-workbench/sheets?length=600&width=800').json()['total'] == 0
-        assert client.get('/api/product-workbench/sheets?length=801&width=600').json()['total'] == 0
+        assert client.get('/api/product-workbench/sheets?length=801&width=600').json()['total'] == 2
+        assert client.get('/api/product-workbench/sheets?length=811&width=600').json()['total'] == 0
         assert client.get('/api/product-workbench/sheets?length=800&width=600&flute_type=A').json()['total'] == 0
         for suffix in ('&page=9223372036854775808', '&flute_type=BAD'):
             assert client.get('/api/product-workbench/sheets?length=800&width=600'+suffix).status_code == 422

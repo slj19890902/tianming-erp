@@ -19,3 +19,7 @@
 本任务独立证据：/Users/kimiyf/ERP-Migration/evidence/mold-preview-text-20261019/chrome-isolated-result.json。隔离服务已退出、测试标签页已关闭、临时依赖软链已移除。隔离数据库回收被既有remove_owned_tree保护拒绝（无法确认ERP/测试进程已退出），保留现场及cleanup-result.json，不改用其他工具绕过；NAS既有I/O故障不反复尝试写入，本地回执为当前交付证据。停服发布仍按本次授权处理。
 
 2026-10-19老板回复“当次明确授权”，本轮停服发布已授权。经用户在发布协调聊天明确授权的跨任务协调，拟将区域名称、光洋盘点预占、成品标签与本模具修复合成一次v682；区域v679在停服前副本一致性检查失败，正式仍v676，未上线v679。模具候选已整合至24310697，head et1019fl（成品标签既有候选迁移），43项定向检查通过；已把准确命令、新reader声明、已安装supervisor未更新的边界及实际Mac核验要求回传唯一发布负责人01a151d4-23eb-7071-bd3c-10712195d44c。本聊天不重复启动管理员窗口或并发停服，等统一发布的实跑回执，不能把协调或候选称为上线。
+
+最终实跑结果（2026-10-19）：模具修复已随统一v0.22.683正式发布。应用提交a0e5b092d540923a12fad044f8067eff04b0de32，包263e06e736b9b99d08605598c09bfedd1b02ccdd663b8e8c063debb83a1ba001，revision et1019fl。区域旧编码兼容问题先在停服前暴露并修复，失败v682不计上线；新v683完整时点副本验收与installed restore reader真签名保护均通过。停服13:14:44，恢复13:22:31，467.380184秒；原生恢复副本收尾完成，backup_work_retained=false。当前工作区已合入实跑提交。
+
+本聊天独立只读复核通过：Ed25519签名、新reader声明、14项源码与6项线上静态资源哈希、健康接口及原生最终回执。独立证据../evidence/mold-preview-text-20261019/{release-result.json,live-mold-verification.json}；权威原生回执/Library/TianmingERP-Release-20261019-v683/final-result.json。没有代填正式模具标签文案，没有写正式业务测试单；实体打印/页面人工验收待老板操作确认。新文字在预览中保存为以后新打印默认，历史冻结打印保留。NAS仍保留本地回执，不冒充NAS归档成功。

@@ -16,4 +16,4 @@
 
 当前系统交互：osascript release-v677-retry1/authorize.applescript 等待 macOS 管理员验证，SecurityAgent活动。rootstage retry1尚未创建，旧v676未停服。批准系统验证后才可进入重试发布；如其他更新先改变正式基线，原生断言会在停服前拒绝旧基线，不能强制覆盖。
 
-源码分支codex/finished-product-labels-20261019；GitHub推送返回128，凭据不可用。源码本地提交、准确差异source-diff.patch及验证证据已保存。NAS仅核实挂载回读，不宣称远端上传队列已确认。
+源码分支codex/finished-product-labels-20261019；GitHub推送返回128，凭据不可用。源码本地提交、准确差异source-diff.patch及验证证据已保存。本轮写回时NAS挂载路径不可用，独立回执和差异保存在本地，NAS待回写；未声称NAS归档或上传完成。

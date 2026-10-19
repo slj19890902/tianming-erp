@@ -11,7 +11,6 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.674"
 APP_VERSION = "v0.22.675"
 APP_VERSION_NAME = "实际来料规格与超收自动加工"
 APP_BUILD_DATE = "2026-10-19"

@@ -220,10 +220,12 @@ def batch_details(db, product, lot, *, permissions, scope):
             material_lot = db.get(InventoryLot, receipt.received_inventory_lot_id) if receipt.received_inventory_lot_id else None
             raw = material_lot.semi_finished_detail if material_lot else None
             head = db.get(IncomingReceipt, receipt.receipt_id)
+            from app.services.incoming_actual_specs import stored
+            actual=stored(db,receipt.id)
             add(f"receipt:{receipt.id}", "实收材料", head.received_at if head else receipt.created_at,
                 quantity=receipt.received_quantity, unit="张", document=head.receipt_number if head else None,
-                material=raw.material_code_snapshot if raw else None,
-                specification=f"{raw.board_length_mm}×{raw.board_width_mm} mm" if raw else None,
+                material=actual["material_code"] if actual else raw.material_code_snapshot if raw else None,
+                specification=f"{actual['length_mm']}×{actual['width_mm']} mm" if actual else f"{raw.board_length_mm}×{raw.board_width_mm} mm" if raw else None,
                 note=f"状态：{receipt.status}；实际材质规格以原收料批次为准")
     for root in roots:
         initial = next((m for m in movements if m.inventory_lot_id == root.id and

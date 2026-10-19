@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.686"
-APP_VERSION_NAME = "工作台片料查询与用途推荐"
+APP_VERSION = "v0.22.687"
+APP_VERSION_NAME = "片料近尺寸优先与扩大匹配"
 APP_BUILD_DATE = "2026-10-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6715,3 +6715,17 @@ APP_VERIFICATION_STEPS = [
     "核对结果字段、图纸与查看资料，匹配依据说明已取消。",
 ]
 APP_CHANGELOG = [*(f"v0.22.686：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.687：片料按需求尺寸匹配，小片料优先、手动扩大范围。
+APP_CHANGES = [
+    "按尺寸找片料支持每轴最多10mm短差，默认推荐接近需求的片料，保留大片料。",
+    "只有点击扩大范围才展示大片料；扩大后仍优先显示接近尺寸的库存。",
+    "库存结果显示匹配度和一开几，支持按匹配度筛选；修改需求尺寸或楞型恢复默认范围。",
+]
+APP_VERIFICATION_STEPS = [
+    "今日工作台按尺寸找片料输入需求长宽与楞型，核对默认结果均为接近尺寸的片料。",
+    "点击扩大范围，核对大片料及一开几、匹配度；点击只看接近尺寸恢复原范围。",
+    "选中一批查用途后返回，核对原尺寸、匹配度筛选及范围保留。",
+]
+APP_CHANGELOG = [*(f"v0.22.687：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

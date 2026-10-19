@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.683"
-APP_VERSION_NAME = "成品标签与仓库发货标签整合"
+APP_VERSION = "v0.22.684"
+APP_VERSION_NAME = "对账三位小数显示"
 APP_BUILD_DATE = "2026-10-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6670,3 +6670,18 @@ APP_CHANGES = ['生产工作台已入库增加逐行及本页勾选，在筛选�
 APP_VERIFICATION_STEPS = ['生产工作台已入库勾选并打印，核对组套父件、独立交付子件、每捆和尾捆；关闭后仍回到原行。', '核对区域名称保存后地图同步，并核对光洋原送货单的实际发货打印和结果查询。', '模具标签预览编辑、隐藏文字并按真实业务保存，核对共享模具产品隔离和R01至R04架-层-格简写，实际标签机出纸人工验收。']
 APP_CHANGES.append('区域改名正确识别同楼层的历史货架区域编码，保留其他区域、货位和库存事实。')
 APP_CHANGELOG = [*(f"v0.22.683：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.684：对账显示保留三位小数。
+APP_CHANGES = [
+    "对账页面、明细、Excel、PDF及客户对账核验统一显示：整数不带小数，有小数固定三位，如222、222.500、222.525。",
+    "只读对账汇总与导出保留已保存的第三位小数，避免222.525提前变为222.53；Excel保留可计算的数值单元格。",
+    "不重算历史已确认账单，不修改原始金额、税务开票口径、收付款状态、库存或订单事实；数据库结构和读取保护保持。",
+    "完整保留v683成品标签、仓库区域、模具标签与光洋送货修复。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新财务对账页面，核对222.525仍显示222.525，222.5显示222.500，222.000显示222。",
+    "重新导出Excel与PDF，核对明细及合计相同规则，Excel数值可以正常求和。",
+    "核对原账单确认、开票及收付款状态不变；以前下载的文件需要重新导出。",
+]
+APP_CHANGELOG = [*(f"v0.22.684：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

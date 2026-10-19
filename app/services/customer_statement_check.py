@@ -8,6 +8,8 @@ from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill
 
+from app.services.reconciliation_number_display import apply_reconciliation_number_formats, format_reconciliation_number
+
 MAX_BYTES=8*1024*1024
 FIELDS={"delivery_number":"送货单号","customer_po":"客户单号","product_code":"存货编码","product_name":"产品名称","quantity":"数量","unit_price":"单价","amount":"金额"}
 ALIASES={"delivery_number":("送货单号","送货单编号","送货编号","deliveryno"),"customer_po":("客户单号","客户订单号","采购订单号","订单号","pono"),"product_code":("存货编码","存货编号","物料编码","物料号","客户料号","料号","产品编码","产品编号"),"product_name":("产品名称","品名","物料名称","名称"),"quantity":("数量","收货数量","实收数量","送货数量","对账数量"),"unit_price":("单价","含税单价","未税单价","不含税单价"),"amount":("金额","含税金额","未税金额","不含税金额","总金额","价税合计")}
@@ -91,7 +93,7 @@ def compare(parsed, erp_rows):
         status='客户多出' if not erp else '客户缺少' if not customer else '一致' if cq==eq and abs(ca-ea)<=Decimal('.01') else '数量/金额差异'
         cp={number(r['unit_price']) for r in customer if r.get('unit_price') is not None};ep={number(r['unit_price']) for r in erp if r.get('unit_price') is not None}
         if status=='一致' and cp and cp!=ep:status='单价差异'
-        results.append({"status":status,**{k:sample.get(k) or '' for k in ('delivery_number','customer_po','product_code','product_name')},'customer_quantity':str(cq),'erp_quantity':str(eq),'quantity_difference':str(cq-eq),'customer_amount':str(ca),'erp_amount':str(ea),'amount_difference':str(ca-ea),'customer_prices':','.join(map(str,sorted(cp))),'erp_prices':','.join(map(str,sorted(ep))),'customer_rows':[r['source_row'] for r in customer],'statement_item_ids':[r['statement_item_id'] for r in erp]})
+        results.append({"status":status,**{k:sample.get(k) or '' for k in ('delivery_number','customer_po','product_code','product_name')},'customer_quantity':str(cq),'erp_quantity':str(eq),'quantity_difference':str(cq-eq),'customer_amount':str(ca),'erp_amount':str(ea),'amount_difference':str(ca-ea),'customer_prices':','.join(map(format_reconciliation_number,sorted(cp))),'erp_prices':','.join(map(format_reconciliation_number,sorted(ep))),'customer_rows':[r['source_row'] for r in customer],'statement_item_ids':[r['statement_item_id'] for r in erp]})
     return {'matching_fields':[FIELDS[k] for k in keys],'amount_tolerance':'0.01','quantity_tolerance':'0','summary':dict(Counter(r['status'] for r in results)),'items':results,'errors':parsed['errors'],'complete':not parsed['errors'],'read_only':True,'needs_mapping':False,**{k:parsed[k] for k in ('sheets','sheet_name','header_row','headers','columns','fields')}}
 
 
@@ -116,4 +118,5 @@ def export_report(result):
         for row in tab:
             for cell in row:
                 if isinstance(cell.value,str):cell.data_type='s'
+    apply_reconciliation_number_formats(book)
     stream=BytesIO();book.save(stream);stream.seek(0);return stream

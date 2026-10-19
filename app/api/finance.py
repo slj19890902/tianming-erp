@@ -100,6 +100,7 @@ from app.services.ordered_finished_receipt_return import (
 from app.services.warehouse_inventory import WarehouseInventoryError
 from app.services.product_specification import resolved_product_specification
 from app.services.statement_pdf import render_customer_statement_pdf
+from app.services.reconciliation_number_display import apply_reconciliation_number_formats, format_reconciliation_number
 from app.services.supplier_monthly_settlement import partial_paid_amounts_by_payable
 
 
@@ -1557,7 +1558,7 @@ def _aggregate_settlement_customer_summaries(
         target["pending_item_count"] += int(source.get("pending_item_count") or 0)
         target["amount"] = (
             Decimal(str(target["amount"])) + Decimal(str(source.get("amount") or 0))
-        ).quantize(MONEY, rounding=ROUND_HALF_UP)
+        )
         target["delivery_ids"].extend(source.get("delivery_ids") or [])
     return sorted(grouped.values(), key=lambda row: (str(row["name"]), row["id"]))
 
@@ -2093,7 +2094,7 @@ def export_statement_excel(
                 "",
                 "",
                 line.display_name,
-                f"{line.charge_quantity_snapshot:g}{line.unit_snapshot}",
+                f"{format_reconciliation_number(line.charge_quantity_snapshot)}{line.unit_snapshot}",
                 "客户附加收费",
                 "",
                 "",
@@ -2141,13 +2142,13 @@ def export_statement_excel(
         amounts_by_source: dict[str, Decimal] = {}
         for line in lines:
             source_name = str(line.source_customer_name or customer.name)
-            amounts_by_source[source_name] = _money_value(
+            amounts_by_source[source_name] = (
                 amounts_by_source.get(source_name, Decimal("0.00"))
                 + Decimal(str(line.receivable_amount))
             )
         for line in charge_lines:
             source_name = str(line.source_customer_name or customer.name)
-            amounts_by_source[source_name] = _money_value(
+            amounts_by_source[source_name] = (
                 amounts_by_source.get(source_name, Decimal("0.00"))
                 + Decimal(str(line.receivable_amount))
             )
@@ -2160,6 +2161,7 @@ def export_statement_excel(
         summary.freeze_panes = "A6"
 
     output = BytesIO()
+    apply_reconciliation_number_formats(workbook)
     _literal_statement_text(workbook)
     workbook.save(output)
     output.seek(0)
@@ -2361,7 +2363,7 @@ def _customer_statement_export_data(
     return {
         "rows": rows,
         "quantity_total": sum((item["quantity"] for item in rows), Decimal("0")),
-        "amount_total": sum((item["amount"] for item in rows), Decimal("0")).quantize(MONEY, rounding=ROUND_HALF_UP),
+        "amount_total": sum((item["amount"] for item in rows), Decimal("0")),
         "price_label": f"{label_prefix}单价",
         "amount_label": f"{label_prefix}金额",
         "customer_name": display_name,
@@ -2489,9 +2491,8 @@ def export_customer_statement_excel(
             sheet.cell(row, column).alignment = Alignment(wrap_text=True, vertical="center")
         for column in (2, 3, 4):
             sheet.cell(row, column).number_format = "@"
-        sheet.cell(row, 7).number_format = "0.000"
-        sheet.cell(row, 8).number_format = "0.00"
     output = BytesIO()
+    apply_reconciliation_number_formats(workbook)
     _literal_statement_text(workbook)
     workbook.save(output)
     output.seek(0)
@@ -4310,7 +4311,7 @@ def _pending_statement_groups(
                 "total_receivable_amount": None if missing_price_count else sum(
                     (row["receivable_amount"] for row in rows),
                     Decimal("0"),
-                ).quantize(MONEY, rounding=ROUND_HALF_UP),
+                ),
                 "selection_blocked": selection_blocked,
                 "exception_reason": (
                     "缺少冻结销售单价，金额待核定；请展开明细，点击补录销售单价，填写实际成交价后再对账。"
@@ -4507,7 +4508,7 @@ def pending_statement_customer_summaries(
         summary["pending_item_count"] += remaining_count
         summary["amount"] = (
             summary["amount"] + Decimal(str(row["pending_amount"] or 0))
-        ).quantize(MONEY, rounding=ROUND_HALF_UP)
+        )
         summary["delivery_ids"].append(int(row["delivery_id"]))
 
     charge_query = (
@@ -4554,13 +4555,14 @@ def pending_statement_customer_summaries(
         summary["customer_charge_count"] = charge_count
         summary["amount"] = (
             summary["amount"] + Decimal(str(row["charge_amount"] or 0))
-        ).quantize(MONEY, rounding=ROUND_HALF_UP)
+        )
 
     return list(summaries.values())
 
 
 def _money_value(value: object) -> Decimal:
-    return Decimal(str(value or 0)).quantize(MONEY, rounding=ROUND_HALF_UP)
+    # Preserve the frozen precision in read projections; format only at output.
+    return Decimal(str(value or 0))
 
 
 def _finance_report_months(year: int) -> list[str]:
@@ -8160,12 +8162,12 @@ def finance_overview(
     return {
         "through_month": through,
         "trend": [
-            {key: (value.quantize(MONEY, rounding=ROUND_HALF_UP) if isinstance(value, Decimal) else value) for key, value in trend[month].items()}
+            dict(trend[month])
             for month in months
         ],
-        "payable_aging": {key: value.quantize(MONEY, rounding=ROUND_HALF_UP) for key, value in aging.items()},
+        "payable_aging": dict(aging),
         "expense_structure": [
-            {"category": key, "amount": value.quantize(MONEY, rounding=ROUND_HALF_UP)}
+            {"category": key, "amount": value}
             for key, value in sorted(category_totals.items(), key=lambda item: item[1], reverse=True)
         ],
         "cost_coverage": cost_coverage,

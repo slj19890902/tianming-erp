@@ -10,6 +10,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from app.services.contract_pdf import _registered_font
+from app.services.reconciliation_number_display import format_reconciliation_number
 
 
 def render_customer_statement_pdf(
@@ -50,12 +51,12 @@ def render_customer_statement_pdf(
                 Paragraph(escape(str(row.get("customer_po") or "")), normal),
                 Paragraph(escape(str(row.get("product_code") or "")), normal),
                 Paragraph(escape(str(row.get("product_name") or "")), normal),
-                str(row.get("quantity") or 0),
-                f"{row.get('unit_price', 0):.3f}",
-                f"{row.get('amount', 0):.2f}",
+                format_reconciliation_number(row.get("quantity") or 0),
+                format_reconciliation_number(row.get("unit_price", 0)),
+                format_reconciliation_number(row.get("amount", 0)),
             ]
         )
-    data.append(["", "", "", "", "合计", str(quantity_total), "", f"{amount_total:.2f}"])
+    data.append(["", "", "", "", "合计", format_reconciliation_number(quantity_total), "", format_reconciliation_number(amount_total)])
     table = Table(
         data,
         repeatRows=1,

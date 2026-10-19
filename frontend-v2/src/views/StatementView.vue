@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ApiError, financeApi, masterApi, type Customer, type PendingStatementItem, type Statement } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 import { businessDate, businessMonth } from '../utils/businessDate'
+import { reconciliationNumber, reconciliationNumberCell } from '../utils/reconciliationNumber'
 
 const authStore = useAuthStore()
 const loading = ref(false)
@@ -122,7 +123,7 @@ async function generateStatement() {
   const ids = [...selectedPendingIds.value]
   try {
     await ElMessageBox.confirm(
-      `确认生成 ${month} 对账单（${ids.length} 条，合计 ￥${pendingTotal.value.toFixed(2)}）？`,
+      `确认生成 ${month} 对账单（${ids.length} 条，合计 ￥${reconciliationNumber(pendingTotal.value)}）？`,
       '生成对账单',
       { type: 'warning', confirmButtonText: '确认生成', cancelButtonText: '取消' },
     )
@@ -284,14 +285,14 @@ onMounted(async () => {
         <vxe-column field="order_number" title="订单号" width="160" />
         <vxe-column field="product_name" title="产品" min-width="190" />
         <vxe-column field="specification" title="规格" width="150" />
-        <vxe-column field="actual_received_quantity" title="实收数" width="100" />
-        <vxe-column field="unit_price" title="单价" width="110" />
-        <vxe-column field="receivable_amount" title="应收金额" width="130" />
+        <vxe-column field="actual_received_quantity" title="实收数" width="100" :formatter="reconciliationNumberCell" />
+        <vxe-column field="unit_price" title="单价" width="110" :formatter="reconciliationNumberCell" />
+        <vxe-column field="receivable_amount" title="应收金额" width="130" :formatter="reconciliationNumberCell" />
         <vxe-column field="actual_received_date" title="签收日期" width="130" />
       </vxe-table>
 
       <div v-if="pendingItems.length > 0" class="generate-foot">
-        <span class="tm-mono tm-muted">已选 {{ selectedPendingIds.length }} 条，合计 ￥{{ pendingTotal.toFixed(2) }}</span>
+        <span class="tm-mono tm-muted">已选 {{ selectedPendingIds.length }} 条，合计 ￥{{ reconciliationNumber(pendingTotal) }}</span>
         <el-button type="success" size="large" :disabled="!canFinance" :loading="statementSaving" @click="generateStatement">生成对账单</el-button>
       </div>
     </section>
@@ -306,8 +307,8 @@ onMounted(async () => {
         <vxe-column field="statement_number" title="对账单号" width="190" />
         <vxe-column field="customer_name" title="客户" width="170" />
         <vxe-column field="statement_month" title="月份" width="110" />
-        <vxe-column field="total_receivable" title="应收总额" width="130" />
-        <vxe-column field="settled_amount" title="已收金额" width="130" />
+        <vxe-column field="total_receivable" title="应收总额" width="130" :formatter="reconciliationNumberCell" />
+        <vxe-column field="settled_amount" title="已收金额" width="130" :formatter="reconciliationNumberCell" />
         <vxe-column title="状态" width="110">
           <template #default="{ row }">
             <el-tag :type="statementStatusType(row.status)">{{ statementStatusLabel(row.status) }}</el-tag>
@@ -334,10 +335,10 @@ onMounted(async () => {
     <el-dialog v-model="settleDialog" :title="`收款登记 · ${settlingStatement?.statement_number}`" width="440px">
       <el-form label-width="90px">
         <el-form-item label="应收总额">
-          <span class="tm-mono">￥{{ settlingStatement?.total_receivable }}</span>
+          <span class="tm-mono">￥{{ reconciliationNumber(settlingStatement?.total_receivable) }}</span>
         </el-form-item>
         <el-form-item label="已收金额">
-          <span class="tm-mono">￥{{ settlingStatement?.settled_amount }}</span>
+          <span class="tm-mono">￥{{ reconciliationNumber(settlingStatement?.settled_amount) }}</span>
         </el-form-item>
         <el-form-item label="本次收款">
           <el-input v-model="settleForm.amount" placeholder="输入收款金额" />

@@ -1247,6 +1247,8 @@ function defaultInventoryUsages(feature: TwinFeature): InventoryUsage[] {
 }
 
 function rackAreaCode(rack: Rack, features: LayoutFeature[]) {
+  const bound = features.find((item) => item.feature_kind === "zone" && item.id === rack.area_feature_id);
+  if (bound) return featureAreaCode(bound);
   if (rack.area_code) return rack.area_code.toUpperCase();
   const zone = features.find((item) => item.feature_kind === "zone" && item.points.length > 2 && pointInPolygon(rack.x_mm, rack.y_mm, item.points));
   const geometryAreaCode = featureAreaCode(zone);
@@ -1701,6 +1703,9 @@ export function WarehouseTwinApp() {
   const [areaLocationManagement, setAreaLocationManagement] = useState<AreaLocationManagement | null>(null);
   const [formalAreaCodeDraft, setFormalAreaCodeDraft] = useState("");
   const [formalAreaNameDraft, setFormalAreaNameDraft] = useState("");
+  const [areaNameEditorOpen, setAreaNameEditorOpen] = useState(false);
+  const [areaRenameDraft, setAreaRenameDraft] = useState("");
+  const areaRenameRequestRef = useRef<{ signature: string; body: Record<string, string | number> } | null>(null);
   const [simpleAreaUsage, setSimpleAreaUsage] = useState<InventoryUsage>("finished");
   const [simpleAreaLayout, setSimpleAreaLayout] = useState<Exclude<StorageLayout, "mixed">>("pallet_ground");
   const [simpleAreaCapacity, setSimpleAreaCapacity] = useState("0");
@@ -2924,6 +2929,8 @@ export function WarehouseTwinApp() {
   const selectedLocationAreaCode = selectedLocation?.area_code?.trim() || null;
   const selectedRackAreaCode = selectedRack ? rackAreaCode(selectedRack, features) : null;
   const selectedAreaFeature = selectedFeature || features.find(
+    (item) => item.feature_kind === "zone" && item.id === selectedRack?.area_feature_id
+  ) || features.find(
     (item) => item.feature_kind === "zone" && (
       item.id === selectedRack?.area_feature_id
       || featureAreaCode(item) === (selectedLocationAreaCode || selectedRackAreaCode)
@@ -2941,6 +2948,11 @@ export function WarehouseTwinApp() {
   const selectedFeatureIsMeasuredDispatch = floorCode === "1F" && isMeasuredDispatchFeature(selectedFeature);
   const dispatchStagingItems = dispatchStagingLocation?.loose_items || [];
   const selectedAreaCode = featureAreaCode(selectedAreaFeature) || selectedLocationAreaCode || selectedRackAreaCode;
+  useEffect(() => {
+    setAreaNameEditorOpen(false);
+    setAreaRenameDraft("");
+    areaRenameRequestRef.current = null;
+  }, [floorCode, selectedAreaFeature?.id]);
   const selectedAreaIsMold = Boolean(
     selectedRack?.mold_rack_code
     || selectedAreaFeature?.subtype.toLowerCase().includes("mold")
@@ -5671,8 +5683,65 @@ export function WarehouseTwinApp() {
     setSimpleAreaRotation(draft.rotation);
   };
 
+  const saveSelectedAreaName = async (requestedName?: string) => {
+    if (!layout || !selectedAreaFeature || spatialEditBusy || !canEditLocations) return;
+    const name = (requestedName ?? areaRenameDraft).trim();
+    const settingsKey = `${floorCode}/${selectedAreaFeature.id}`;
+    const report = (text: string) => {
+      setAreaSettingsMessage({ key: settingsKey, text });
+      setLocationEditMessage(text);
+    };
+    if (!name || name.length > 100) { report("请输入 1 至 100 个字符的区域名称。"); return; }
+    const signature = JSON.stringify([floorCode, selectedAreaFeature.id, name]);
+    if (areaRenameRequestRef.current?.signature !== signature) {
+      areaRenameRequestRef.current = { signature, body: {
+        expected_revision: layout.source_sha256,
+        expected_published_revision: planningPublishedRevision || layoutDraftControl?.published_revision || layout.source_sha256,
+        expected_version: selectedAreaFeature.version,
+        operation_key: operationKey("zone-name"), area_name: name,
+      } };
+    }
+    setSpatialEditBusy(true);
+    let acknowledged = false;
+    try {
+      const result = await mutateJson<{ area: { id: number; area_name: string }; published_revision: string }>(
+        `/api/warehouse/twin-layout/floors/${floorCode}/zones/${selectedAreaFeature.id}/name`,
+        "PATCH", areaRenameRequestRef.current.body,
+      );
+      if (!result?.published_revision || result.area?.area_name !== name) throw new Error("未收到完整改名回执");
+      acknowledged = true;
+      areaRenameRequestRef.current = null;
+      if (activeFloorCodeRef.current !== floorCode) return;
+      if (areaSettingsDraftsRef.current[settingsKey]) areaSettingsDraftsRef.current[settingsKey].name = name;
+      setFormalAreaNameDraft(name);
+      setPlanningPublishedRevision(result.published_revision);
+      await Promise.all([refreshPlanningTwinFloor(), refreshDashboard()]);
+      setAreaNameEditorOpen(false);
+      report(`区域名称已保存并应用：${name}。`);
+    } catch (reason) {
+      const status = (reason as Error & { status?: number }).status;
+      const rejected = status != null && [400, 401, 403, 404, 409, 422].includes(status);
+      if (rejected) areaRenameRequestRef.current = null;
+      report(acknowledged ? `名称已保存，但地图刷新失败，请刷新核对：${(reason as Error).message}`
+        : rejected ? `区域名称未保存：${(reason as Error).message}`
+        : `保存结果尚未确认，输入已保留；请重试核对：${(reason as Error).message}`);
+    } finally { setSpatialEditBusy(false); }
+  };
+
   const confirmSelectedAreaOnce = async () => {
     if (!layout || !selectedAreaFeature || spatialEditBusy) return;
+    const originalCapacity = selectedAreaFeature.storage_layout === "rack"
+      ? (selectedAreaFeature.max_rack_count ?? selectedAreaFeature.confirmed_pallet_capacity ?? selectedAreaFeature.planned_pallet_capacity ?? 0)
+      : (selectedAreaFeature.confirmed_pallet_capacity ?? selectedAreaFeature.planned_pallet_capacity ?? 0);
+    if (selectedAreaFeature.formal_area_id
+      && formalAreaNameDraft.trim() !== employeeAreaName(selectedAreaFeature, { floorCode })
+      && simpleAreaUsage === ((selectedAreaFeature.allowed_inventory_types || [])[0] || "finished")
+      && simpleAreaLayout === (selectedAreaFeature.storage_layout === "rack" ? "rack" : "pallet_ground")
+      && Number(simpleAreaCapacity) === originalCapacity
+      && simpleAreaRotation === (selectedAreaFeature.pallet_rotation_deg === 90 ? 90 : 0)) {
+      await saveSelectedAreaName(formalAreaNameDraft);
+      return;
+    }
     const settingsKey = `${floorCode}/${selectedAreaFeature.id}`;
     const report = (text: string) => {
       setAreaSettingsMessage({ key: settingsKey, text });
@@ -7216,7 +7285,14 @@ export function WarehouseTwinApp() {
             {locationEditMode && canEditLocations && <div className="twin-region-planning-actions">
               <button type="button" disabled={spatialEditBusy || Boolean(locationPointEditAreaCode)} onClick={() => { setLayoutMapToolsOpen(true); setLayoutMapTool("adjust"); setLocationEditMessage("区域尺寸可输入；方向键短按10mm，按住连续移动，Shift精调1mm，松开保存草稿。区域外自动作为通道。"); }}>调整区域尺寸</button>
               <button type="button" disabled={spatialEditBusy || Boolean(locationPointEditAreaCode) || !selectedAreaCreatesInventoryLocations} onClick={() => { setAdvancedAreaMaintenanceOpen(true); setLayoutMapToolsOpen(false); requestAnimationFrame(() => document.getElementById("twin-target-location-count")?.focus()); }}>调整货位数量</button>
+              <button type="button" disabled={spatialEditBusy || Boolean(locationPointEditAreaCode)} onClick={() => { setAreaRenameDraft(employeeAreaName(selectedAreaFeature, { floorCode })); setAreaNameEditorOpen(true); requestAnimationFrame(() => document.getElementById("twin-area-rename")?.focus()); }}>调整区域名称</button>
             </div>}
+            {locationEditMode && canEditLocations && areaNameEditorOpen && <section className="twin-zone-simple-planner" aria-label="调整区域名称">
+              <label><span>区域名称</span><input id="twin-area-rename" disabled={spatialEditBusy} maxLength={100} value={areaRenameDraft} onChange={event => setAreaRenameDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); void saveSelectedAreaName(); } if (event.key === "Escape" && !spatialEditBusy) setAreaNameEditorOpen(false); }} /></label>
+              <div className="twin-layout-editor-actions"><button type="button" disabled={spatialEditBusy || !areaRenameDraft.trim()} onClick={() => void saveSelectedAreaName()}>{spatialEditBusy ? "保存中…" : "保存并应用名称"}</button><button type="button" disabled={spatialEditBusy} onClick={() => setAreaNameEditorOpen(false)}>取消</button></div>
+              <small>仅修改当前区域名称，地图和区域选择同步显示。</small>
+              {areaSettingsMessage?.key === `${floorCode}/${selectedAreaFeature.id}` && <p role="status" aria-live="polite">{areaSettingsMessage.text}</p>}
+            </section>}
             <div className="twin-selection-summary area"><span><small>区域状态</small><b>{selectedAreaActivationLabel}</b></span><span><small>最大容量</small><b>{selectedAreaCapacitySummary}</b></span><span><small>{selectedAreaIsMold ? "当前模具" : "当前库存"}</small><b>{selectedAreaIsMold ? `${moldAreaResponse?.total || 0} 件` : selectedAreaQuantitySummary === "0" ? "0 · 当前无货" : selectedAreaQuantitySummary}</b></span></div>
             {selectedFeature && canStocktake && mapMode === "move" && moveAction === "stocktake" && viewMode === "2d" && !locationEditMode && <div className="twin-stocktake-area-target">
               <div className="twin-formal-operation-title"><b>选择本区域盘点货位</b><span>{stocktakeAreaTargetLocations.length} 个当前可用</span></div>

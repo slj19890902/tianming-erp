@@ -156,6 +156,92 @@ function componentValue(name, context, optional = false) {
   return sandbox.value;
 }
 
+test("area rename sends only the name and keeps the same request on an uncertain response", async () => {
+  const calls = [], messages = [], noop = () => {};
+  const retained = { current: null };
+  let offline = true, refreshed = 0, closed = false;
+  const context = {
+    layout: { source_sha256: "draft-r" }, selectedAreaFeature: { id: "zone-second", version: 4 },
+    spatialEditBusy: false, canEditLocations: true, areaRenameDraft: " 西侧货架区 ", floorCode: "3F",
+    planningPublishedRevision: "published-r", layoutDraftControl: null, areaRenameRequestRef: retained,
+    setAreaSettingsMessage: noop, setLocationEditMessage: m => messages.push(m), operationKey: () => "one-name-request",
+    setSpatialEditBusy: noop, activeFloorCodeRef: { current: "3F" }, areaSettingsDraftsRef: { current: {} },
+    setFormalAreaNameDraft: noop, setPlanningPublishedRevision: noop,
+    refreshPlanningTwinFloor: async () => { refreshed++; }, refreshDashboard: async () => { refreshed++; },
+    setAreaNameEditorOpen: value => { closed = !value; },
+    mutateJson: async (url, method, body) => {
+      calls.push({ url, method, body: { ...body } });
+      if (offline) throw new Error("connection lost");
+      return { area: { id: 12, area_name: "西侧货架区" }, published_revision: "new-r" };
+    }
+  };
+  await componentValue("saveSelectedAreaName", context)();
+  assert.equal(refreshed, 0); assert.equal(closed, false); assert.ok(retained.current);
+  offline = false;
+  await componentValue("saveSelectedAreaName", context)();
+  assert.equal(calls[0].url, "/api/warehouse/twin-layout/floors/3F/zones/zone-second/name");
+  assert.deepEqual(calls[0].body, calls[1].body);
+  assert.deepEqual(Object.keys(calls[0].body).sort(), ["area_name", "expected_published_revision", "expected_revision", "expected_version", "operation_key"]);
+  assert.equal(calls[1].body.area_name, "西侧货架区");
+  assert.equal(refreshed, 2); assert.equal(closed, true); assert.equal(retained.current, null);
+  assert.match(messages.at(-1), /已保存并应用/);
+});
+
+test("duplicate names cannot override a rack's explicit area identity", () => {
+  const features = [
+    { id: "first", feature_kind: "zone", name: "同名区域", erp_area_code: "F1" },
+    { id: "second", feature_kind: "zone", name: "同名区域", erp_area_code: "F2" },
+  ];
+  const selectedRack = { id: "rack-second", area_feature_id: "second", area_code: "F1" };
+  const chosen = componentValue("selectedAreaFeature", {
+    selectedFeature: null, features, selectedRack,
+    selectedLocationAreaCode: null, selectedRackAreaCode: "F1", featureAreaCode: f => f?.erp_area_code,
+  });
+  assert.equal(chosen.id, "second");
+  const declaration = syntax.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === "rackAreaCode");
+  const javascript = ts.transpileModule(`${declaration.getText(syntax)}; globalThis.resolve = rackAreaCode;`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
+  }).outputText;
+  const sandbox = { featureAreaCode: f => f?.erp_area_code };
+  vm.runInNewContext(javascript, sandbox);
+  assert.equal(sandbox.resolve(selectedRack, features), "F2");
+});
+
+test("area name action sits beside size/count and a rejected save keeps the editor open", async () => {
+  // Select the actual three-action block, independent of unrelated planners.
+  const start = source.indexOf('>调整区域尺寸</button>');
+  const end = source.indexOf('</div>}', start);
+  assert.match(source.slice(start, end), />调整货位数量<\/button>/);
+  assert.match(source.slice(start, end), />调整区域名称<\/button>/);
+  assert.match(source, /aria-label="调整区域名称"/);
+  const noop = () => {}, messages = [], ref = { current: null };
+  let closed = false, refreshed = false;
+  await componentValue("saveSelectedAreaName", {
+    layout: { source_sha256: "r" }, selectedAreaFeature: { id: "area", version: 1 },
+    canEditLocations: true, spatialEditBusy: false, areaRenameDraft: "新名称", floorCode: "3F",
+    planningPublishedRevision: "r", layoutDraftControl: null, areaRenameRequestRef: ref,
+    setAreaSettingsMessage: noop, setLocationEditMessage: t => messages.push(t),
+    operationKey: () => "rename-rejected", setSpatialEditBusy: noop,
+    setAreaNameEditorOpen: () => { closed = true; }, refreshPlanningTwinFloor: () => { refreshed = true; },
+    mutateJson: async () => { throw Object.assign(new Error("版本变化，请刷新"), {status:409}); },
+  })();
+  assert.equal(closed, false); assert.equal(refreshed, false); assert.equal(ref.current, null);
+  assert.match(messages.at(-1), /未保存.*版本变化/);
+});
+
+test("editing only a bound mixed area's name in the existing form uses the name-only action", async () => {
+  const renamed = [];
+  await componentValue("confirmSelectedAreaOnce", {
+    layout: { source_sha256: "r" }, spatialEditBusy: false, floorCode: "3F",
+    selectedAreaFeature: { id: "mixed", formal_area_id: 8, storage_layout: "mixed",
+      allowed_inventory_types: ["finished"], planned_pallet_capacity: 20 },
+    formalAreaNameDraft: "西侧货架区", employeeAreaName: () => "旧名称",
+    simpleAreaUsage: "finished", simpleAreaLayout: "pallet_ground", simpleAreaCapacity: "20", simpleAreaRotation: 0,
+    saveSelectedAreaName: async name => renamed.push(name),
+  })();
+  assert.deepEqual(renamed, ["西侧货架区"]);
+});
+
 test("adding a rack cannot use the previous purpose after selecting mold", async () => {
   for (const [simpleAreaUsage, selectedAreaIsMold] of [["mold", false], ["finished", true]]) {
     let message = "", mutations = 0;

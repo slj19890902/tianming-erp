@@ -3143,6 +3143,7 @@ def _stock_completion_lot(
     movement_reason: str = "生产完工入库",
     semi_cost_detail: dict | None = None,
     ground_capacity_quantity: int | None = None,
+    actual_receipt_id: int | None = None,
 ) -> InventoryLot:
     snapshot = (
         db.get(SalesOrderItemBomComponent, task.sales_order_item_bom_component_id)
@@ -3279,8 +3280,22 @@ def _stock_completion_lot(
                         else command.expected_layout_version))
             except SubkitError as error:
                 raise ProductionWorkflowError(str(error), error.status_code) from error
+    actual_basis=None
+    if actual_receipt_id:
+        from app.models.incoming_receipt import IncomingReceiptItem
+        from app.services.incoming_actual_specs import stored
+        from app.services.finished_stock_identity import order_product_basis,product_basis
+        receipt=db.get(IncomingReceiptItem,actual_receipt_id)
+        if not receipt or receipt.order_item_id!=item.id or receipt.status!='posted':
+            raise ProductionWorkflowError('实际材料不属于本次完工订单',409)
+        actual=stored(db,actual_receipt_id)
+        if actual:
+            frozen=order_product_basis(db,item.id,product_id) or product_basis(db.get(Product,product_id))
+            basis=json.loads(frozen);basis.update(material=actual['material_code'],flute=actual['flute_type'],layer_count=str(actual['layer_count']))
+            actual_basis=json.dumps(basis,ensure_ascii=False,sort_keys=True,separators=(',',':'))
     lot = manual_finished_in(
         db,
+        physical_basis_json=actual_basis,
         customer_id=order.customer_id,
         product_id=product_id,
         location_id=location.id,
@@ -5288,6 +5303,7 @@ def post_automatic_receipt_completion(
         source_type="production_completion",
         movement_reason="半成品预占加工完成入库" if (semi_only or processing_confirmation) else "订单用途来料自动形成成品并进入当前真实成品位置",
         semi_cost_detail=cost_detail if semi_only else None,
+        actual_receipt_id=cost_detail.get("incoming_receipt_item_id"),
         # The first partial receipt must not freeze a ground slot's quantity
         # ceiling at that first delta.  Keep the same formal product position
         # while recording at least the frozen requirement and every later

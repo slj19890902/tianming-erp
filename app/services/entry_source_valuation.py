@@ -2,7 +2,7 @@
 from decimal import Decimal
 
 
-SOURCES = {'direct_external_receipt', 'external_bom_receipt', 'raw_purchase_receipt',
+SOURCES = {'receipt_sheet_actual', 'direct_external_receipt', 'external_bom_receipt', 'raw_purchase_receipt',
            'component_processing_actual', 'component_processing_estimate', 'semi_finished_estimate',
            'physical_kit_correction_20261014'}
 
@@ -21,7 +21,23 @@ def source_entry_cost(db, lot, detail, visited):
         if unit is None or lot.id in visited or len(visited) > 30:
             raise ValueError('成本来源循环或单价无效')
         visited = set(visited) | {lot.id}
-        if source in {'direct_external_receipt', 'external_bom_receipt'}:
+        if source == 'receipt_sheet_actual':
+            from app.models.supplier_settlement import SupplierReceiptSettlementPriceFact
+            from app.models.incoming_receipt import IncomingReceiptItem
+            from app.services.purchase_receipt_facts import calculate_purchase_sheet_cost_breakdown
+            fact=db.get(SupplierReceiptSettlementPriceFact,detail['supplier_receipt_price_fact_id'])
+            receipt=db.get(IncomingReceiptItem,fact.incoming_receipt_item_id) if fact else None
+            physical=lot.semi_finished_detail
+            if (not receipt or receipt.received_inventory_lot_id!=lot.id or not physical
+                    or fact.source_hash!=detail['source_hash'] or fact.material_id!=physical.material_id
+                    or fact.report_length_mm!=physical.board_length_mm or fact.report_width_mm!=physical.board_width_mm):
+                raise ValueError('实际纸板成本与原收料价或实物不一致')
+            expected=calculate_purchase_sheet_cost_breakdown(unit_price=fact.unit_price,price_unit=fact.price_unit,
+                tax_included=fact.tax_included,tax_rate=fact.tax_rate,
+                report_length_mm=fact.report_length_mm,report_width_mm=fact.report_width_mm).gross_per_sheet
+            if abs(expected-unit)>Decimal('.0001'):raise ValueError('实际纸板成本与冻结报价不一致')
+            result.update(currency=fact.currency,cost_label='实际来料冻结采购成本',temporary=False)
+        elif source in {'direct_external_receipt', 'external_bom_receipt'}:
             quantity = (Decimal(detail['capitalized_material_cost']) / unit if source == 'direct_external_receipt'
                         else Decimal(detail['quantity']))
             if not detail.get('actual') or not detail.get('external_receipt_item_id') or not detail.get('external_purchase_item_id') or not detail.get('stock_unit'):

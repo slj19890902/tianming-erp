@@ -84,6 +84,7 @@ class Manager:
         database = self.root / 'shared/data/carton_erp.sqlite3'
         if database.is_file():
             with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+                actual_receipt_facts = bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='incoming_receipt_actual_specs'").fetchone() and db.execute("SELECT 1 FROM incoming_receipt_actual_specs LIMIT 1").fetchone())
                 quotation_contract = db.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='quotation_mutations'"
                 ).fetchone()
@@ -116,6 +117,8 @@ class Manager:
                 mold_deletion_contract = any(row[1] == 'deleted_at' for row in
                     db.execute('PRAGMA table_info(mold_tools)'))
                 supplier_trim_contract = _has_supplier_trim_facts(db)
+            if actual_receipt_facts and not self._shared_finished_reader(release,"actual_receipt_specs_v1"):
+                return False
             if supplier_trim_contract and not self._shared_finished_reader(release, "supplier_sheet_trim_v1"):
                 return False
             if mold_deletion_contract and not self._shared_finished_reader(release, "unused_mold_deletion_v1"):
@@ -137,7 +140,9 @@ class Manager:
             if purchase_identity_contract and not self._shared_finished_reader(release, "stock_purchase_identity_v1"):
                 return False
             if attribution_facts and self.manifest(release)['revision'] != revision:
-                return False
+                from desktop_assistant.attribution_compatibility import unchanged_attribution_reader
+                if not unchanged_attribution_reader(self, release, revision, authority):
+                    return False
         from desktop_assistant.reader_contract import has_mold_label_text_facts, MOLD_LABEL_TEXT_READER
         if database.is_file():
             with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:

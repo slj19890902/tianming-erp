@@ -1,0 +1,13 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
+const root=path.resolve(__dirname,'..');
+function context(){
+ const ctx={axios:{get:async()=>({data:{material_id:10,length_mm:'764',width_mm:'240',materials:[{id:10,version:2,code:'VSNIV'}]}}),post:async(url,req)=>({data:{material_code:'VSNIV',flute_type:'B',fingerprint:'f'.repeat(64),yield:12,cutting:{cutting_factor:6,mold_count:2},trim_length_mm:'0',trim_width_mm:'30'}})},showToast(){},errorMessage:e=>e.message};
+ vm.runInNewContext(fs.readFileSync(path.join(root,'static/ui/incoming-actual.js'),'utf8'),ctx);
+ Object.assign(ctx,ctx.TianmingIncomingActual.methods);return ctx;
+}
+test('normal receipt adds no actual data or request',()=>{const c=context(),row={incoming_quantity:201};assert.equal(row._actualRequest,undefined);assert.equal(c.incomingActualSummary(row),'');});
+test('changed sheet uses server cutting and binds exact fingerprint',async()=>{const c=context(),row={item_id:'sr49',incoming_quantity:195};await c.toggleIncomingActual(row);row._actualDraft.width_mm=750;await c.prepareIncomingActual(row);assert.equal(row._actualRequest.width_mm,750);assert.equal(row._actualRequest.fingerprint,'f'.repeat(64));assert.match(c.incomingActualSummary(row),/一开6.*每张产12片.*2340片/);});
+test('reset discards only the unsubmitted actual edit',async()=>{const c=context(),row={item_id:'sr49',incoming_quantity:195};await c.toggleIncomingActual(row);await c.prepareIncomingActual(row);c.resetIncomingActual(row);assert.equal(row._actualRequest,null);assert.equal(row.incoming_quantity,195);});
+test('stale async preview cannot restore a reset edit',async()=>{const c=context(),row={item_id:'sr49'};await c.toggleIncomingActual(row);let done;c.axios.post=()=>new Promise(r=>done=r);const pending=c.previewIncomingActual(row);c.resetIncomingActual(row);done({data:{fingerprint:'old'}});await pending;assert.equal(row._actualRequest,null);});
+test('preview failure prevents submitting an old ratio',async()=>{const c=context(),row={item_id:'sr49'};await c.toggleIncomingActual(row);c.axios.post=async()=>{throw new Error('尺寸不足');};await assert.rejects(()=>c.prepareIncomingActual(row),/尺寸不足/);assert.equal(row._actualRequest,null);});
+test('desktop inline javascript compiles and actual editor is wired',()=>{const html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');let count=0;for(const hit of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)){if(/src=|type=["'](?:application\/json|module)/i.test(hit[1])||!hit[2].trim())continue;new vm.Script(hit[2]);count++;}assert.ok(count>0);assert.match(html,/TianmingIncomingActual.methods/);assert.match(html,/actual_spec:row\._actualRequest/);});

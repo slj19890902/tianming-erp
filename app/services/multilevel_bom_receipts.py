@@ -84,7 +84,7 @@ def node_completed_quantity(db, context):
 
 
 def node_receipt_plan(db, context, *, snapshots, allocations, current_snapshot,
-                      order_delta, order_cost, currency, quantity_limit=None):
+                      order_delta, order_cost, currency, quantity_limit=None, current_receipt_id=None):
     """Return cumulative logical output and cost of ONLY newly used pieces.
 
     Reserved semi pieces are used before new purchased material. One receipt
@@ -92,6 +92,7 @@ def node_receipt_plan(db, context, *, snapshots, allocations, current_snapshot,
     Extra cut pieces can complete a later increment without buying them again.
     """
     from app.services.raw_purchase_plans import reservation_cost
+    from app.services.incoming_actual_specs import receipt_yield
     by_id = {s.id: s for s in node_purpose_snapshots(db, context, snapshots)}
     sources = {r.key: [] for r in context.node.routes}
     # A graph reserve always has an unambiguous frozen physical route. Reject
@@ -131,12 +132,12 @@ def node_receipt_plan(db, context, *, snapshots, allocations, current_snapshot,
             raise SubkitError("组件收料缺少冻结采购价格事实")
         source = db.get(RequisitionItemBomSource, purpose.source_bom_requisition_source_id)
         sources[source.component_type].append({"kind": "allocation", "id": allocation.id,
-            "quantity": allocation.receipt_order_purpose_sheet_qty * int(purpose.yield_per_sheet_snapshot),
+            "quantity": allocation.receipt_order_purpose_sheet_qty * receipt_yield(db,allocation.incoming_receipt_item_id,purpose.yield_per_sheet_snapshot),
             "total_cost": allocation.order_purpose_cost, "currency": fact.currency, "actual": True})
     if current_snapshot is not None:
         current_source = db.get(RequisitionItemBomSource, current_snapshot.source_bom_requisition_source_id)
         sources[current_source.component_type].append({"kind": "current_receipt", "id": current_snapshot.id,
-            "quantity": order_delta * int(current_snapshot.yield_per_sheet_snapshot),
+            "quantity": order_delta * receipt_yield(db,current_receipt_id,current_snapshot.yield_per_sheet_snapshot),
             "total_cost": order_cost, "currency": currency, "actual": True})
     elif order_delta or order_cost or currency or allocations or snapshots:
         raise SubkitError("无来料生产不能夹带采购数量、价格或用途分配")

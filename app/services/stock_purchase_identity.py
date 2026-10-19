@@ -101,6 +101,9 @@ def validate_material(db, item, lot, product):
     """Compare physical receipt to its purchase, never to today's master size."""
     from app.services.warehouse_inventory import normalize_material_code
     from app.services.warehouse_goods import qualification_issues
+    from app.services.incoming_actual_specs import for_lot, effective_item
+    original_item = item
+    item = effective_item(item, for_lot(db, lot))
     detail = lot.semi_finished_detail
     if (not detail or detail.owner_customer_id != item.customer_id
             or detail.flute_type != item.flute_type or detail.layer_count != item.layer_count
@@ -112,7 +115,7 @@ def validate_material(db, item, lot, product):
     if detail.sheet_type != item.sheet_type or (detail.sheet_type == 'creased_sheet' and any(
             getattr(detail, k) != getattr(item, k) for k in ('crease_type', 'crease_left_mm', 'crease_middle_mm', 'crease_right_mm'))):
         raise WarehouseInventoryError('实收材料压线形态与原报料不一致，请核对', 409)
-    identity = resolve(db, item, product)
+    identity = resolve(db, original_item, product)
     issues = qualification_issues(db, lot, _view(identity, item), expected_material_code=item.material_code_snapshot)
     if issues:
         raise WarehouseInventoryError('材料不能用于该产品：' + '；'.join(issues), 409)

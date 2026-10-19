@@ -151,6 +151,7 @@ from app.services.warehouse_area_activation import (
     floor3_v11_map_binding_is_proven,
     formal_area,
     legacy_v11_name_only_change_is_safe,
+    legacy_v11_area_policy_projection,
     location_warehouse_type_for_inventory_types,
     policy_location_transition_blockers,
     policy_inventory_types,
@@ -11115,6 +11116,23 @@ class TwinZoneStoragePolicyPayload(BaseModel):
         return normalized or None
 
 
+class TwinZoneNamePayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: str = Field(min_length=1, max_length=64)
+    expected_published_revision: str = Field(min_length=1, max_length=64)
+    expected_version: int = Field(ge=1)
+    operation_key: str = Field(min_length=8, max_length=112)
+    area_name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("area_name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("区域名称不能为空")
+        return normalized
+
+
 class TwinZoneConfirmAreaPayload(BaseModel):
     expected_revision: str = Field(min_length=1, max_length=64)
     expected_published_revision: str = Field(min_length=1, max_length=64)
@@ -15591,6 +15609,159 @@ def _update_twin_zone_storage_policy_locked(
             _warehouse_area_dict(db, formal_area) if formal_area is not None else None
         ),
     }
+
+
+@router.patch('/twin-layout/floors/{floor_code}/zones/{feature_id}/name')
+def rename_twin_zone(
+    floor_code: str,
+    feature_id: str,
+    payload: TwinZoneNamePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """Apply only a published zone's name, without capacity/location changes."""
+    floor_code = floor_code.strip().upper()
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+        receipt_id = hashlib.sha256(
+            json.dumps([floor_code, feature_id, user.id, payload.operation_key]).encode()
+        ).hexdigest()
+        resource = f'warehouse/twin-layout/zone_name/{receipt_id}'
+        previous = db.scalar(select(OperationLog).where(
+            OperationLog.action == 'TWIN_ZONE_RENAME', OperationLog.resource == resource,
+        ))
+        request_data = payload.model_dump()
+        if previous is not None:
+            receipt = json.loads(previous.details)
+            if receipt['request'] != request_data:
+                raise HTTPException(status_code=409, detail='该操作键已用于不同的区域改名请求')
+            return {**receipt['response'], 'applied': False}
+        snapshot = snapshot_warehouse_twin_publish_state()
+        result = None
+        try:
+            effective = load_effective_warehouse_twin_floor_for_edit(floor_code)
+            feature = next((f for f in effective.get('features') or [] if f.get('id') == feature_id), None)
+            if feature is None or feature.get('feature_kind') != 'zone':
+                raise HTTPException(status_code=404, detail='区域不存在或已被删除')
+            if (str(effective.get('revision')) != payload.expected_revision
+                    or int(feature.get('version') or 1) != payload.expected_version):
+                raise HTTPException(status_code=409, detail='区域已被其他操作更新，请刷新后重新改名')
+            context = begin_warehouse_twin_one_step_publish(
+                floor_code, feature_id,
+                expected_effective_revision=payload.expected_revision,
+                expected_published_revision=payload.expected_published_revision,
+            )
+            published = load_published_warehouse_twin_floor_for_edit(floor_code)
+            original = next((f for f in published.get('features') or [] if f.get('id') == feature_id), None)
+            if original is None:
+                raise HTTPException(status_code=409, detail='新区域请先保存区域设置，再调整名称')
+            floor = warehouse_floor_for_code(db, floor_code)
+            area = db.scalar(select(WarehouseArea).where(
+                WarehouseArea.floor_id == floor.id,
+                WarehouseArea.area_code == str(original.get('erp_area_code') or '').upper(),
+            )) if floor is not None else None
+            if area is None:
+                raise HTTPException(status_code=409, detail='区域尚未绑定正式台账，请先保存区域设置')
+            if (original.get('formal_area_id') not in (None, area.id)
+                    or original.get('formal_floor_id') not in (None, floor.id)):
+                raise HTTPException(status_code=409, detail='地图与正式区域身份不一致，请先核对绑定')
+            policy = area.storage_policy
+            legacy_policy = (
+                legacy_v11_area_policy_projection(db, floor=floor, area=area)
+                if policy is None else None
+            )
+            if policy is None and legacy_policy is None:
+                raise HTTPException(status_code=409, detail='区域尚未完成正式绑定，请先保存区域设置')
+            inventory_types = original.get('allowed_inventory_types') or (
+                legacy_policy[0] if legacy_policy else policy_inventory_types(policy)
+            )
+            storage_layout = original.get('storage_layout') or (
+                legacy_policy[1] if legacy_policy else policy.storage_layout
+            )
+            if not inventory_types or not storage_layout:
+                raise HTTPException(status_code=409, detail='当前区域用途身份不完整，请先核对区域设置')
+            if policy is not None and (
+                policy.status != 'published' or policy.map_feature_id != feature_id
+                or policy.draft_map_revision is not None
+                or set(policy_inventory_types(policy)) != set(inventory_types)
+                or policy.storage_layout != storage_layout
+            ):
+                raise HTTPException(status_code=409, detail='正式区域绑定或用途已变化，请刷新并核对区域设置')
+            # Derive every policy field from the published map, never from the
+            # form or advanced draft. Only the requested name is editable here.
+            policy_result = _update_twin_zone_storage_policy_locked(
+                floor_code=floor_code, feature_id=feature_id,
+                payload=TwinZoneStoragePolicyPayload(
+                    expected_revision=context.published_floor_revision,
+                    expected_version=context.published_feature_version,
+                    operation_key=f'{payload.operation_key}-policy',
+                    allowed_inventory_types=inventory_types,
+                    storage_layout=storage_layout,
+                    erp_area_code=area.area_code, area_name=payload.area_name,
+                    existing_area_id=area.id if area.storage_policy is None else None,
+                    max_rack_count=original.get('max_rack_count'),
+                    pallet_rotation_deg=original.get('pallet_rotation_deg'),
+                ), request=request, db=db, user=user, commit=False,
+            )
+            validated = validate_warehouse_twin_layout_draft(floor_code, expected_revision=policy_result['revision'])
+            if validated.value.get('blockers'):
+                raise HTTPException(status_code=409, detail='名称未保存：' + '；'.join(validated.value['blockers'][:5]))
+            # Publish the verified name draft, then advance map receipts only.
+            # The general publisher also reconciles rack cells and location
+            # types; a rename must never invoke those structural mutations.
+            publication = publish_warehouse_twin_layout_draft(
+                floor_code,
+                expected_published_revision=payload.expected_published_revision,
+                expected_draft_revision=policy_result['revision'],
+                operation_key=f'{payload.operation_key}-publish',
+            )
+            result = publication.value
+            old_name = area.area_name
+            changed = db.execute(update(WarehouseArea).where(
+                WarehouseArea.id == area.id, WarehouseArea.area_name == old_name,
+            ).values(area_name=payload.area_name).execution_options(synchronize_session=False))
+            if changed.rowcount != 1:
+                raise HTTPException(status_code=409, detail='区域名称已被其他操作更新，请刷新后重试')
+            if policy is not None:
+                from app.services.warehouse_area_activation import _advance_policy_version
+                _advance_policy_version(db, policy=policy, operator_id=user.id,
+                    published_map_revision=result['published_revision'])
+            from app.services.warehouse_map_publication import complete_floor_publication
+            complete_floor_publication(
+                db, previous_floor_layout=published,
+                floor_layout=load_published_warehouse_twin_floor_for_edit(floor_code),
+                actor=user, operation_key=payload.operation_key, request=request,
+            )
+            preserved = rebase_warehouse_twin_advanced_draft_after_one_step(
+                context, floor_code, feature_id, name_only=True,
+                published_feature_snapshot=policy_result['item'],
+            )
+            db.refresh(area)
+            if area.area_name != payload.area_name:
+                raise HTTPException(status_code=409, detail='区域名称回读不一致，修改已撤销')
+            response = {
+                'applied': True, 'area': _warehouse_area_dict(db, area),
+                'published_revision': result['published_revision'],
+                'advanced_draft_preserved': preserved, 'inventory_changed': False,
+            }
+            _twin_layout_asset_log(
+                db, request=request, user=user, action='TWIN_ZONE_RENAME',
+                entity_type='zone_name', entity_id=receipt_id,
+                description='管理员保存并应用区域名称',
+                details={'floor_code': floor_code, 'feature_id': feature_id,
+                         'previous_name': old_name, 'request': request_data, 'response': response},
+            )
+            db.commit()
+            return response
+        except Exception as error:
+            try:
+                restore_warehouse_twin_publish_state(snapshot, backup_name=result.get('backup_name') if result else None)
+            finally:
+                db.rollback()
+            if isinstance(error, (WarehouseTwinLayoutEditError, WarehouseAreaActivationError)):
+                raise HTTPException(status_code=getattr(error, 'status_code', 409), detail=str(error)) from error
+            raise
 
 
 def _ensure_one_step_pallet_locations(

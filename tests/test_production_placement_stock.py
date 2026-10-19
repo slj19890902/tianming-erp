@@ -47,15 +47,15 @@ def seed(app):
         return ids,lot.version,target.id,target.floor3_layout.version
 
 
-def test_all_sources_paged_scoped_and_filters(routing_app):
+def test_purchase_and_stocktake_sources_are_excluded_from_production(routing_app):
     ids,_,_,_=seed(routing_app)
     with TestClient(routing_app) as c:
         assert c.get('/api/production/placement-stock').status_code==401
         _login(c,'p1-40a-admin')
         pages=[c.get('/api/production/placement-stock',params={'page':p,'page_size':6}).json() for p in (1,2)]
-        assert all(p['total']==9 for p in pages)
-        assert set(x['inventory_lot_id'] for p in pages for x in p['items'])==set(ids)
-        assert len(pages[0]['items'])==6 and len(pages[1]['items'])==3
+        # The seed contains an externally purchased finished lot and eight
+        # stocktake lots. None was produced by this production workflow.
+        assert all(p['total']==0 and p['items']==[] for p in pages)
         assert c.get('/api/production/placement-stock',params={'product_code':'DOES-NOT-EXIST'}).json()['total']==0
         _login(c,'p1-40b-scoped')
         scoped=c.get('/api/production/placement-stock')
@@ -65,8 +65,7 @@ def test_all_sources_paged_scoped_and_filters(routing_app):
             db.get(InventoryLot,ids[1]).status='frozen'
             db.commit()
         _login(c,'p1-40a-admin')
-        frozen=next(r for r in c.get('/api/production/placement-stock').json()['items'] if r['inventory_lot_id']==ids[1])
-        assert not frozen['can_place'] and frozen['placement_block']=='库存已冻结'
+        assert c.get('/api/production/placement-stock').json()['items']==[]
 
 
 def test_reserved_move_replay_stale_scope_and_audit_rollback(routing_app,monkeypatch):
@@ -96,13 +95,13 @@ def test_reserved_move_replay_stale_scope_and_audit_rollback(routing_app,monkeyp
         placed = c.get('/api/production/placement-stock', params={'placement_state':'placed'}).json()
         all_stock = c.get('/api/production/placement-stock', params={'placement_state':'all'}).json()
         assert all_stock['total'] == pending['total'] + placed['total']
-        # This fixture moves within one staging area, so it remains pending.
-        assert next(row for row in pending['items'] if row['inventory_lot_id'] == r.json()['target_lot_id'])['placement_pending']
+        # A location transfer does not turn purchased stock into production.
+        assert all_stock['total']==0
         with routing_app.state.factory() as db:
             for staging in db.scalars(select(ReceiptStagingArea)):
                 db.delete(staging)
             db.commit()
         placed = c.get('/api/production/placement-stock', params={'placement_state':'placed'}).json()
-        target_row = next(row for row in placed['items'] if row['inventory_lot_id'] == r.json()['target_lot_id'])
-        assert not target_row['placement_pending'] and not target_row['can_place']
-        assert target_row['reserved_quantity'] == 1000
+        assert placed['items']==[]
+        with routing_app.state.factory() as db:
+            assert db.get(InventoryLot,r.json()['target_lot_id']).quantity_reserved==1000

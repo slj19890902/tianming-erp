@@ -480,6 +480,16 @@ def production_card(db: Session, product: Product, scope: set[int] | None,
     molds = []
     if product.mold_tool:
         molds.append(mold_card(product.mold_tool))
+    from app.models.printing_plate import PrintingPlate
+    from app.services.printing_plate_location import describe_printing_plate_location
+    plate_ids = [identity for identity in (product.printing_plate_1_id, product.printing_plate_2_id,
+                                          product.printing_plate_3_id) if identity]
+    plates = [{"code": plate.plate_code, "name": plate.plate_name, "color": plate.color_name,
+               "status": plate.status, "version": plate.version,
+               "location": describe_printing_plate_location(plate.rack_location).get("prompt")
+                           if can_see_mold_location else "无位置查看权限"}
+              for plate in db.scalars(select(PrintingPlate).where(PrintingPlate.id.in_(plate_ids),
+                  PrintingPlate.customer_id == product.customer_id))] if printing else []
     return {
         "box_style": product.box_style,
         "net_specification": (f"{product.length_mm}×{product.width_mm}mm"
@@ -504,7 +514,7 @@ def production_card(db: Session, product: Product, scope: set[int] | None,
         "cutting": snapshot,
         "cutting_components": cutting_components,
         "mold_count": setting.mold_count if setting else theoretical_product_yield(product),
-        "process_steps": steps, "molds": molds, "bom": bom,
+        "process_steps": steps, "molds": molds, "bom": bom, "printing_plates": plates,
     }
 
 
@@ -513,8 +523,8 @@ def inventory_details(db: Session, product: Product):
     from app.services.location_candidates import load_warehouse_location_projection_contexts
     finished = list(db.scalars(select(InventoryLot).join(FinishedGoodsInventoryDetail,
         FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id).options(*_lot_load_options()).where(
-        InventoryLot.status == "active", InventoryLot.inventory_type == "finished",
-        or_(InventoryLot.quantity_available > 0, InventoryLot.quantity_reserved > 0),
+        InventoryLot.status.in_(("active", "frozen")), InventoryLot.inventory_type == "finished",
+        InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged > 0,
         FinishedGoodsInventoryDetail.product_id == product.id,
         FinishedGoodsInventoryDetail.owner_customer_id == product.customer_id,
         FinishedGoodsInventoryDetail.is_general.is_(False))))
@@ -547,6 +557,9 @@ def inventory_details(db: Session, product: Product):
         "processed_component": _inventory_group(processed, unit="片", projection_contexts=context),
     }
     items = []
+    from app.services.product_stock_origins import Origins, stock_row, LABELS
+    origins = Origins(db)
+    finished_facts = {lot.id: stock_row(lot, origins, {product.customer_id}) for lot in finished}
     shared_ids = {lot.id for lot in shared}
     cross_semi_ids = {lot.id for lot in cross_semi}
     semi_lots = {lot.id: lot for lot in [*semi, *processed]}
@@ -583,10 +596,18 @@ def inventory_details(db: Session, product: Product):
                           "lot_id": row["lot_id"], "floor": row.get("floor"),
                           "mapped": row.get("map_status") == "mapped", "url": row.get("map_url"),
                           "map_status": row.get("map_status"), "map_issue": row.get("map_issue"),
-                          "reverse_source": row.get("reverse_source")})
-    return {"summary": {k: {"actual": v["quantity_total"], "available": v["quantity_available"],
-                              "reserved": v["quantity_reserved"], "unit": v["unit"]} for k, v in groups.items()},
-            "groups": groups, "items": items}
+                          "reverse_source": row.get("reverse_source"),
+                          **(finished_facts.get(row["lot_id"], {}) if kind == "finished" else {})})
+    source_summary = {key: {"label": label, "actual": 0} for key, label in LABELS.items()}
+    own_facts = [fact for identity, fact in finished_facts.items() if identity not in shared_ids]
+    for fact in own_facts:
+        source_summary[fact["source_kind"]]["actual"] += fact["actual"]
+    summary = {k: {"actual": v["quantity_total"], "available": v["quantity_available"],
+                              "reserved": v["quantity_reserved"], "unit": v["unit"]} for k, v in groups.items()}
+    for key in ("actual", "available", "reserved", "restricted"):
+        summary["finished"][key] = sum(fact[key] for fact in own_facts)
+    summary["finished"]["shared_available"] = sum(finished_facts[i]["available"] for i in shared_ids)
+    return {"summary": summary, "groups": groups, "items": items, "source_summary": source_summary}
 
 
 def order_card(db: Session, product: Product, *, include_history: bool = False):

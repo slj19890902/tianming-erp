@@ -637,6 +637,7 @@ def get_temporary_locations(
 @router.get("/placement-stock")
 def get_placement_stock(
     placement_state: Literal['pending', 'placed', 'all'] = 'pending',
+    source_kind: Literal['', 'order', 'replenishment'] = '',
     page: int = Query(default=1, ge=1), page_size: int = Query(default=20, ge=1, le=200),
     customer_id: int | None = Query(default=None, gt=0),
     order_keyword: str | None = Query(default=None, max_length=150),
@@ -648,7 +649,8 @@ def get_placement_stock(
     from app.services.production_placement import page as placement_page
     items,total=placement_page(db,allowed_customer_ids=_allowed_customer_ids(user,db),page=page,page_size=page_size,
         customer_id=customer_id,order_keyword=order_keyword,product_code=product_code,product_name=product_name,
-        completed_date_from=completed_date_from,completed_date_to=completed_date_to,placement_state=placement_state)
+        completed_date_from=completed_date_from,completed_date_to=completed_date_to,placement_state=placement_state,
+        source_kind=source_kind or None)
     pending_total=placement_page(db,allowed_customer_ids=_allowed_customer_ids(user,db),placement_state='pending',count_only=True)
     return dict(items=items,total=total,pending_total=pending_total,page=page,page_size=page_size)
 

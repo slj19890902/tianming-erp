@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.676"
-APP_VERSION_NAME = "实际来料规格与超收自动加工"
+APP_VERSION = "v0.22.679"
+APP_VERSION_NAME = "区域名称独立保存与地图同步"
 APP_BUILD_DATE = "2026-10-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6651,3 +6651,16 @@ APP_VERIFICATION_STEPS = [
     "核对盘点、补库生产和订单生产来源及生产入库分流正常。",
 ]
 APP_CHANGELOG = [*(f"v0.22.674：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.679：区域改名独立保存与地图同步。
+APP_CHANGES = [
+    "区域规划在调整区域尺寸、调整货位数量旁增加调整区域名称，保存后立即应用于地图和区域选择。",
+    "只修改区域名称时沿用独立改名流程，不再因混合区域被回传为栈板区而无法保存。",
+    "货架选择优先使用明确的区域身份绑定，同名或相邻区域不会覆盖已有绑定。",
+    "无数据库结构迁移，不修改货位、库存数量、容量、用途及未发布的其他地图调整。",
+]
+APP_VERIFICATION_STEPS = [
+    "进入仓库区域规划，选择区域，点击调整区域名称，输入新名称并保存并应用名称。",
+    "刷新后核对地图和区域下拉保留新名称，分别选择原同名区域的货架核对归属。",
+]
+APP_CHANGELOG = [*(f"v0.22.679：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.684"
-APP_VERSION_NAME = "对账三位小数显示"
+APP_VERSION = "v0.22.685"
+APP_VERSION_NAME = "库存片料弹窗与定向匹配"
 APP_BUILD_DATE = "2026-10-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6685,3 +6685,18 @@ APP_VERIFICATION_STEPS = [
     "核对原账单确认、开票及收付款状态不变；以前下载的文件需要重新导出。",
 ]
 APP_CHANGELOG = [*(f"v0.22.684：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# v0.22.685：库存片料独立弹窗与严格定向匹配。
+APP_CHANGES = [
+    "待报料使用库存片料改为独立弹窗，突出尺寸、可用片数、真实位置、一开几和本次使用片数。",
+    "楞型必须一致，默认按原长宽精确匹配；无可用匹配时人工进一步查询长宽交换片料。",
+    "自动建议片数并实时计算剩余报料缺口，多批次一次确认，任一批次变化整次取消。",
+    "保留冻结开料、双拼及模数换算、原库存流水、权限、幂等、审计与生产耗用核验；无历史业务回填或结构升级。",
+]
+APP_VERIFICATION_STEPS = [
+    "待报料点击使用库存片料，核对独立弹窗中的尺寸、可用片数、位置和一开几，按实际需求确认使用片数。",
+    "核对默认原长宽且楞型一致，没有匹配时点击进一步匹配才查看交换长宽片料。",
+    "实际抵扣后核对全部覆盖免报料、部分覆盖仅保留缺口；取消或关闭不改变库存。",
+]
+APP_CHANGELOG = [*(f"v0.22.685：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

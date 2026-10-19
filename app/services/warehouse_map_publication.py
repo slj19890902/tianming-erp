@@ -61,14 +61,26 @@ def unchanged_area(area, source, target):
         selected.append(feature)
     if selected[0] != selected[1]:
         return False
+    canonical_floor = f"{area.floor.floor_number}F"
+    if source.get("floor_code") != canonical_floor:
+        return False
+    # Historical racks also store e.g. "3F-EDIT-059". This is the same
+    # explicit area identity only on its actual floor and with the exact
+    # feature binding. Do not normalize/write the stored representation.
     for collection in ("racks", "pallets"):
+        area_codes = ({area.area_code, f"{canonical_floor}-{area.area_code}"}
+                      if collection == "racks" else {area.area_code})
         objects = []
         for floor in (source, target):
+            if collection == "racks" and any(
+                    r.get("area_code") in area_codes and r.get("area_feature_id") != feature_id
+                    for r in floor.get(collection, [])):
+                return False
             members = [r for r in floor.get(collection, []) if r.get("area_feature_id") == feature_id]
             ids = [r.get("id") for r in members]
             if (not all(ids) or len(ids) != len(set(ids))
                     or any(sum(r.get("id") == key for r in floor.get(collection, [])) != 1 for key in ids)
-                    or any(r.get("area_code") not in (None, area.area_code) for r in members)):
+                    or any(r.get("area_code") is not None and r.get("area_code") not in area_codes for r in members)):
                 return False
             objects.append(sorted(members, key=lambda r: r["id"]))
         if objects[0] != objects[1]:

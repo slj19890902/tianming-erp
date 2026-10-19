@@ -1,6 +1,6 @@
 # 片料用途按开数匹配 · 2026-10-19
 
-状态：开发验证通过，待技术发布。
+状态：v0.22.688 技术发布完成，服务正常，备份恢复验证和原生收尾完成；正式页面人工验收待实际反馈。
 
 ## 结果
 
@@ -21,3 +21,11 @@ Chrome合成资料桌面与手机显示/筛选验证通过；无正式页面自�
 独立工作区 /Users/kimiyf/ERP-Migration/workbench-reverse-cut-20261019，分支codex/workbench-reverse-cut-20261019，从已发布v687回执e8b9d4f2建立；实际源c4541e18，包dd5146fabf6ec757574a18909d227e23420ab30c912da7dcf041393efa40dbce，正式PID84179。未以旧远端覆盖正式实现。开发仅合成pytest数据库，未改正式数据。NAS入口可读但写入不稳定，回执先本地。
 
 按已读取NAS普通代码发布长期授权完成本任务技术发布；Manager时点备份、独立恢复、隔离启动和正式只读检查实际结果另记录。现场最短核对：今日工作台→片料找用途→输入2000×200和楞型，确认报料1000×200产品显示一开二100%，选择100%后仍显示，再选实际库存查用途核对。实际token用量不可获取，不估算。
+
+## v0.22.688 正式发布回执
+
+- 正式源 `2c1d307975689d49592159ce04c2bff95968a82b`，签名包 `9a40fb75f33942a4a4ce66b2146bf8cb627cc3a174c9d1a4d68763c9ad49d2e1`，manifest SHA-256 `7f8ae1e03d8a9253cc8503721fb58556389be4ff0d1a9f50010cedb63429acff`，旧包 `dd5146fabf6ec757574a18909d227e23420ab30c912da7dcf041393efa40dbce`。revision `et1019fl` 保持，无DDL，原运行时和依赖保持；仅6个应用成员改变。
+- 完整时点备份 `/Library/TianmingERP/instance/backups/20261019-210504-53eefd79.tmbackup`，SHA-256 `8170162a8442ccdaafeecb83cbdeb167b66b7a0d6ae1496546877be53f497ac2`。Manager完整备份/独立恢复验证通过；原生收尾已回收恢复与演练工作副本并保留备份，backup_work_retained=false、manual_stop=false。
+- 在线签名包演练、隔离启动与正式只读查询通过，326张业务表/结构保持，完整性ok、外键错误0，无业务写入；正式PID 87430。健康、电脑/手机页面及JS/CSS均HTTP200，静态字节哈希与签名清单一致，匿名查询401。反向查询核对开数、利用率及100%筛选。
+- stop_requested `2026-10-19T13:04:44.014358+00:00`，process_ready `2026-10-19T13:10:45.652594+00:00`，停服约361.64秒。最终状态 `technical_release_and_native_closure_complete`，证据 `/Users/kimiyf/ERP-Migration/evidence/workbench-reverse-cut-20261019/release-v688`。
+- 未自动点击正式页面，现场人工验收按实际反馈记录。NAS同步状态见本任务证据RESULT.json，未确认上传不删除本地证据或备份。

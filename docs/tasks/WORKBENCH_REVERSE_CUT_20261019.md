@@ -7,3 +7,5 @@
 基线：从实际已发布v687回执e8b9d4f2建立独立分支codex/workbench-reverse-cut-20261019，正式源c4541e18，包dd5146fabf6ec757574a18909d227e23420ab30c912da7dcf041393efa40dbce，实时PID84179/UID499。正式数据库/Library/TianmingERP/instance/shared/data/carton_erp.sqlite3，开发只用合成pytest库。无DDL，单head et1019fl。上次GitHub查询HTTP2错误，不以旧远端覆盖正式实现；NAS入口可读但写入不稳定，回执先本地。
 
 验证：先复现50%错误，再覆盖长向/宽向一开二、一开四、余料、分页前100%筛选及排序、实际无加工资料库存、底料、已登记修边刀缝及模数区分、已加工片料原资格、不旋转/异楞排除及只读数量不变。前端验证开数与匹配度同列、原筛选/图纸/返回流程。按已读取NAS普通代码发布长期授权完成验证后发布，沿用Manager时点备份/独立恢复/隔离启动和正式只读核对，不自动点击正式页面。
+
+v0.22.688技术发布及原生收尾完成，source 2c1d307975689d49592159ce04c2bff95968a82b / package 9a40fb75f33942a4a4ce66b2146bf8cb627cc3a174c9d1a4d68763c9ad49d2e1，revision et1019fl保持。备份/恢复验证、隔离启动、正式只读检查通过；人工验收待反馈。

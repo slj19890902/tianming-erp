@@ -684,3 +684,47 @@ def test_database_ids_and_entire_pagination_offset_are_bounded(mobile_erp_app):
     with factory() as db:
         assert before == list(db.execute(select(InventoryLot.id, InventoryLot.quantity_available,
                                                InventoryLot.quantity_reserved, InventoryLot.version)))
+
+
+def test_detail_purchase_activity_uses_header_timestamp_and_preserves_source(mobile_erp_app):
+    """Purchase lines have no created_at; the owning document carries that fact."""
+    from sqlalchemy import null
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder, SupplierRequisitionOrderItem
+    from app.core.time_contract import utc_naive_to_api
+    app, ids, factory = _app(mobile_erp_app)
+    created = datetime(2026, 10, 18, 2, 30)
+    with factory() as db:
+        product = db.get(Product, ids['product'])
+        order = Order(order_number='SO-DETAIL-PURCHASE', customer_id=product.customer_id,
+                      order_date=date(2026, 10, 18), status='pending_production')
+        db.add(order); db.flush()
+        item = OrderItem(order_id=order.id, product_id=product.id, quantity=20,
+                         unit_price=Decimal('2.5'), subtotal=Decimal('50'),
+                         snapshot_product_name=product.product_name,
+                         snapshot_product_code=product.product_code, requisition_status='已报料')
+        db.add(item); db.flush()
+        for number, status, timestamp in [('PURCHASE-DATED','confirmed',created),
+                                           ('PURCHASE-UNDATED','voided',null())]:
+            purchase = SupplierRequisitionOrder(order_number=number, status=status,
+                                                created_at=timestamp, total_quantity=20)
+            db.add(purchase); db.flush()
+            db.add(SupplierRequisitionOrderItem(supplier_order_id=purchase.id,
+                order_item_id=item.id, product_id=product.id, quantity=20,
+                report_length_mm=120, report_width_mm=80))
+        db.commit()
+        before = [(lot.id, lot.quantity_available, lot.quantity_reserved) for lot in db.scalars(select(InventoryLot))]
+    with TestClient(app) as client:
+        _login(client, 'mobile-admin')
+        response = client.get(f"/api/product-workbench/products/{ids['product']}")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        purchases = {row['document']: row for row in body['activity']['items'] if row['source'] == '订单采购'}
+        assert purchases['PURCHASE-DATED']['at'] == utc_naive_to_api(created)
+        assert purchases['PURCHASE-DATED']['status'] == '已采购'
+        assert purchases['PURCHASE-UNDATED']['at'] is None
+        assert purchases['PURCHASE-UNDATED']['status'] == '已作废'
+        assert body['production'] and body['inventory'] and body['orders']['items']
+        assert 'unit_price' not in response.text
+    with factory() as db:
+        assert [(lot.id, lot.quantity_available, lot.quantity_reserved) for lot in db.scalars(select(InventoryLot))] == before
+        assert db.scalar(select(SupplierRequisitionOrder).where(SupplierRequisitionOrder.order_number == 'PURCHASE-UNDATED')).created_at is None

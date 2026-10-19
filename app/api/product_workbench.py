@@ -92,6 +92,7 @@ def search_products(response: Response,
                             drawings.get(product.id, {"status": "none", "items": []}))
         if details:
             card["inventory_positions"] = details["items"]
+            card["stock_sources"] = details.get("source_summary", {})
         match = dimension_match(product, basis=dimension_basis,
                                 length=length, width=width, height=height)
         if match is not None:
@@ -275,9 +276,11 @@ def product_details(product_id: int, response: Response,
         raise HTTPException(404, "产品不存在或当前账号无权查看")
     warehouse_allowed = has_permission(user, "warehouse.view")
     orders_allowed = has_permission(user, "orders.view")
-    summary = inventory_summary(db, [product])[product.id] if warehouse_allowed else {"visibility": "hidden_by_permission"}
+    summary = {"visibility": "hidden_by_permission"}
     drawing = product_drawing_metadata(db, [product.id], user=user, visible_customer_ids=scope)[product.id]
     inventory = inventory_details(db, product) if warehouse_allowed else {"visibility": "hidden_by_permission", "items": []}
+    if warehouse_allowed:
+        summary = inventory["summary"]
     orders = order_card(db, product, include_history=include_history) if orders_allowed else {"visibility": "hidden_by_permission", "items": []}
     from app.services.product_activity import activity
     lifecycle = activity(db, product, scope=scope, page=activity_page, permissions=dict(
@@ -292,3 +295,56 @@ def product_details(product_id: int, response: Response,
                                    can_edit_requisition=has_permission(user, "requisition.execute"),
                                    can_request=has_permission(user, "business_requests.submit")),
             "read_only": True}
+
+
+def _stock_product(db, user, product_id):
+    _require_view(user)
+    _database_id(product_id)
+    if not has_permission(user, "warehouse.view"):
+        raise HTTPException(403, "当前账号没有库存查看权限")
+    scope = _visible_customer_ids(user, db)
+    product = db.scalar(visible_products(db, scope).where(Product.id == product_id))
+    if product is None:
+        raise HTTPException(404, "产品不存在或当前账号无权查看")
+    return product, scope
+
+
+@router.get("/products/{product_id}/stock-sources")
+def product_stock_sources(product_id: int, response: Response,
+                          include_history: bool = False,
+                          source_kind: Literal["all", "stocktake", "replenishment", "order", "other"] = "all",
+                          page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+                          db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _headers(response)
+    _pagination_offset(page, page_size)
+    product, scope = _stock_product(db, user, product_id)
+    from app.services.product_stock_origins import sources
+    return sources(db, product, scope=scope, include_history=include_history,
+                   source_kind=source_kind, page=page, page_size=page_size)
+
+
+@router.get("/products/{product_id}/stock-sources/{lot_id}")
+def product_stock_batch(product_id: int, lot_id: int, response: Response,
+                        db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _headers(response)
+    _database_id(lot_id)
+    product, scope = _stock_product(db, user, product_id)
+    from app.models.warehouse_inventory import FinishedGoodsInventoryDetail
+    lot = db.scalar(select(InventoryLot).join(FinishedGoodsInventoryDetail).where(
+        InventoryLot.id == lot_id, InventoryLot.inventory_type == "finished",
+        FinishedGoodsInventoryDetail.product_id == product.id,
+        FinishedGoodsInventoryDetail.owner_customer_id == product.customer_id,
+        FinishedGoodsInventoryDetail.is_general.is_(False)))
+    if lot is None:
+        from app.services.product_workbench import _shared_finished_lots
+        lot = next((candidate for candidate in _shared_finished_lots(db, product) if candidate.id == lot_id), None)
+        if lot is None:
+            raise HTTPException(404, "批次不存在或不属于当前客户产品")
+        # Shared use never bypasses the original owner's history permission.
+    _require_lot_customer_access(db, lot.id, user)
+    from app.services.product_stock_origins import batch_details
+    return batch_details(db, product, lot, scope=scope, permissions=dict(
+        warehouse=True, orders=has_permission(user, "orders.view"),
+        requisition=has_permission(user, "requisition.view"), incoming=has_permission(user, "incoming.view"),
+        production=any(has_permission(user, p) for p in ("production.printing.view", "production.die_cut.view")),
+        deliveries=has_permission(user, "deliveries.view")))

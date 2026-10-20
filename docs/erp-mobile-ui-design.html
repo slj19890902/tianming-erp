@@ -1,0 +1,746 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="data:," />
+    <title>ERP手机版UI设计图</title>
+    <style>
+      :root{
+        --board-bg:#e9edeb;
+        --board-ink:#22302a;
+        --board-muted:#71807a;
+        --green:#2e7d4f;
+        --green-dark:#22653e;
+        --green-soft:#e7f2ea;
+        --blue:#1f6fb2;
+        --ink:#1d2622;
+        --muted:#68766f;
+        --line:#e2e8e4;
+        --bg:#f4f6f5;
+        --card:#ffffff;
+        --chip:#eef4f0;
+        --amber:#b97a1e;
+      }
+      @media (prefers-color-scheme: dark){
+        :root{ --board-bg:#14181a; --board-ink:#dfe7e2; --board-muted:#8b9992; }
+      }
+      *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+      html,body{ margin:0; padding:0; }
+      body{
+        background:var(--board-bg);
+        color:var(--board-ink);
+        font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+      }
+      .board{
+        max-width:1560px; margin:0 auto; padding:28px 20px 48px;
+        display:grid; grid-template-columns:repeat(auto-fit,minmax(min(375px,100%),1fr));
+        gap:38px 26px; justify-items:center; align-items:start;
+      }
+      .phone-wrap{ width:min(375px,100%); }
+      .phone-label{
+        display:flex; align-items:center; gap:9px; margin:0 2px 12px;
+        font-size:16px; font-weight:700; letter-spacing:.02em;
+      }
+      .phone-label .num{
+        width:25px; height:25px; border-radius:50%; background:var(--green); color:#fff;
+        display:inline-flex; align-items:center; justify-content:center; font-size:14px; font-weight:800;
+        flex:none;
+      }
+      .phone-label .sub{ font-size:13px; font-weight:500; color:var(--board-muted); }
+
+      /* ---------- phone frame ---------- */
+      .phone{
+        width:100%; border-radius:46px; background:#10151a; padding:11px;
+        box-shadow:0 18px 42px rgba(16,30,22,.28), 0 3px 10px rgba(16,30,22,.22);
+      }
+      .screen{
+        position:relative; height:782px; border-radius:36px; overflow:hidden;
+        background:var(--bg); color:var(--ink); display:flex; flex-direction:column;
+      }
+      .statusbar{
+        flex:none; height:34px; padding:6px 22px 0; display:flex; align-items:center; justify-content:space-between;
+        font-size:13.5px; font-weight:700; color:var(--ink);
+      }
+      .statusbar .sicons{ display:flex; align-items:center; gap:5px; }
+      .view{ flex:1; overflow-y:auto; scrollbar-width:none; position:relative; }
+      .view::-webkit-scrollbar{ display:none; }
+      .page{ padding:8px 16px 18px; }
+
+      /* ---------- app header ---------- */
+      .appbar{ display:flex; align-items:center; gap:10px; padding:8px 2px 12px; }
+      .appbar h1{ font-size:21px; margin:0; font-weight:800; letter-spacing:.01em; }
+      .appbar .back{
+        width:40px; height:40px; border:none; border-radius:12px; background:var(--card);
+        box-shadow:inset 0 0 0 1px var(--line); display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none;
+      }
+      .appbar .sp{ flex:1; }
+      .appbar .mini{ font-size:13px; color:var(--muted); font-weight:600; }
+
+      /* ---------- tab bar ---------- */
+      .tabbar{
+        flex:none; height:64px; background:var(--card); border-top:1px solid var(--line);
+        display:flex; padding-bottom:6px;
+      }
+      .tabbar button{
+        flex:1; border:none; background:none; cursor:pointer; color:#7a8781;
+        display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+        font-size:13px; font-weight:600; font-family:inherit;
+      }
+      .tabbar button.on{ color:var(--green); }
+      .tabbar button svg{ display:block; }
+
+      /* ---------- home ---------- */
+      .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+      .bigbtn{
+        position:relative; border:none; cursor:pointer; border-radius:18px; background:var(--card);
+        box-shadow:inset 0 0 0 1px var(--line); padding:18px 14px 15px; text-align:left; font-family:inherit;
+        display:flex; flex-direction:column; gap:9px; min-height:102px;
+      }
+      .bigbtn .ic{ width:42px; height:42px; border-radius:13px; background:var(--green-soft); color:var(--green); display:flex; align-items:center; justify-content:center; }
+      .bigbtn .t{ font-size:19px; font-weight:800; color:var(--ink); }
+      .bigbtn .badge{
+        position:absolute; top:12px; right:12px; min-width:24px; height:24px; padding:0 7px; border-radius:12px;
+        background:#d84a35; color:#fff; font-size:14px; font-weight:800; display:flex; align-items:center; justify-content:center;
+      }
+      .todo{
+        margin-top:12px; width:100%; border:none; cursor:pointer; font-family:inherit; text-align:left;
+        background:#fdf3e2; box-shadow:inset 0 0 0 1px #f0dcb6; border-radius:16px; padding:15px 16px;
+        display:flex; align-items:center; gap:10px; font-size:16.5px; font-weight:700; color:#7c5510;
+      }
+      .todo b{ color:#c22f1c; font-size:19px; }
+      .todo .sep{ color:#d8bd8a; font-weight:400; }
+      .todo svg{ margin-left:auto; flex:none; }
+      .card{ background:var(--card); border-radius:18px; box-shadow:inset 0 0 0 1px var(--line); }
+      .boss{ margin-top:12px; padding:16px 18px 18px; }
+      .boss .cap{ display:flex; justify-content:space-between; align-items:baseline; font-size:15px; font-weight:700; color:var(--ink); margin-bottom:12px; }
+      .boss .cap span{ font-size:13px; color:var(--muted); font-weight:600; }
+      .boss .nums{ display:flex; }
+      .boss .nums > div{ flex:1; }
+      .boss .nums > div + div{ border-left:1px solid var(--line); padding-left:16px; }
+      .boss .v{ font-size:25px; font-weight:800; color:var(--green); font-variant-numeric:tabular-nums; line-height:1.15; }
+      .boss .v.blue{ color:var(--blue); }
+      .boss .k{ font-size:13.5px; color:var(--muted); margin-top:3px; font-weight:600; }
+      .recent{ margin-top:12px; padding:14px 16px; }
+      .recent .cap{ font-size:15px; font-weight:700; margin-bottom:10px; }
+      .recent .row{ display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px solid var(--line); font-size:15.5px; }
+      .recent .row:first-of-type{ border-top:none; padding-top:0; }
+      .recent .code{ font-size:19px; font-weight:800; color:var(--blue); min-width:42px; }
+      .recent .loc{ margin-left:auto; color:var(--muted); font-size:14px; font-weight:600; }
+
+      /* ---------- query ---------- */
+      .seg{ display:flex; background:#e6ece8; border-radius:14px; padding:4px; gap:4px; }
+      .seg button{
+        flex:1; border:none; background:none; cursor:pointer; font-family:inherit; height:48px; border-radius:11px;
+        font-size:17px; font-weight:700; color:#5d6c65;
+      }
+      .seg button.on{ background:var(--green); color:#fff; box-shadow:0 2px 6px rgba(46,125,79,.35); }
+      .searchrow{ display:flex; gap:9px; margin-top:14px; }
+      .searchrow input{
+        flex:1; min-width:0; height:56px; border:1.5px solid #cfd8d2; border-radius:14px; background:var(--card);
+        padding:0 14px; font-size:17px; font-family:inherit; color:var(--ink); outline:none;
+      }
+      .searchrow input:focus{ border-color:var(--green); }
+      .searchrow input::placeholder{ color:#9aa7a0; }
+      .btn-go{
+        flex:none; width:76px; height:56px; border:none; border-radius:14px; background:var(--green); color:#fff;
+        font-size:18px; font-weight:800; cursor:pointer; font-family:inherit;
+      }
+      .btn-go:active{ background:var(--green-dark); }
+      .btn-scan{
+        flex:none; width:56px; height:56px; border-radius:14px; border:1.5px solid #cfd8d2; background:var(--card);
+        color:var(--green); cursor:pointer; display:flex; align-items:center; justify-content:center;
+      }
+      .chips{ display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+      .chips .lb{ font-size:14px; color:var(--muted); font-weight:600; align-self:center; }
+      .chip{
+        border:none; cursor:pointer; font-family:inherit; background:var(--chip); color:var(--green-dark);
+        border-radius:999px; padding:9px 14px; font-size:15px; font-weight:700;
+      }
+      .sizecard{ margin-top:16px; padding:16px; }
+      .sizecard .cap{ font-size:17px; font-weight:800; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+      .sizecard .cap svg{ color:var(--green); }
+      .sizeinputs{ display:flex; gap:10px; align-items:flex-end; }
+      .sizeinputs .f{ flex:1; }
+      .sizeinputs label{ display:block; font-size:13.5px; color:var(--muted); font-weight:700; margin-bottom:6px; }
+      .sizeinputs input{
+        width:100%; height:54px; border:1.5px solid #cfd8d2; border-radius:12px; padding:0 12px;
+        font-size:19px; font-weight:700; font-family:inherit; color:var(--ink); outline:none; font-variant-numeric:tabular-nums;
+      }
+      .sizeinputs input:focus{ border-color:var(--green); }
+      .sizeinputs .x{ font-size:18px; color:var(--muted); padding-bottom:14px; font-weight:700; }
+      .sizeinputs .unit{ font-size:13.5px; color:var(--muted); font-weight:600; padding-bottom:16px; }
+      .btn-wide{
+        margin-top:14px; width:100%; height:54px; border:none; border-radius:14px; background:var(--green); color:#fff;
+        font-size:18px; font-weight:800; cursor:pointer; font-family:inherit;
+      }
+      .btn-wide:active{ background:var(--green-dark); }
+
+      /* ---------- detail ---------- */
+      .codehead{ display:flex; align-items:flex-start; gap:12px; }
+      .codehead .code{ font-size:38px; font-weight:800; color:var(--blue); line-height:1; font-variant-numeric:tabular-nums; }
+      .tag-on{ background:var(--green-soft); color:var(--green-dark); font-size:13.5px; font-weight:800; border-radius:8px; padding:5px 9px; margin-top:5px; }
+      .pname{ font-size:20px; font-weight:800; margin-top:9px; line-height:1.3; }
+      .psub{ font-size:15.5px; color:var(--muted); margin-top:4px; font-weight:600; font-variant-numeric:tabular-nums; }
+      .psub b{ color:var(--ink); }
+      .stockcard{ margin-top:12px; padding:13px 16px 14px; }
+      .stockcard .k{ font-size:14px; color:var(--muted); font-weight:700; }
+      .stockcard .big{ font-size:34px; font-weight:800; color:var(--blue); line-height:1.1; font-variant-numeric:tabular-nums; }
+      .stockcard .big small{ font-size:18px; font-weight:700; }
+      .locrow{ display:flex; align-items:center; gap:8px; padding:8px 0 0; margin-top:8px; border-top:1px solid var(--line); font-size:15.5px; }
+      .locrow .pin{ color:var(--green); flex:none; display:flex; }
+      .locrow .where{ font-weight:800; }
+      .locrow .qty{ margin-left:auto; font-weight:800; font-variant-numeric:tabular-nums; }
+      .locrow .qty span{ color:var(--muted); font-weight:600; font-size:14px; }
+      .ministats{ display:flex; gap:9px; margin-top:10px; }
+      .ministats > div{ flex:1; border-radius:13px; padding:7px 6px; text-align:center; }
+      .ministats .n{ font-size:19px; font-weight:800; font-variant-numeric:tabular-nums; }
+      .ministats .k{ font-size:13px; font-weight:700; margin-top:1px; }
+      .ms-a{ background:#e9f1fb; color:#20557f; } .ms-b{ background:#f0ebfa; color:#55458a; } .ms-c{ background:#e9f5ec; color:#2c6b45; }
+      .craft{ margin-top:12px; padding:12px 16px 13px; }
+      .craft .cap{ font-size:16px; font-weight:800; margin-bottom:4px; }
+      .craftgrid{ display:grid; grid-template-columns:1fr 1fr; column-gap:16px; }
+      .craftgrid .cg{ display:flex; align-items:baseline; gap:7px; padding:7.5px 0; border-top:1px solid var(--line); min-width:0; }
+      .craftgrid .cg.full{ grid-column:1 / -1; }
+      .craftgrid .k{ font-size:13.5px; color:var(--muted); font-weight:700; white-space:nowrap; }
+      .craftgrid .v{ font-size:15.5px; font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
+      .craftgrid .v.flow{ color:var(--green-dark); }
+      .actions{ display:flex; gap:11px; margin-top:12px; }
+      .actions button{
+        flex:1; height:52px; border-radius:14px; font-size:18px; font-weight:800; cursor:pointer; font-family:inherit;
+        display:flex; align-items:center; justify-content:center; gap:8px;
+      }
+      .btn-line{ background:var(--card); border:1.5px solid var(--green); color:var(--green-dark); }
+      .btn-solid{ background:var(--green); border:1.5px solid var(--green); color:#fff; }
+
+      /* ---------- recognize results ---------- */
+      .measure{ padding:15px 18px; display:flex; align-items:center; gap:12px; }
+      .measure .sz{ font-size:24px; font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
+      .measure .sz small{ font-size:15px; color:var(--muted); font-weight:700; }
+      .measure .tol{ margin-left:auto; background:var(--chip); color:var(--green-dark); border-radius:9px; padding:6px 10px; font-size:14.5px; font-weight:800; }
+      .reslist{ margin-top:12px; display:flex; flex-direction:column; gap:11px; }
+      .res{
+        border:none; cursor:pointer; font-family:inherit; text-align:left; width:100%;
+        background:var(--card); border-radius:17px; box-shadow:inset 0 0 0 1px var(--line); padding:15px 16px;
+        display:flex; gap:13px; align-items:center;
+      }
+      .res .code{ font-size:27px; font-weight:800; color:var(--blue); min-width:50px; font-variant-numeric:tabular-nums; }
+      .res .mid{ flex:1; min-width:0; }
+      .res .mid > span{ display:block; }
+      .res .nm{ font-size:16.5px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .res .nm span{ color:var(--muted); font-weight:700; font-size:15px; margin-right:7px; }
+      .res .mt{ font-size:14.5px; color:var(--muted); margin-top:3px; font-weight:600; font-variant-numeric:tabular-nums; }
+      .res .rt{ text-align:right; flex:none; }
+      .res .stk{ font-size:21px; font-weight:800; font-variant-numeric:tabular-nums; }
+      .res .stk small{ font-size:13px; color:var(--muted); font-weight:700; }
+      .res .loc{ font-size:14px; color:var(--green-dark); font-weight:800; margin-top:2px; }
+      .res .best{ display:inline-block; background:#fdf3e2; color:#96690f; font-size:12.5px; font-weight:800; border-radius:7px; padding:3px 7px; margin-top:5px; }
+
+      /* ---------- map ---------- */
+      .maptools{ display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+      .fseg{ display:flex; background:#e6ece8; border-radius:11px; padding:3px; gap:3px; }
+      .fseg button{ border:none; background:none; cursor:pointer; font-family:inherit; height:38px; padding:0 16px; border-radius:9px; font-size:15.5px; font-weight:800; color:#5d6c65; }
+      .fseg button.on{ background:var(--green); color:#fff; }
+      .maptools .sp{ flex:1; }
+      .zbtn{
+        width:42px; height:42px; border-radius:12px; border:1.5px solid #cfd8d2; background:var(--card); cursor:pointer;
+        font-size:19px; font-weight:800; color:var(--ink); font-family:inherit; display:flex; align-items:center; justify-content:center;
+      }
+      .zbtn.wide{ width:auto; padding:0 13px; font-size:15px; }
+      .mapview{
+        border-radius:18px; background:#eef1ee; box-shadow:inset 0 0 0 1px var(--line);
+        overflow:hidden; aspect-ratio:360 / 436;
+      }
+      .mapview svg{ width:100%; height:100%; display:block; transition:transform .25s ease; }
+      .area{ cursor:pointer; }
+      .area rect{ fill:#d5e3f6; stroke:#7ea6dd; stroke-width:1.4; }
+      .area text{ fill:#33527c; font-weight:700; pointer-events:none; }
+      .area.sel rect{ fill:var(--green); stroke:var(--green-dark); stroke-width:2.4; }
+      .area.sel text{ fill:#fff; }
+      .infobar{ margin-top:11px; padding:11px 16px 12px; }
+      .infobar .ir{ padding:7px 0; }
+      .infobar .ir + .ir{ border-top:1px solid var(--line); }
+      .infobar .line1{ display:flex; align-items:center; gap:9px; font-size:16px; }
+      .infobar .pin{ color:var(--green); display:flex; flex:none; }
+      .infobar .t{ font-weight:800; white-space:nowrap; }
+      .infobar .n{ margin-left:auto; font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
+      .infobar .c{ background:var(--chip); color:var(--green-dark); border-radius:8px; padding:4px 8px; font-size:13.5px; font-weight:800; white-space:nowrap; }
+      .infobar .line2{ font-size:15px; color:var(--muted); font-weight:600; margin-top:3px; font-variant-numeric:tabular-nums; }
+
+      /* ---------- receive ---------- */
+      .rcard{ padding:16px; margin-bottom:12px; cursor:pointer; }
+      .rcard .spec{ font-size:19px; font-weight:800; font-variant-numeric:tabular-nums; }
+      .rcard .spec span{ color:var(--muted); font-weight:600; font-size:15.5px; margin-left:6px; }
+      .rcard .qtyrow{ display:flex; align-items:center; margin-top:7px; }
+      .rcard .qty{ font-size:15.5px; color:var(--muted); font-weight:700; font-variant-numeric:tabular-nums; }
+      .rcard .qty b{ color:var(--ink); font-size:19px; }
+      .rcard .exp{ margin-left:auto; display:flex; align-items:center; gap:2px; font-size:14px; font-weight:800; color:var(--green-dark); }
+      .rcard .exp svg{ transition:transform .2s ease; }
+      .rcard.open .exp svg{ transform:rotate(90deg); }
+      .btn-confirm{
+        margin-top:13px; width:100%; height:52px; border:none; border-radius:13px; background:var(--green); color:#fff;
+        font-size:17.5px; font-weight:800; cursor:pointer; font-family:inherit;
+      }
+      .btn-confirm.done{ background:var(--green-soft); color:var(--green-dark); cursor:default; }
+      .craftmini{ margin-top:13px; border-top:1px dashed #cfd8d2; padding-top:12px; display:none; }
+      .craftmini.open{ display:block; }
+      .craftmini .meta{ font-size:15px; color:var(--muted); font-weight:700; margin-bottom:11px; }
+      .craftmini .meta b{ color:var(--ink); font-size:16px; }
+      .craftmini .cap{ font-size:14px; color:var(--muted); font-weight:700; margin-bottom:9px; }
+      .craftmini .body{ display:flex; gap:13px; }
+      .craftmini .thumb{
+        flex:none; width:104px; height:82px; border-radius:11px; background:#fbfcfb;
+        box-shadow:inset 0 0 0 1.5px #c9d6cd; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+      }
+      .craftmini .thumb .tn{ font-size:13px; font-weight:800; color:var(--blue); }
+      .craftmini .info{ flex:1; font-size:15.5px; }
+      .craftmini .info .r{ display:flex; padding:4.5px 0; }
+      .craftmini .info .k{ color:var(--muted); font-weight:700; width:44px; flex:none; }
+      .craftmini .info .v{ font-weight:800; }
+      .craftmini .info .v .code2{ color:var(--blue); font-size:19px; }
+
+      /* ---------- more ---------- */
+      .mrow{
+        width:100%; border:none; cursor:pointer; font-family:inherit; text-align:left; background:var(--card);
+        border-radius:17px; box-shadow:inset 0 0 0 1px var(--line); padding:18px 16px; margin-bottom:11px;
+        display:flex; align-items:center; gap:13px;
+      }
+      .mrow .ic{ width:44px; height:44px; border-radius:13px; background:var(--green-soft); color:var(--green); display:flex; align-items:center; justify-content:center; flex:none; }
+      .mrow .t{ font-size:18px; font-weight:800; }
+      .mrow .d{ font-size:14px; color:var(--muted); font-weight:600; margin-top:2px; }
+      .mrow svg.chev{ margin-left:auto; flex:none; }
+      .mrow .bdg{ background:#d84a35; color:#fff; font-size:13px; font-weight:800; border-radius:10px; min-width:22px; height:22px; padding:0 6px; display:flex; align-items:center; justify-content:center; }
+
+      /* ---------- drawing sheet / toast ---------- */
+      .sheet{
+        position:absolute; inset:0; background:rgba(20,28,24,.45); display:none; z-index:30;
+        align-items:flex-end; justify-content:center;
+      }
+      .sheet.open{ display:flex; }
+      .sheet .panel{
+        background:var(--card); width:100%; border-radius:24px 24px 0 0; padding:18px 18px 26px;
+      }
+      .sheet .cap{ display:flex; align-items:center; margin-bottom:6px; }
+      .sheet .cap .t{ font-size:19px; font-weight:800; }
+      .sheet .cap .t span{ color:var(--blue); }
+      .sheet .cap button{ margin-left:auto; border:none; background:var(--chip); width:38px; height:38px; border-radius:50%; font-size:17px; cursor:pointer; color:var(--ink); }
+      .sheet .dims{ display:flex; gap:9px; margin-top:12px; }
+      .sheet .dims > div{ flex:1; background:var(--bg); border-radius:12px; padding:10px 12px; }
+      .sheet .dims .k{ font-size:13px; color:var(--muted); font-weight:700; }
+      .sheet .dims .v{ font-size:17.5px; font-weight:800; font-variant-numeric:tabular-nums; margin-top:2px; white-space:nowrap; }
+      .toast{
+        position:absolute; left:50%; bottom:80px; transform:translateX(-50%) translateY(8px); z-index:40;
+        background:rgba(24,34,29,.92); color:#fff; font-size:15px; font-weight:700; padding:11px 18px; border-radius:999px;
+        opacity:0; pointer-events:none; transition:opacity .2s ease, transform .2s ease; white-space:nowrap;
+      }
+      .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+      @media (prefers-reduced-motion: reduce){
+        .mapview svg, .toast, .rcard .exp svg{ transition:none; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="board" id="board"></main>
+
+    <script>
+      /* ================= icons ================= */
+      function ic(name, s){
+        s = s || 24;
+        var p = {
+          search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+          home:'<path d="M3 11.5L12 4l9 7.5"/><path d="M5.5 10v10h13V10"/>',
+          box:'<path d="M3 8l9-4.5L21 8v8l-9 4.5L3 16z"/><path d="M3 8l9 4.5L21 8"/><path d="M12 12.5V20"/>',
+          grid:'<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+          scan:'<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8"/><path d="M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8"/><path d="M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16"/><path d="M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M4 12h16"/>',
+          truck:'<path d="M2.5 6h12v11h-12z"/><path d="M14.5 10h4l3 3.5V17h-7"/><circle cx="6.5" cy="18.5" r="1.8"/><circle cx="17.5" cy="18.5" r="1.8"/>',
+          in:'<path d="M12 3v10"/><path d="M7.5 9.5L12 14l4.5-4.5"/><path d="M4 19h16"/>',
+          out:'<path d="M12 13V3"/><path d="M7.5 6.5L12 2l4.5 4.5" transform="translate(0 4)"/><path d="M4 19h16"/>',
+          pin:'<path d="M12 21s-6.5-5.4-6.5-10.2A6.5 6.5 0 0 1 12 4a6.5 6.5 0 0 1 6.5 6.8C18.5 15.6 12 21 12 21z"/><circle cx="12" cy="10.6" r="2.3"/>',
+          ruler:'<path d="M3 17L17 3l4 4L7 21z"/><path d="M8 16l1.8-1.8"/><path d="M11 13l1.8-1.8"/><path d="M14 10l1.8-1.8"/>',
+          chev:'<path d="M9 5l7 7-7 7"/>',
+          back:'<path d="M15 5l-7 7 7 7"/>',
+          gear:'<circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.5 5.5l2.1 2.1M16.4 16.4l2.1 2.1M18.5 5.5l-2.1 2.1M7.6 16.4l-2.1 2.1"/>',
+          doc:'<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/>'
+        }[name] || '';
+        return '<svg width="'+s+'" height="'+s+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>';
+      }
+      function statusbar(){
+        return '<div class="statusbar"><span>10:07</span><span class="sicons">'
+          + '<svg width="17" height="12" viewBox="0 0 17 12" fill="currentColor"><rect x="0" y="7" width="3" height="5" rx="1"/><rect x="4.5" y="5" width="3" height="7" rx="1"/><rect x="9" y="2.5" width="3" height="9.5" rx="1"/><rect x="13.5" y="0" width="3" height="12" rx="1"/></svg>'
+          + '<svg width="24" height="12" viewBox="0 0 26 13"><rect x="0.7" y="0.7" width="21" height="11.6" rx="3.2" fill="none" stroke="currentColor" opacity=".45"/><rect x="2.4" y="2.4" width="16" height="8.2" rx="1.8" fill="currentColor"/><path d="M24 4.5v4a2.2 2.2 0 0 0 0-4z" fill="currentColor" opacity=".45"/></svg>'
+          + '</span></div>';
+      }
+      function tabbar(active){
+        var items = [
+          ['home','home','首页'], ['query','search','查询'], ['map','box','仓库'], ['more','grid','更多']
+        ];
+        var s = '<nav class="tabbar">';
+        items.forEach(function(it){
+          s += '<button data-act="nav" data-nav="'+it[0]+'" class="'+(active===it[0]?'on':'')+'">'+ic(it[1],23)+'<span>'+it[2]+'</span></button>';
+        });
+        return s + '</nav>';
+      }
+      function appbar(title, back){
+        return '<div class="appbar">'
+          + (back ? '<button class="back" data-act="back" aria-label="返回">'+ic('back',20)+'</button>' : '')
+          + '<h1>'+title+'</h1></div>';
+      }
+
+      /* ================= state ================= */
+      function newState(view){
+        return { view:view, stack:[], qtab:'product', q:'', L:'', W:'',
+                 floor:'3', area:'E28', zoom:1, expanded:-1, received:{} };
+      }
+      var P = { 1:newState('home'), 2:newState('query'), 3:newState('detail'),
+                4:newState('recognize'), 5:newState('map'), 6:newState('receive') };
+      /* 收料屏默认全部收起，只显示尺寸/楞型/数量，点卡面展开 */
+      var LABELS = { 1:['首页',''], 2:['现场查询',''], 3:['产品详情','短码 227'],
+                     4:['认纸板','按尺寸查'], 5:['仓库地图','三楼平面图'], 6:['收料',''] };
+      var NAVMAP = { home:'home', query:'query', recognize:'query', detail:'query', map:'map', receive:'more', more:'more' };
+
+      /* ================= views ================= */
+      function vHome(){
+        return '<div class="page">'
+        + '<div class="appbar"><h1>天明ERP</h1><span class="sp"></span><span class="mini">老板端</span></div>'
+        + '<div class="grid2">'
+        +   '<button class="bigbtn" data-act="go" data-go="query"><span class="ic">'+ic('search',23)+'</span><span class="t">现场查询</span></button>'
+        +   '<button class="bigbtn" data-act="go" data-go="map"><span class="ic">'+ic('box',23)+'</span><span class="t">仓库</span></button>'
+        +   '<button class="bigbtn" data-act="go" data-go="receive"><span class="ic">'+ic('in',23)+'</span><span class="t">收料</span><span class="badge">2</span></button>'
+        +   '<button class="bigbtn" data-act="toast" data-msg="预送货 · 本稿未含此屏"><span class="ic">'+ic('truck',23)+'</span><span class="t">预送货</span></button>'
+        + '</div>'
+        + '<button class="todo" data-act="go" data-go="receive"><span>待收料 <b>2</b></span><span class="sep">·</span><span>未送齐订单 <b>5</b></span>'+ic('chev',19)+'</button>'
+        + '<div class="card boss"><div class="cap">老板摘要<span>10月</span></div>'
+        +   '<div class="nums"><div><div class="v">¥127,508</div><div class="k">销售额</div></div>'
+        +   '<div><div class="v blue">74.7%</div><div class="k">材料毛利率</div></div></div></div>'
+        + '<div class="card recent"><div class="cap">最近查过</div>'
+        +   '<div class="row"><span class="code">227</span><span>驿力 · 风机纸箱</span><span class="loc">三楼 E28</span></div>'
+        +   '<div class="row"><span class="code">318</span><span>明俊德 · 过滤器外箱</span><span class="loc">三楼 B2</span></div>'
+        +   '<div class="row"><span class="code">156</span><span>聚晟达 · 电子材料箱</span><span class="loc">三楼 A1</span></div>'
+        + '</div></div>';
+      }
+
+      var QTABS = { product:'短码、客户或品名', board:'纸板长×宽，如 1150×795', loc:'货位，如 E28 左1' };
+      function vQuery(st){
+        var s = '<div class="page">' + appbar('现场查询', true)
+        + '<div class="seg">'
+        +   '<button data-act="qtab" data-t="product" class="'+(st.qtab==='product'?'on':'')+'">找产品</button>'
+        +   '<button data-act="qtab" data-t="board" class="'+(st.qtab==='board'?'on':'')+'">认纸板</button>'
+        +   '<button data-act="qtab" data-t="loc" class="'+(st.qtab==='loc'?'on':'')+'">查货位</button>'
+        + '</div>'
+        + '<div class="searchrow"><input data-bind="q" type="text" value="'+st.q.replace(/"/g,'&quot;')+'" placeholder="'+QTABS[st.qtab]+'" />'
+        + '<button class="btn-go" data-act="qsearch">查询</button>'
+        + '<button class="btn-scan" data-act="toast" data-msg="扫码查货" aria-label="扫码">'+ic('scan',26)+'</button></div>'
+        + '<div class="chips"><span class="lb">常用</span>'
+        +   '<button class="chip" data-act="go" data-go="detail">227 驿力</button>'
+        +   '<button class="chip" data-act="go" data-go="map">E28</button>'
+        +   '<button class="chip" data-act="go" data-go="detail">318 明俊德</button></div>'
+        + '<div class="card sizecard"><div class="cap">'+ic('ruler',21)+'按尺寸找</div>'
+        +   '<div class="sizeinputs"><div class="f"><label>长（毫米）</label><input data-bind="L" type="number" inputmode="numeric" placeholder="1150" value="'+st.L+'" /></div>'
+        +   '<span class="x">×</span>'
+        +   '<div class="f"><label>宽（毫米）</label><input data-bind="W" type="number" inputmode="numeric" placeholder="795" value="'+st.W+'" /></div></div>'
+        +   '<button class="btn-wide" data-act="sizesearch">查库存</button></div>'
+        + '</div>';
+        return s;
+      }
+
+      function dieLineSVG(w, h, color){
+        return '<svg width="'+w+'" height="'+h+'" viewBox="0 0 260 190">'
+          + '<rect x="55" y="35" width="150" height="120" fill="none" stroke="'+color+'" stroke-width="2.5"/>'
+          + '<rect x="55" y="35" width="150" height="34" fill="none" stroke="'+color+'" stroke-width="1.4" stroke-dasharray="6 5"/>'
+          + '<rect x="55" y="121" width="150" height="34" fill="none" stroke="'+color+'" stroke-width="1.4" stroke-dasharray="6 5"/>'
+          + '<rect x="20" y="69" width="35" height="52" fill="none" stroke="'+color+'" stroke-width="1.4" stroke-dasharray="6 5"/>'
+          + '<rect x="205" y="69" width="35" height="52" fill="none" stroke="'+color+'" stroke-width="1.4" stroke-dasharray="6 5"/>'
+          + '<line x1="55" y1="69" x2="205" y2="69" stroke="'+color+'" stroke-width="1.2" stroke-dasharray="3 4"/>'
+          + '<line x1="55" y1="121" x2="205" y2="121" stroke="'+color+'" stroke-width="1.2" stroke-dasharray="3 4"/>'
+          + '</svg>';
+      }
+      function vDetail(pid){
+        return '<div class="page">' + appbar('产品详情', true)
+        + '<div class="codehead"><span class="code">227</span><span class="tag-on">在用</span></div>'
+        + '<div class="pname">加厚48入装风机纸箱</div>'
+        + '<div class="psub">客户 <b>驿力</b> · 1150×795×906mm</div>'
+        + '<div class="card stockcard"><div class="k">可用库存</div><div class="big">232 <small>只</small></div>'
+        +   '<div class="locrow"><span class="pin">'+ic('pin',19)+'</span><span class="where">三楼 E28 左1</span><span class="qty"><span>实存</span> 209</span></div>'
+        +   '<div class="locrow"><span class="pin">'+ic('pin',19)+'</span><span class="where">三楼 E28 左6</span><span class="qty"><span>实存</span> 23</span></div>'
+        +   '<div class="ministats"><div class="ms-a"><div class="n">23</div><div class="k">盘点</div></div>'
+        +   '<div class="ms-b"><div class="n">209</div><div class="k">补库生产</div></div>'
+        +   '<div class="ms-c"><div class="n">0</div><div class="k">订单生产</div></div></div></div>'
+        + '<div class="card craft"><div class="cap">工艺信息</div><div class="craftgrid">'
+        +   '<div class="cg full"><span class="k">工艺流程</span><span class="v flow">印刷 → 模切 → 粘箱</span></div>'
+        +   '<div class="cg"><span class="k">模具</span><span class="v">三楼 M架12</span></div>'
+        +   '<div class="cg"><span class="k">印刷图纸</span><span class="v">图-227</span></div>'
+        +   '<div class="cg"><span class="k">结合方式</span><span class="v">粘箱</span></div>'
+        +   '<div class="cg"><span class="k">成品位置</span><span class="v">三楼 E28</span></div>'
+        +   '<div class="cg"><span class="k">压线尺寸</span><span class="v">1150×795</span></div>'
+        +   '<div class="cg"><span class="k">片料尺寸</span><span class="v">1230×880</span></div>'
+        + '</div></div>'
+        + '<div class="actions"><button class="btn-line" data-act="draw">'+ic('doc',21)+'查看图纸</button>'
+        + '<button class="btn-solid" data-act="go" data-go="map">盘点</button></div>'
+        + '<div class="sheet"><div class="panel"><div class="cap"><span class="t">印刷图纸 <span>图-227</span></span>'
+        +   '<button data-act="undraw" aria-label="关闭">✕</button></div>'
+        +   dieLineSVG(300, 210, '#2e7d4f')
+        +   '<div class="dims"><div><div class="k">片料尺寸</div><div class="v">1230×880</div></div>'
+        +   '<div><div class="k">压线尺寸</div><div class="v">1150×795</div></div>'
+        +   '<div><div class="k">模具</div><div class="v">M架12</div></div></div>'
+        + '</div></div></div>';
+      }
+
+      var RES = [
+        { code:'227', cust:'驿力',   name:'加厚48入装风机纸箱', stock:232, loc:'三楼 E28', size:'1150×795', best:true },
+        { code:'318', cust:'明俊德', name:'过滤器外箱',         stock:86,  loc:'三楼 B2',  size:'1148×790', best:false },
+        { code:'156', cust:'聚晟达', name:'电子材料箱',         stock:45,  loc:'三楼 A1',  size:'1155×800', best:false }
+      ];
+      function vRecognize(){
+        var s = '<div class="page">' + appbar('认纸板', true)
+        + '<div class="card measure"><div class="sz">1150 × 795 <small>mm</small></div><span class="tol">容差 ±5mm</span></div>'
+        + '<div class="reslist">';
+        RES.forEach(function(r){
+          s += '<button class="res" data-act="go" data-go="detail"><span class="code">'+r.code+'</span>'
+            + '<span class="mid"><span class="nm">'+r.name+'</span>'
+            + '<span class="mt">'+r.cust+' · 箱 '+r.size+'</span>'
+            + (r.best ? '<span class="best">最接近</span>' : '')
+            + '</span><span class="rt"><span class="stk">'+r.stock+'<small> 只</small></span>'
+            + '<span class="loc" style="display:block">'+r.loc+'</span></span></button>';
+        });
+        return s + '</div></div>';
+      }
+
+      /* ================= warehouse map ================= */
+      /* ================= warehouse map (viewBox 360×436, phone proportion) ================= */
+      var AREAS3 = [
+        {id:'D11', x:168,y:4,  w:36,h:16, label:'D1-1',fs:9},
+        {id:'C1',  x:210,y:4,  w:44,h:150,label:'C1',fs:13},
+        {id:'B1',  x:262,y:10, w:42,h:104,label:'B1',fs:13},
+        {id:'A1',  x:312,y:44, w:42,h:76, label:'A1',fs:13},
+        {id:'E1',  x:102,y:26, w:56,h:14, label:'E1-1',fs:9},
+        {id:'E2',  x:102,y:44, w:56,h:110,label:'E2',fs:13},
+        {id:'D1',  x:168,y:24, w:36,h:130,label:'D1',fs:12},
+        {id:'TMP', x:66, y:166,w:52,h:24, label:'临时货架区',fs:9.5},
+        {id:'N',   x:123,y:172,w:40,h:12, label:'N货架',fs:9},
+        {id:'E31', x:168,y:162,w:64,h:20, label:'E3-1栈板',fs:9.5},
+        {id:'K',   x:4,  y:196,w:15,h:118,label:'K',fs:11,rot:1},
+        {id:'J1',  x:27, y:200,w:34,h:42, label:'J1',fs:12},
+        {id:'I1',  x:69, y:200,w:46,h:42, label:'I1',fs:12},
+        {id:'H2',  x:123,y:196,w:40,h:50, label:'H2',fs:12},
+        {id:'L1',  x:171,y:196,w:13,h:42, label:'L1货架',fs:9,rot:1},
+        {id:'K4',  x:187,y:196,w:13,h:42, label:'K4货架',fs:9,rot:1},
+        {id:'K3',  x:203,y:196,w:13,h:42, label:'K3货架',fs:9,rot:1},
+        {id:'K2',  x:219,y:196,w:13,h:42, label:'K2货架',fs:9,rot:1},
+        {id:'K1',  x:235,y:196,w:13,h:42, label:'K1货架',fs:9,rot:1},
+        {id:'E',   x:204,y:190,w:13,h:98, label:'E货架',fs:9,rot:1},
+        {id:'E28', x:192,y:208,w:27,h:54, label:'E28',fs:10.5,rot:1},
+        {id:'FG',  x:172,y:246,w:18,h:42, label:'FG货架',fs:9,rot:1},
+        {id:'AD',  x:222,y:190,w:44,h:98, label:'AD货架',fs:11,rot:1},
+        {id:'B2',  x:272,y:164,w:38,h:124,label:'B2',fs:13},
+        {id:'A2',  x:316,y:164,w:38,h:124,label:'A2',fs:13},
+        {id:'J2',  x:27, y:250,w:30,h:38, label:'J2',fs:12},
+        {id:'I2',  x:69, y:250,w:46,h:42, label:'I2',fs:12},
+        {id:'H3',  x:123,y:254,w:40,h:42, label:'H3',fs:12},
+        {id:'E32', x:164,y:284,w:46,h:20, label:'E3-2栈板',fs:9},
+        {id:'HG',  x:222,y:294,w:132,h:13,label:'H货架',fs:9},
+        {id:'H4',  x:123,y:304,w:40,h:48, label:'H4',fs:12},
+        {id:'E33', x:196,y:316,w:64,h:48, label:'E3-3栈板',fs:10.5},
+        {id:'L2',  x:171,y:306,w:15,h:34, label:'L2货架',fs:9,rot:1},
+        {id:'L3',  x:171,y:348,w:15,h:44, label:'L3货架',fs:9,rot:1},
+        {id:'A3',  x:324,y:316,w:30,h:18, label:'A3',fs:9.5},
+        {id:'B3',  x:278,y:316,w:38,h:58, label:'B3',fs:13},
+        {id:'JZ',  x:196,y:372,w:80,h:46, label:'J栈板',fs:11.5},
+        {id:'J3',  x:50, y:330,w:32,h:40, label:'J3',fs:11},
+        {id:'I3',  x:90, y:330,w:28,h:44, label:'I3',fs:11},
+        {id:'J4',  x:4,  y:392,w:74,h:36, label:'蜂窝J4',fs:11},
+        {id:'M',   x:84, y:404,w:100,h:16,label:'M货架',fs:10}
+      ];
+      var AREAS2 = [
+        {id:'F2A', x:16, y:20, w:152,h:180,label:'纸板区A',fs:14},
+        {id:'F2B', x:192,y:20, w:152,h:180,label:'纸板区B',fs:14},
+        {id:'F2C', x:16, y:224,w:100,h:180,label:'半成品区',fs:14},
+        {id:'F2D', x:132,y:224,w:96, h:180,label:'模具区',fs:14},
+        {id:'F2E', x:244,y:224,w:100,h:180,label:'成品区',fs:14}
+      ];
+      var INFO = {
+        '3': {
+          E28:[ {t:'E28 左1', d:'驿力 227 · 加厚48入装风机纸箱', n:'209只', c:'盘点 209'},
+                {t:'E28 左6', d:'驿力 227 · 加厚48入装风机纸箱', n:'23只',  c:'盘点 23'} ],
+          A1:[ {t:'A1', d:'聚晟达 156 · 电子材料箱', n:'45只', c:'盘点 45'} ],
+          B2:[ {t:'B2', d:'明俊德 318 · 过滤器外箱', n:'86只', c:'盘点 86'} ],
+          AD:[ {t:'AD货架', d:'聚晟达 156 · 电子材料箱', n:'12只', c:'盘点 12'} ],
+          JZ:[ {t:'J栈板', d:'驿力 227 · 加厚48入装风机纸箱', n:'60只', c:'盘点 60'} ],
+          I1:[ {t:'I1', d:'明俊德 318 · 过滤器外箱', n:'30只', c:'盘点 30'} ]
+        },
+        '2': {
+          F2A:[ {t:'纸板区A', d:'1250×900 · 三层B楞', n:'5000片', c:'待收 2批'} ],
+          F2B:[ {t:'纸板区B', d:'1100×850 · 五层AB楞', n:'3200片', c:'盘点 3200'} ],
+          F2D:[ {t:'模具区', d:'M架 · 刀模', n:'48套', c:''} ]
+        }
+      };
+      function areaLabel(floor, id){
+        var arr = floor==='3' ? AREAS3 : AREAS2;
+        for (var i=0;i<arr.length;i++) if (arr[i].id===id) return arr[i].label || id;
+        return id;
+      }
+      function mapSVG(st){
+        var areas = st.floor==='3' ? AREAS3 : AREAS2;
+        var s = '<svg viewBox="0 0 360 436" style="transform:scale('+st.zoom+')" role="img" aria-label="仓库平面图">';
+        areas.forEach(function(a){
+          var cx = a.x + a.w/2, cy = a.y + a.h/2;
+          var rot = a.rot ? ' transform="rotate(-90 '+cx+' '+cy+')"' : '';
+          s += '<g class="area'+(st.area===a.id?' sel':'')+'" data-act="area" data-area="'+a.id+'">'
+            + '<rect x="'+a.x+'" y="'+a.y+'" width="'+a.w+'" height="'+a.h+'" rx="3"></rect>'
+            + (a.label ? '<text x="'+cx+'" y="'+(cy + (a.fs||12)*0.36)+'" text-anchor="middle" font-size="'+(a.fs||12)+'"'+rot+'>'+a.label+'</text>' : '')
+            + '</g>';
+        });
+        return s + '</svg>';
+      }
+      function vMap(st){
+        var infos = (INFO[st.floor] && INFO[st.floor][st.area]) || [ {t:areaLabel(st.floor, st.area), d:'暂无库存记录', n:'', c:''} ];
+        var s = '<div class="page">' + appbar('仓库地图', true)
+        + '<div class="maptools"><div class="fseg">'
+        +   '<button data-act="floor" data-f="3" class="'+(st.floor==='3'?'on':'')+'">三楼</button>'
+        +   '<button data-act="floor" data-f="2" class="'+(st.floor==='2'?'on':'')+'">二楼</button></div>'
+        +   '<span class="sp"></span>'
+        +   '<button class="zbtn wide" data-act="zoom" data-z="reset">全图</button>'
+        +   '<button class="zbtn" data-act="zoom" data-z="out" aria-label="缩小">－</button>'
+        +   '<button class="zbtn" data-act="zoom" data-z="in" aria-label="放大">＋</button></div>'
+        + '<div class="mapview">' + mapSVG(st) + '</div>'
+        + '<div class="card infobar">';
+        infos.forEach(function(r){
+          s += '<div class="ir"><div class="line1"><span class="pin">'+ic('pin',18)+'</span><span class="t">'+r.t+'</span>'
+            + (r.n ? '<span class="n">'+r.n+'</span>' : '')
+            + (r.c ? '<span class="c">'+r.c+'</span>' : '')
+            + '</div><div class="line2">'+r.d+'</div></div>';
+        });
+        return s + '</div></div>';
+      }
+
+      /* ================= receive ================= */
+      var RCARDS = [
+        { sup:'联盛纸业', spec:'1250×900', flute:'三层B楞', qty:'5000', time:'今天 09:40',
+          code:'227', cust:'驿力', pname:'加厚48入装风机纸箱', flow:'印刷 → 模切 → 粘箱', draw:'图-227' },
+        { sup:'宏图纸板', spec:'1100×850', flute:'五层AB楞', qty:'3200', time:'今天 11:15',
+          code:'318', cust:'明俊德', pname:'过滤器外箱', flow:'印刷 → 模切 → 钉箱', draw:'图-318' }
+      ];
+      function vReceive(st){
+        var s = '<div class="page">' + appbar('收料', true);
+        RCARDS.forEach(function(r, i){
+          var done = !!st.received[i];
+          var open = st.expanded === i;
+          s += '<div class="card rcard'+(open?' open':'')+'" data-act="expand" data-i="'+i+'">'
+            + '<div class="spec">'+r.spec+'<span>'+r.flute+'</span></div>'
+            + '<div class="qtyrow"><span class="qty">数量 <b>'+r.qty+'</b> 片</span>'
+            + '<span class="exp">'+(open?'收起':'展开')+ic('chev',16)+'</span></div>'
+            + '<div class="craftmini'+(open?' open':'')+'">'
+            +   '<div class="meta">供应商 <b>'+r.sup+'</b> · '+r.time+' 到货</div>'
+            +   '<div class="cap">用此纸板的产品</div><div class="body">'
+            +   '<div class="thumb">'+dieLineSVG(84,58,'#7ea6dd')+'<span class="tn">'+r.draw+'</span></div>'
+            +   '<div class="info"><div class="r"><span class="k">短码</span><span class="v"><span class="code2">'+r.code+'</span> · '+r.cust+'</span></div>'
+            +   '<div class="r"><span class="k">品名</span><span class="v">'+r.pname+'</span></div>'
+            +   '<div class="r"><span class="k">工艺</span><span class="v">'+r.flow+'</span></div></div>'
+            +   '</div>'
+            +   '<button class="btn-confirm'+(done?' done':'')+'" data-act="confirm" data-i="'+i+'">'+(done?'✓ 已收料':'确认收料')+'</button>'
+            + '</div></div>';
+        });
+        return s + '</div>';
+      }
+
+      function vMore(){
+        return '<div class="page">' + appbar('更多', true)
+        + '<button class="mrow" data-act="go" data-go="receive"><span class="ic">'+ic('in',23)+'</span><span><span class="t">收料</span><span class="d" style="display:block">供应商来料确认</span></span><span class="bdg">2</span>'+ic('chev',19)+'</button>'
+        + '<button class="mrow" data-act="toast" data-msg="生产 · 本稿未含此屏"><span class="ic">'+ic('gear',23)+'</span><span><span class="t">生产</span><span class="d" style="display:block">印刷工位 · 模切工位</span></span>'+ic('chev',19)+'</button>'
+        + '<button class="mrow" data-act="toast" data-msg="预送货 · 本稿未含此屏"><span class="ic">'+ic('truck',23)+'</span><span><span class="t">预送货</span><span class="d" style="display:block">本人拿货任务</span></span>'+ic('chev',19)+'</button>'
+        + '<button class="mrow" data-act="go" data-go="map"><span class="ic">'+ic('pin',23)+'</span><span><span class="t">仓库地图</span><span class="d" style="display:block">三楼 · 二楼平面图</span></span>'+ic('chev',19)+'</button>'
+        + '</div>';
+      }
+
+      var VIEWS = { home:vHome, query:vQuery, detail:vDetail, recognize:vRecognize, map:vMap, receive:vReceive, more:vMore };
+
+      /* ================= render / nav ================= */
+      var board = document.getElementById('board');
+      Object.keys(P).forEach(function(pid){
+        var wrap = document.createElement('section');
+        wrap.className = 'phone-wrap';
+        wrap.innerHTML = '<div class="phone-label"><span class="num">'+pid+'</span>'+LABELS[pid][0]
+          + (LABELS[pid][1] ? '<span class="sub">'+LABELS[pid][1]+'</span>' : '')
+          + '</div><div class="phone" data-pid="'+pid+'"><div class="screen">'
+          + statusbar()
+          + '<div class="view"></div><div class="tabbar-slot"></div><div class="toast"></div>'
+          + '</div></div>';
+        board.appendChild(wrap);
+      });
+      function render(pid){
+        var st = P[pid];
+        var phone = board.querySelector('.phone[data-pid="'+pid+'"]');
+        phone.querySelector('.view').innerHTML = VIEWS[st.view](st, pid);
+        phone.querySelector('.tabbar-slot').innerHTML = tabbar(NAVMAP[st.view]);
+        phone.querySelector('.view').scrollTop = 0;
+      }
+      Object.keys(P).forEach(function(pid){ render(pid); });
+
+      function go(pid, view){
+        var st = P[pid];
+        if (st.view !== view){ st.stack.push(st.view); st.view = view; }
+        render(pid);
+      }
+      function toast(pid, msg){
+        var phone = board.querySelector('.phone[data-pid="'+pid+'"]');
+        var t = phone.querySelector('.toast');
+        t.textContent = msg; t.classList.add('show');
+        clearTimeout(t._tm);
+        t._tm = setTimeout(function(){ t.classList.remove('show'); }, 1700);
+      }
+
+      document.addEventListener('click', function(e){
+        var phoneEl = e.target.closest('.phone');
+        if (!phoneEl) return;
+        var pid = phoneEl.getAttribute('data-pid');
+        var st = P[pid];
+        var nav = e.target.closest('[data-nav]');
+        if (nav){
+          var target = { home:'home', query:'query', map:'map', more:'more' }[nav.getAttribute('data-nav')];
+          st.stack = []; st.view = target; render(pid); return;
+        }
+        var el = e.target.closest('[data-act]');
+        if (!el) return;
+        var act = el.getAttribute('data-act');
+        if (act === 'back'){ st.view = st.stack.pop() || 'home'; render(pid); }
+        else if (act === 'go'){ go(pid, el.getAttribute('data-go')); }
+        else if (act === 'toast'){ toast(pid, el.getAttribute('data-msg')); }
+        else if (act === 'qtab'){ st.qtab = el.getAttribute('data-t'); render(pid); }
+        else if (act === 'qsearch'){
+          if (st.qtab === 'board') go(pid, 'recognize');
+          else if (st.qtab === 'loc') go(pid, 'map');
+          else go(pid, 'detail');
+        }
+        else if (act === 'sizesearch'){ go(pid, 'recognize'); }
+        else if (act === 'area'){ st.area = el.getAttribute('data-area'); render(pid); }
+        else if (act === 'floor'){
+          st.floor = el.getAttribute('data-f');
+          st.area = st.floor === '3' ? 'E28' : 'F2A'; st.zoom = 1; render(pid);
+        }
+        else if (act === 'zoom'){
+          var z = el.getAttribute('data-z');
+          if (z === 'reset') st.zoom = 1;
+          else if (z === 'in') st.zoom = Math.min(2, Math.round((st.zoom + 0.25) * 100) / 100);
+          else st.zoom = Math.max(0.6, Math.round((st.zoom - 0.25) * 100) / 100);
+          render(pid);
+        }
+        else if (act === 'expand'){
+          var i = +el.getAttribute('data-i');
+          st.expanded = st.expanded === i ? -1 : i; render(pid);
+        }
+        else if (act === 'confirm'){
+          var ci = +el.getAttribute('data-i');
+          if (!st.received[ci]){ st.received[ci] = true; render(pid); toast(pid, '已确认收料'); }
+        }
+        else if (act === 'draw'){ phoneEl.querySelector('.sheet').classList.add('open'); }
+        else if (act === 'undraw'){ phoneEl.querySelector('.sheet').classList.remove('open'); }
+      });
+      document.addEventListener('input', function(e){
+        var phoneEl = e.target.closest('.phone');
+        if (!phoneEl || !e.target.hasAttribute('data-bind')) return;
+        var st = P[phoneEl.getAttribute('data-pid')];
+        st[e.target.getAttribute('data-bind')] = e.target.value;
+      });
+    </script>
+  </body>
+</html>

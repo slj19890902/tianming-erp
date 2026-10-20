@@ -7171,6 +7171,9 @@ def get_statement(
 
 
 def _recalculate_statement_totals(db: Session, statement: Statement) -> None:
+    # Production sessions disable autoflush; SUM must see pending line corrections.
+    # Flush remains inside the caller's transaction, so audit failures still roll back.
+    db.flush()
     totals = db.execute(
         select(
             func.coalesce(func.sum(StatementItem.receivable_amount), 0),

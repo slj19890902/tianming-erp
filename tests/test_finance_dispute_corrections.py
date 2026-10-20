@@ -34,11 +34,13 @@ def test_dispute_reason_validation_is_actionable_and_does_not_mutate(p1_130_app,
                 assert db.scalar(select(StatementAdjustment)) is None
 
 
-def test_same_month_price_correction_reopens_and_preserves_source(p1_130_app):
+@pytest.mark.parametrize("autoflush", [True, False])
+def test_same_month_price_correction_reopens_and_preserves_source(p1_130_app, autoflush):
     from app.models.finance import StatementItem, ReturnReceiptItem
     from app.models.order import OrderItem
 
     app, factory = p1_130_app
+    factory.configure(autoflush=autoflush)
     with TestClient(app) as client:
         _login(client)
         assert client.post('/api/finance/statements/1/confirm', json={'expected_version': 1}).status_code == 200
@@ -57,10 +59,12 @@ def test_same_month_price_correction_reopens_and_preserves_source(p1_130_app):
         assert client.post('/api/finance/statements/1/confirm', json={'expected_version': 3}).status_code == 200
 
 
-def test_corrected_quantity_and_price_are_used_in_same_month_invoice(fin001_app):
+@pytest.mark.parametrize("autoflush", [True, False])
+def test_corrected_quantity_and_price_are_used_in_same_month_invoice(fin001_app, autoflush):
     from app.models.finance import ReturnReceiptItem, StatementAdjustment
 
     app, factory = fin001_app
+    factory.configure(autoflush=autoflush)
     with TestClient(app) as client:
         invoice_login(client, 'fin001-admin')
         _complete_invoice_profile(client)
@@ -88,6 +92,18 @@ def test_corrected_quantity_and_price_are_used_in_same_month_invoice(fin001_app)
         task = client.post('/api/finance/statements/1/invoice-tasks', json={'expected_version': 5, 'idempotency_key': 'after-dispute'})
         assert task.status_code == 201, task.text
         assert Decimal(str(task.json()['total_amount'])) == Decimal('100.00')
+        statement = client.get('/api/finance/statements/1').json()
+        assert Decimal(str(statement['total_receivable'])) == Decimal('100.00')
+        task_id = task.json()['id']
+        ready = client.post(f'/api/finance/invoice-tasks/{task_id}/confirm', json={'expected_version': 1})
+        assert ready.status_code == 200, ready.text
+        exported = client.get(f'/api/finance/invoice-tasks/{task_id}/tax-template.xlsx')
+        assert exported.status_code == 200, exported.text
+        issued = client.post(f'/api/finance/invoice-tasks/{task_id}/result', json={
+            'status': 'issued', 'invoice_number': 'AFTER-CORRECTION',
+            'invoice_date': '2026-08-03', 'expected_version': 2,
+            'expected_ledger_version': statement['ledger_version']})
+        assert issued.status_code == 200, issued.text
         with factory() as db:
             assert db.get(ReturnReceiptItem, 1).actual_received_quantity == 8
             adjustment = db.scalar(select(StatementAdjustment).where(StatementAdjustment.action == 'correct_receipt_quantity'))
@@ -132,6 +148,7 @@ def test_receipt_correction_rejects_unsafe_changes_atomically(fin001_app, monkey
     from app.models.finance import ReturnReceiptItem, ReturnReceipt, Statement, StatementAdjustment
     from app.api import finance
     app, factory = fin001_app
+    factory.configure(autoflush=False)
     with factory() as db:
         if case == 'paid':
             db.get(Statement, 1).settled_amount = Decimal('1')

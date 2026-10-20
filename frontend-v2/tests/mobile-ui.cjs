@@ -2,6 +2,8 @@
 const { chromium } = require("playwright");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
+const repo = pathResolveRepo();
+function pathResolveRepo() { return require("node:path").resolve(__dirname, "../.."); }
 const path = require("node:path");
 const base = process.env.MOBILE_UI_URL || "http://127.0.0.1:18748";
 const siteOrigin = new URL(base).origin;
@@ -117,6 +119,7 @@ async function run() {
     deviceScaleFactor: 1,
     colorScheme: "light",
   });
+  let sevenDayPages = false;
   let role = "admin",
     received = false,
     delaySearch = false,
@@ -140,6 +143,7 @@ async function run() {
       });
       let data,
         status = 200;
+      if (pathname === "/api/mobile/erp/dimension-settings") return route.fulfill({json:{near_mm:5,expanded_mm:20,can_edit:false,version:1}});
       if (unauthorized) {
         data = { detail: "登录已失效" };
         status = 401;
@@ -218,6 +222,7 @@ async function run() {
           items: [
             {
               ...p,
+              ...(url.searchParams.get("sort_by") === "dimension_match" ? {dimension_match:{score_percent:99.7,total_delta_mm:3}} : {}),
               product_name:
                 url.searchParams.get("q") === "新"
                   ? "最新搜索结果"
@@ -279,7 +284,9 @@ async function run() {
         };
       else if (pathname.includes("/warehouse/map/floors/"))
         data = {
+          map_status: "ready", floor_name: "三楼", area_name: "E28", bounds_mm:{min_x:0,min_y:0,max_x:30000,max_y:40000}, features:[],
           locations: positions.map((position, i) => ({
+            storage_type: i ? "ground" : "rack", map_rack_id: i ? null : "rack-7", rack_display_name: "G1货架", level_no: 2, slot_no: 1, can_select_target: true,
             location_id: position.location_id,
             location_name: position.location_label,
             short_location_label: position.location_label,
@@ -307,7 +314,7 @@ async function run() {
       else if (pathname === "/api/incoming/pending")
         data = { items: received ? [] : [incoming] };
       else if (pathname === "/api/incoming/received")
-        data = { items: received ? [{ ...incoming, receipt_item_id: 501, history_key: "receipt-501", received_quantity_this_time: 300, remaining_quantity: 0 }] : [] };
+        data = { items: sevenDayPages ? [{...incoming, product_code: "000205", receipt_item_id: Number(url.searchParams.get("page")) === 2 ? 522 : 502, history_key: "history-"+url.searchParams.get("page"), received_quantity_this_time: 200, material_received_at: "2026-10-15T08:00:00+08:00"}] : received ? [{ ...incoming, receipt_item_id: 501, history_key: "receipt-501", received_quantity_this_time: 300, remaining_quantity: 0 }] : [], total: sevenDayPages ? 21 : received ? 1 : 0, page: Number(url.searchParams.get("page") || 1) };
       else if (pathname === "/api/mobile/erp/incoming/sr17/production-detail")
         data = {
           incoming_item: incoming,
@@ -352,6 +359,13 @@ async function run() {
           "access-control-allow-credentials": "true",
         },
       });
+    }
+    if (url.origin === siteOrigin && pathname === "/mobile/erp.html") return route.fulfill({contentType:"text/html",body:await fs.readFile(path.join(repo,"static/mobile_erp.html"),"utf8")});
+    if (url.origin === siteOrigin && pathname.startsWith("/static/")) {
+      const file = path.resolve(repo,"."+pathname);
+      if (file.startsWith(path.join(repo,"static")+path.sep)) {
+        try { return route.fulfill({path:file}); } catch (_) { return route.abort(); }
+      }
     }
     if (url.origin !== siteOrigin) {
       networkLeaks.push(route.request().url());
@@ -401,6 +415,14 @@ async function run() {
   await page.locator('.m-bigbtn').first().waitFor();
 
   await page.getByRole("link", { name: "现场查询", exact: true }).click();
+  await page.getByLabel("成品长").fill("420");
+  await page.getByLabel("成品宽").fill("310");
+  await page.getByLabel("成品高").fill("260");
+  await page.getByRole("button",{name:"找产品",exact:true}).click();
+  await page.getByText("99.7%",{exact:true}).waitFor();
+  assert.ok(requests.some(r=>r.query.dimension_basis==="finished"&&r.query.sort_by==="dimension_match"&&r.query.height==="260"&&r.query.tolerance_mm==="20"));
+  assert.match(await page.locator(".m-product-mid b").innerText(),/测试客户甲/);
+  await clean("02-finished-dimension-rank");
   await page.getByLabel("查询内容").fill("227");
   await page.getByRole("button", { name: "查询", exact: true }).click();
   await page.locator(".m-product-row").waitFor();
@@ -460,19 +482,29 @@ async function run() {
   await page.getByLabel("尺寸容差").blur();
   await page.waitForFunction(() => location.search.includes("tolerance=10"));
   await page.getByRole("link", { name: "仓库", exact: true }).click();
-  await page.getByRole("button", { name: "E28", exact: true }).click();
-  await page.locator(".m-location-strip button").first().click();
-  await page.locator(".m-info-good").waitFor();
-  await clean("05-warehouse");
-  assert.match(
-    await page.locator(".m-infobar a.m-outline").getAttribute("href"),
-    /location_id=101/,
-  );
+  await page.getByRole("link", { name: "E28", exact: true }).waitFor();
+  const mapBox = await page.locator(".m-mapview").boundingBox();
+  const mainBox = await page.locator(".m-main").boundingBox();
+  assert.ok(mapBox.height > mainBox.height * .75, "floor plan must use available screen height");
+  await clean("05-warehouse-fullscreen");
   await page.getByRole("button", { name: "放大地图" }).click();
-  await clean("05-warehouse-zoom", false);
+  await clean("05-warehouse-zoom",false);
+  await page.getByRole("button", { name: "全图",exact:true }).click();
+  await page.getByRole("link", { name: "E28", exact: true }).click();
+  await page.locator(".warehouse-rack-elevation").waitFor();
+  assert.match(page.url(),/mobile_page=warehouse.*return_mobile_map=1/);
+  assert.equal(await page.locator('iframe[src*="mobile/erp"]').count(),0);
+  await page.locator(".warehouse-rack-elevation summary").click();
+  await page.locator(".warehouse-rack-elevation [data-location-id='101']").waitFor({state:"visible"});
+  assert.equal(await page.locator("#warehouseMapStage [data-location-id='102']").count(),1);
+  assert.equal(await page.locator("#warehouseRackList [data-location-id='102']").count(),0);
+  await page.screenshot({path:path.join(out,"05-native-area-rack-and-pallet.png"),fullPage:true});
+  await page.getByRole("button",{name:"返回全图",exact:true}).click();
+  await page.locator(".m-map-area").waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("floor"),"3F");
+  results.push("native-rack-elevation-pallet-topdown-return");
   await page.getByRole("button", { name: "二楼", exact: true }).click();
-  await page.getByRole("button", { name: "纸板区", exact: true }).waitFor();
-  assert.equal(await page.locator(".m-infobar").count(), 0);
+  await page.getByRole("link", { name: "纸板区", exact: true }).waitFor();
   await page.goto(base + "/mobile-receive");
   await page.locator(".m-receive-card").waitFor();
   assert.equal(new URL(page.url()).pathname, basePath + "/mobile/receive");
@@ -500,6 +532,15 @@ async function run() {
   await page.getByRole("button", { name: "确认撤销" }).click();
   await page.getByText("已撤销收料", { exact: true }).waitFor();
   results.push("receipt-failure-retry-double-submit-and-revert");
+  sevenDayPages = true;
+  await page.getByRole("button",{name:"已收料",exact:true}).click();
+  await page.getByRole("button",{name:"刷新收料"}).click();
+  await page.getByText("近7天 · 共 21 条",{exact:true}).waitFor();
+  await page.getByRole("button",{name:"下一页",exact:true}).click();
+  await page.getByText("2 / 2",{exact:true}).waitFor();
+  assert.ok(requests.some(r=>r.path==="/api/incoming/received"&&r.query.days==="7"&&r.query.page==="2"));
+  await clean("06-seven-day-received-pagination");
+  sevenDayPages = false;
   // Stale responses must not replace a newer search or another tab's state.
   await page.goto(base + "/mobile/query");
   delaySearch = true;

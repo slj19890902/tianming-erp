@@ -66,7 +66,7 @@ onMounted(() => {
       {{ safeMessage(new Error(mobile.error))
       }}<button @click="mobile.load">重试</button>
     </div>
-    <main class="m-main"><RouterView /></main>
+    <main class="m-main" :class="{ 'm-main-map': route.path === '/mobile/warehouse' }"><RouterView /></main>
     <nav class="m-tabbar" aria-label="底部导航">
       <RouterLink
         v-for="item in nav"

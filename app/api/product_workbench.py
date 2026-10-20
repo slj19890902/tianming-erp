@@ -59,6 +59,7 @@ def search_products(response: Response,
                     q: str = Query(default="", max_length=100),
                     customer_id: int | None = Query(default=None, gt=0),
                     dimension_basis: Literal["finished", "net", "report"] = "finished",
+                    sort_by: Literal["default", "dimension_match"] = "default",
                     length: Decimal | None = Query(default=None, gt=0, decimal_places=2),
                     width: Decimal | None = Query(default=None, gt=0, decimal_places=2),
                     height: Decimal | None = Query(default=None, gt=0, decimal_places=2),
@@ -83,7 +84,8 @@ def search_products(response: Response,
                                     material_code=material_code, flute_type=flute_type,
                                     page=page, page_size=page_size,
                                     allow_order_search=has_permission(user, "orders.view"),
-                                    allow_inventory_rank=has_permission(user, "warehouse.view"))
+                                    allow_inventory_rank=has_permission(user, "warehouse.view"),
+                                    dimension_rank_first=sort_by == "dimension_match")
     drawings = product_drawing_metadata(db, [p.id for p in products], user=user,
                                         visible_customer_ids=scope)
     items = []

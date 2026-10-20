@@ -47,6 +47,7 @@ export interface Product {
   report_width_mm?: number;
   report_material?: string;
   inventory_summary?: { finished?: StockSummary; visibility?: string };
+  dimension_match?: { score_percent: number | null; total_delta_mm: number | null };
   inventory_positions?: Position[];
   drawings?: { items: Drawing[] };
 }
@@ -225,8 +226,9 @@ export const mobileApi = {
     ),
   pending: (signal?: AbortSignal) =>
     get<{ items: Incoming[] }>("/api/incoming/pending", signal),
-  received: (signal?: AbortSignal) =>
-    get<{ items: Incoming[] }>("/api/incoming/received", signal),
+  received: (signal?: AbortSignal, page = 1) =>
+    get<{ items: Incoming[]; total: number; page: number }>(
+      `/api/incoming/received?days=7&page=${page}&page_size=20`, signal),
   incomingDetail: (id: string, signal?: AbortSignal) =>
     get<IncomingDetail>(
       `/api/mobile/erp/incoming/${encodeURIComponent(id)}/production-detail`,
@@ -257,4 +259,8 @@ export function stocktakeUrl(
   return backendUrl(
     `/mobile/stocktake.html?${new URLSearchParams({ location_id: String(location), ...(floor ? { return_floor: floor } : {}), ...(area ? { return_area: area } : {}) })}`,
   );
+}
+
+export function warehouseAreaUrl(floor: string, area: string, location?: string) {
+  return backendUrl(`/mobile/erp.html?${new URLSearchParams({ mobile_page: "warehouse", warehouse_map: "1", floor_code: floor, area_code: area, return_mobile_map: "1", ...(location ? { location_id: location, focus_only: "1" } : {}) })}#warehouse`);
 }

@@ -110,7 +110,8 @@ def find_products(db: Session, scope: set[int] | None, *, q: str,
                   height: Decimal | None, tolerance_mm: Decimal = Decimal(0),
                   material_code: str | None = None, flute_type: str | None = None,
                   page: int, page_size: int,
-                  allow_order_search: bool, allow_inventory_rank: bool = False):
+                  allow_order_search: bool, allow_inventory_rank: bool = False,
+                  dimension_rank_first: bool = False):
     query = visible_products(db, scope).outerjoin(MoldTool, MoldTool.id == Product.mold_tool_id)
     if customer_id is not None:
         query = query.where(Product.customer_id == customer_id)
@@ -193,6 +194,8 @@ def find_products(db: Session, scope: set[int] | None, *, q: str,
     order_terms = []
     if dimension_deltas:
         order_terms.append(case((and_(*(delta == 0 for delta in dimension_deltas)), 0), else_=1))
+    if dimension_rank_first and dimension_deltas:
+        order_terms.append(sum(dimension_deltas))
     order_terms.append(code_rank)
     if allow_inventory_rank:
         # Rank physical lots via direct identity, explicit allowed binding,
@@ -262,12 +265,19 @@ def dimension_match(product: Product, *, basis: str, length: Decimal | None,
     delta = {axis: (float(Decimal(actual[axis]) - value)
                     if value is not None and actual[axis] is not None else None)
              for axis, value in queried.items()}
-    return {"basis": basis, "query_mm": {axis: float(value) if value is not None else None
+    measured = [axis for axis, value in queried.items() if value is not None]
+    complete = all(actual[axis] is not None for axis in measured)
+    total_delta = sum((abs(Decimal(actual[axis]) - queried[axis]) for axis in measured), Decimal(0)) if complete else None
+    requested_total = sum((queried[axis] for axis in measured), Decimal(0))
+    score = max(Decimal(0), Decimal(100) * (1 - total_delta / requested_total)) if complete and requested_total else None
+    return {"score_percent": float(score.quantize(Decimal("0.1"))) if score is not None else None,
+            "total_delta_mm": float(total_delta) if total_delta is not None else None,
+            "basis": basis, "query_mm": {axis: float(value) if value is not None else None
                                           for axis, value in queried.items()},
             "product_mm": {axis: float(value) if value is not None else None
                            for axis, value in actual.items()},
             "delta_mm": delta,
-            "exact": all(value == 0 for value in delta.values() if value is not None)}
+            "exact": complete and all(delta[axis] == 0 for axis in measured)}
 
 
 def inventory_summary(db: Session, products: list[Product]):

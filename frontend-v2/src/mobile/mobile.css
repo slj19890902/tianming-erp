@@ -1083,3 +1083,19 @@ body:has(.mobile-app) {
   padding-top: 12px;
   padding-bottom: 12px;
 }
+
+/* The measured overview owns the available screen; native area views keep their own geometry. */
+.m-main-map { padding: 0; overflow: hidden; display: flex; }
+.m-main-map .m-warehouse { flex: 1; min-height: 0; display: flex; flex-direction: column; width: 100%; position: relative; }
+.m-main-map .m-maptools { flex: none; padding: 8px; margin: 0; }
+.m-main-map .m-floorseg { flex-basis: 100%; }
+.m-main-map .m-mapview { flex: 1; min-height: 0; height: auto; margin: 0; border-radius: 0; }
+.m-main-map .m-mapview svg { display: block; }
+.m-carton-inputs { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; align-items: end; }
+.m-carton-inputs > span { display: none; }
+.m-carton-inputs label { min-width: 0; }
+.m-carton-inputs input { width: 100%; min-width: 0; }
+.m-size-tolerance { display: flex; gap: 8px; align-items: center; margin: 12px 0; }
+.m-size-tolerance select { min-height: 48px; padding: 0 12px; font-size: 15px; border: 1px solid var(--m-line); border-radius: 8px; }
+.m-match { color: var(--m-green); font-size: 24px; }
+.m-received-range { font-size: 15px; margin: 12px 0; }

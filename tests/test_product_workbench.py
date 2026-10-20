@@ -728,3 +728,33 @@ def test_detail_purchase_activity_uses_header_timestamp_and_preserves_source(mob
     with factory() as db:
         assert [(lot.id, lot.quantity_available, lot.quantity_reserved) for lot in db.scalars(select(InventoryLot))] == before
         assert db.scalar(select(SupplierRequisitionOrder).where(SupplierRequisitionOrder.order_number == 'PURCHASE-UNDATED')).created_at is None
+
+
+def test_finished_dimension_match_ranks_before_stock_and_before_pagination(mobile_erp_app):
+    app, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        for key, dimensions in (("product", (430, 315, 260)),
+                                ("product_two", (421, 311, 261)),
+                                ("other_product", (420, 310, 260))):
+            product = db.get(Product, ids[key])
+            product.length_mm, product.width_mm, product.height_mm = map(Decimal, dimensions)
+        db.commit()
+    params = dict(dimension_basis="finished", length=420, width=310, height=260,
+                  tolerance_mm=20, page_size=1, sort_by="dimension_match")
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        pages = [client.get("/api/product-workbench/search", params={**params, "page": n})
+                 for n in (1, 2, 3)]
+        assert all(p.status_code == 200 for p in pages)
+        rows = [p.json()["items"][0] for p in pages]
+        assert [row["id"] for row in rows] == [ids["other_product"], ids["product_two"], ids["product"]]
+        assert [row["dimension_match"]["score_percent"] for row in rows] == [100, 99.7, 98.5]
+        assert all(row["customer_name"] for row in rows)
+        assert rows[1]["dimension_match"]["total_delta_mm"] == 3
+        default = client.get("/api/product-workbench/search", params={**params, "sort_by": "default", "page": 2})
+        assert default.json()["items"][0]["id"] == ids["product"]
+        assert client.get("/api/product-workbench/search", params={**params, "sort_by": "invalid"}).status_code == 422
+        _login(client, "mobile-scoped")
+        body = client.get("/api/product-workbench/search", params={**params, "page_size": 50}).json()
+        assert [row["id"] for row in body["items"]] == [ids["product_two"], ids["product"]]
+        assert "OTHER-MOBILE" not in str(body)

@@ -1162,6 +1162,18 @@ class Manager:
                     new.pop('exact_sales_activation', None)
                     new['schema_authority'] = candidate['id'] if migrate else old.get('schema_authority')
                     write_json(self.root / 'state.json', new)
+            if (exact_activation_started and migrate and empty_exact_facts
+                    and candidate['revision'] == 'ew1020em'
+                    and not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision'])):
+                from desktop_assistant.exact_sales_reader import recover_empty_migration
+                try:
+                    recover_empty_migration(self, candidate['id'], old['current'],
+                        migration_manifest, new, environment=migration_environment)
+                except BaseException:
+                    if new.get('operation') != 'migration_failed':
+                        new['operation'] = 'update_failed_reader_contract'
+                    write_json(self.root / 'state.json', new)
+                    raise ValueError('首次金额升级启动失败，受控结构恢复未通过；保持停止并保留当前数据库，未覆盖旧库') from None
             if not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']):
                 new.update(operation='update_failed_reader_contract', previous=None)
                 write_json(self.root / 'state.json', new)

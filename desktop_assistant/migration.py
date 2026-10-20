@@ -262,7 +262,7 @@ def rehearse(manager, package):
     owner=_rotation_rehearsal_owner(manager,job)
     # Admission is durable before mkdir/report; either failure retains active.
     job.mkdir();report_path=job/'report.json'
-    report={'status':'running','source_revision':before_info['revision'],'package_sha256':sha(package),
+    report={'status':'running','source_revision':before_info['revision'],'source_schema':schema(database),'package_sha256':sha(package),
         'created_at':datetime.now(timezone.utc).isoformat(),'source_facts':before,
         'scope':'isolated_additive_rehearsal_only','report_path':str(report_path)}
     write_json(report_path,report)

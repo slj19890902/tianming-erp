@@ -105,34 +105,32 @@ def test_no_configured_staging_retains_old_installation_contract(setup):
         assert service.resolve(db,product_id=pid,customer_id=cid) is None
 
 
-def test_existing_product_stock_becomes_stable_default_without_moving_history(setup):
+def test_history_does_not_become_an_implicit_product_preference(setup):
     factory,pid,cid,ids=setup
     with factory() as db:
         existing=incoming(db,pid,cid,ids[0])
-        location,kind,_=service.resolve(db,product_id=pid,customer_id=cid,claim=True)
-        assert (location.id,kind)==(ids[0],'product_storage')
-        assert db.get(ProductStoragePreference,pid).location_id==ids[0]
+        assert service.resolve(db,product_id=pid,customer_id=cid,claim=True) is None
+        assert db.get(ProductStoragePreference,pid) is None
         assert existing.warehouse_location_id==ids[0]
 
 
-def test_multiple_historical_locations_require_one_explicit_default(setup):
+def test_multiple_historical_locations_do_not_block_unconfigured_receipt(setup):
     factory,pid,cid,ids=setup
     with factory() as db:
         first=incoming(db,pid,cid,ids[0])
         second=incoming(db,pid,cid,ids[1],key='other-location')
-        with pytest.raises(ShelfError,match='多个正式货位'):
-            service.resolve(db,product_id=pid,customer_id=cid)
+        assert service.resolve(db,product_id=pid,customer_id=cid) is None
         assert db.get(ProductStoragePreference,pid) is None
         assert (first.warehouse_location_id,second.warehouse_location_id)==(ids[0],ids[1])
 
 
-def test_new_product_never_falls_back_to_receipt_staging(setup):
+def test_missing_preference_still_rejects_invalid_non_first_floor_staging(setup):
     factory,pid,cid,ids=setup
     with factory() as db:
         loc=db.get(WarehouseLocation,ids[0])
         area=db.scalar(select(WarehouseArea).where(WarehouseArea.area_code==loc.area_code))
         db.add(ReceiptStagingArea(area_id=area.id));db.flush()
-        with pytest.raises(ShelfError,match='选择一次正式货位'):
+        with pytest.raises(ShelfError,match='一楼待入库区没有可用'):
             service.resolve(db,product_id=pid,customer_id=cid)
 
 
@@ -164,3 +162,35 @@ def test_api_admin_idempotency_employee_and_customer_scope(setup):
         with pytest.raises(HTTPException) as exc:
             api.receipt_storage(pid,db,employee)
         assert exc.value.status_code==403
+
+
+def test_cleared_product_default_does_not_revive_old_fixed_shelf(setup):
+    factory,pid,cid,ids=setup
+    with factory() as db:
+        db.add(ShelfProfile(product_id=pid,version=1));db.flush()
+        db.add(ShelfBinding(location_id=ids[1],product_id=pid,priority=0));db.flush()
+        service.save(db,pid,expected_version=0,area_id=None,location_id=None)
+        assert service.resolve(db,product_id=pid,customer_id=cid,claim=True) is None
+        assert db.get(ShelfBinding,ids[1]).product_id == pid
+
+
+def test_product_area_skips_batch_excluded_locations_but_exact_setting_fails_closed(setup):
+    factory,pid,cid,ids=setup
+    with factory() as db:
+        loc=db.get(WarehouseLocation,ids[0])
+        area=db.scalar(select(WarehouseArea).where(WarehouseArea.area_code==loc.area_code))
+        service.save(db,pid,expected_version=0,area_id=area.id,location_id=None)
+        selected=service.resolve(db,product_id=pid,customer_id=cid,claim=True,excluded_location_ids={ids[0]})
+        assert selected[0].id != ids[0] and selected[0].area_code == area.area_code
+        choose(db,pid,ids[0],version=1)
+        with pytest.raises(ShelfError,match='产品默认货位不可用'):
+            service.resolve(db,product_id=pid,customer_id=cid,claim=True,excluded_location_ids={ids[0]})
+
+
+def test_changed_explicit_location_claim_does_not_fall_back(setup,monkeypatch):
+    factory,pid,cid,ids=setup
+    with factory() as db:
+        choose(db,pid,ids[0])
+        monkeypatch.setattr(service,'claim_active_placed_location',lambda *a,**kw: False)
+        with pytest.raises(ShelfError,match='产品默认货位不可用'):
+            service.resolve(db,product_id=pid,customer_id=cid,claim=True)

@@ -2090,7 +2090,7 @@ def _receipt_auto_finished_ground_target(
     try:
         resolved = resolve(db, product_id=product_id, customer_id=customer_id, claim=claim,
             inventory_type=inventory_type,
-            require_configured=product_id is not None and inventory_type == "finished")
+            excluded_location_ids=excluded)
     except ShelfError as exc:
         raise ProductionWorkflowError(str(exc), 409) from exc
     if resolved is not None:
@@ -2102,26 +2102,6 @@ def _receipt_auto_finished_ground_target(
         customer_id is not None
         and ordered_preferred_area_ids(db, int(customer_id))
     )
-    if product_id is not None and inventory_type == "finished" and not has_customer_preferences:
-        raise ProductionWorkflowError(
-            "产品未设置正式默认货位或区域，客户也未设置成品存放区域；请先在常用箱或客户资料中设置",
-            409,
-        )
-    if product_id is not None and not has_customer_preferences:
-        from app.services.fixed_shelf import incoming_primary_location, ShelfError
-        try:
-            fixed = incoming_primary_location(db, product_id=product_id,
-                customer_id=customer_id, claim=claim)
-        except OperationalError as exc:
-            raise ProductionWorkflowError("固定货位正在调整，请稍后重试", 409) from exc
-        except ShelfError as exc:
-            raise ProductionWorkflowError(str(exc), 409) from exc
-        if fixed is not None:
-            if fixed.id in excluded:
-                raise ProductionWorkflowError("固定货位已被本批次占用，请核对分配", 409)
-            return ReceiptAutoFinishedGroundTarget(plan=None, slot=None, location=fixed,
-                layout_version=fixed.floor3_layout.version if fixed.floor3_layout else 0,
-                capacity_warning=None, target_kind="fixed_shelf")
     targets = [
         target
         for target in _receipt_auto_finished_ground_targets(
@@ -2129,6 +2109,7 @@ def _receipt_auto_finished_ground_target(
             customer_id=customer_id,
         )
         if int(target.location.id) not in excluded
+        and (has_customer_preferences or product_id is None or target.location.warehouse_floor == 1)
     ]
     if not targets:
         raise ProductionWorkflowError(

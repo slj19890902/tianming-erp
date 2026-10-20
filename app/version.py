@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.699"
-APP_VERSION_NAME = "订单原价与金额精度"
+APP_VERSION = "v0.22.700"
+APP_VERSION_NAME = "作废订单Excel重新导入"
 APP_BUILD_DATE = "2026-10-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6825,3 +6825,15 @@ APP_VERIFICATION_STEPS = [
     "核对含税/未税原始报价标识和参考值，导出Excel/PDF查看行金额与合计。",
 ]
 APP_CHANGELOG = [*(f"v0.22.699：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.700：作废/合法删除的订单来源允许重新导入。
+APP_CHANGES = [
+    "修复订单作废或正常删除后，原Excel仍被当作重复文件跳过的问题；重新导入建立新订单，保留旧单及来源追溯。",
+    "有效订单继续防止重复生成，重新导入后的重复请求指向最新有效单；旧请求不会因删除后编号复用误指向新单。",
+    "本版无数据库迁移，不批量修改历史订单、金额、库存或预占；保留v699原始单价与精确金额修复。",
+]
+APP_VERIFICATION_STEPS = [
+    "重新选择已作废或正常删除订单的原Excel，确认能识别并核对原明细。",
+    "按实际业务需要保存，确认生成新订单号；再次导入同一文件应提示已有新订单。",
+]
+APP_CHANGELOG = [*(f"v0.22.700：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

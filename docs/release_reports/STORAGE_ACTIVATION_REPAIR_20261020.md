@@ -1,0 +1,15 @@
+# 2026-10-20 清理激活依赖遗漏修复完成
+
+状态：已恢复原依赖，实际服务UID499完整原生准入通过，自动清理复查通过；本修复业务写入0、ERP重启0。修复源码699d2687，安装后native SHA309dd57f37c615896d6455d9dfb3fcfe3fb63ada678ba3d8385ee4cd1360e1b2，policy SHA17fd551f822b5d46a18d18615b89f569b2cede7759397ffd8c8bf36ddb09b986。
+
+本轮清理将factory-activation中execution 377266c8、monitor 5b62a176、restore acb2f921误当纯归档关联，回收旧展开时连带移除原批准registry。mac_factory_runtime每次创建Manager环境要求三者继续获批准；完整启动历史还要求原生packages/acb2f921.zip。天华R4因此在打开业务库前被门禁拦下。现有业务进程未受停启影响，完整签名原包始终保留。
+
+已从现有受保护激活记录验证原授权，精确恢复全部三项原批准、三套签名双执行树及所需原生恢复ZIP。每包签名原字节解包一次，使用真实APFS写时复制建立独立inode的第二树，全部文件内容/权限/所有者重新核验；没有硬链接或从业务目录复制。先前普通双份展开被200GB空间预检在任何槽/registry恢复前阻止；改用APFS保留空间，未降低签名、闲置、原生锁或发布锁要求。
+
+维护器现在用现有_activation结构解析原生必需身份，三项全部加入实际运行保留，因此同时保护registry、双执行树和必要原生ZIP缓存；无效或未知激活结构停止清理。原签名链其他无实际启动引用的历史展开仍可回收。原生激活记录和校验保持启用。
+
+45项针对性测试通过（13.04秒）。安装后自动清理实际completed，protected_expansions=9包含全部三项，原批准未再次移除。之后在原生维护锁与发布锁内，以真实UID/GID499重跑configuration、Manager._environment及factory_service_start_history，全部passed；SQLite audit hook禁止该只读验证连接业务数据库。第一轮验证脚本在原生调用完成后，因把测试模式字段存在等同启用而额外断言失败；最终验证按原程序=="1"启用语义，结果通过，无须改变应用代码或业务配置。
+
+权威证据：/Library/TianmingERP-LocalMaintenance/space-20261020-activation-verify-final/result.json；本任务evidence/disk-space-cleanup-20261020/activation-final-result.json、activation-final-cleanup.json及activation-final-service.stdout保留副本。最终三次实盘可用205182230528、204828528640、205973237760字节，均超过十进制200GB目标。修复恢复必要依赖后，原回收19套旧展开中3套恢复，净16套；其余原清理明细仍适用。
+
+验收时current仍为v694包6462699515d4509b730974fb64985cec0e9edf5613cc2b02bfc644af8f03948a，PID84132，健康HTTP200，state在验证期间完全不变。两个维护任务均加载/空闲/最近退出0。验证后已释放发布窗口，v695合并候选f70c34ec先接管，天华随后按实际新包重新绑定；其后另授权发布的临时空间占用独立于本次验收时点。不可再用单纯健康200代替新原生进程准入验证。

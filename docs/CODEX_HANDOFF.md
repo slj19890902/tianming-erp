@@ -6313,3 +6313,5 @@ v0.22.686 / 281eed29c8551324d388fffffabe5e2249aa25aa / d407b603602330a78993637ca
 ## 2026-10-20 发布后空间清理与200GB门限
 
 固定本机维护器已更新，主回收后实盘约209.06GB。修正历史签名关联误保留展开、完整发布收尾凭证识别、显式封存测试副本独立核验；200GB门限，state.json触发，锁忙/失败五分钟重试，成功每小时检查。原包/实际运行回退依赖、活动/失败/人工验收/来源被引用副本继续保护。维护源码独立分支codex/storage200g-20261020，勿用旧维护资产覆盖；业务版本未由该任务更新。详见docs/release_reports/STORAGE200G_20261020.md。
+
+2026-10-20空间清理后激活依赖纠正：factory-activation的execution/monitor/preparation.restore三项为实际原生运行依赖，必须保留registry、双执行树和必要native ZIP；维护源码699d2687已安装，45测试及自动清理后真实UID499 configuration/Manager._environment/启动历史均通过。完整签名原包恢复了三套必要槽，验收空间最低204.83GB，业务写0/ERP重启0。详见docs/release_reports/STORAGE_ACTIVATION_REPAIR_20261020.md，不得沿用早期“全部激活哈希仅归档”结论。

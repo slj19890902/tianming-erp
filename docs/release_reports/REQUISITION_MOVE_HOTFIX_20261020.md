@@ -1,6 +1,6 @@
 # 已报料与手机移库紧急修复
 
-状态：开发验证，待正式技术发布。任务见 `docs/tasks/REQUISITION_MOVE_HOTFIX_20261020.md`。
+状态：v0.22.689 技术发布及原生收尾完成，服务正常，管理员人工验收待反馈。任务见 `docs/tasks/REQUISITION_MOVE_HOTFIX_20261020.md`。
 
 ## 根因与修复
 
@@ -22,3 +22,12 @@
 证据目录：`/Users/kimiyf/ERP-Migration/evidence/requisition-move-hotfix-20261020`。UAT工具因无权确认系统服务进程而暂保留任务副本；不得绕过所有权/空闲检查强删。PDF训练附件与本次API无关，仅在任务私有副本中清空其外部路径，不改原始诊断源或正式数据。
 
 正式发布沿用已有Manager串行更新、签名包、时点备份与独立恢复、原事实保持、正式只读核验。管理员人工验收待反馈。
+
+## v0.22.689 正式技术发布
+
+- 正式源码 `821fe81b1b99df39b85658568aee325126324cb1`，签名包 `6f994bd2060c4a6014ab30cdf29f66bde0b0426a7ed9a518f52189f753a55b95`，manifest `b4d39ad02131b1ad5e399d7dcdeaac5fb044906211b33a44338d8bd9d9369db2`，原包 `9a40fb75f33942a4a4ce66b2146bf8cb627cc3a174c9d1a4d68763c9ad49d2e1`。唯一revision `et1019fl`不变，无DDL；9个应用载荷成员更新。
+- 后端41项通过，前端5项通过；排除1项已独立证实的v688旧单位夹具失败，未运行全量。
+- 新鲜签名包在线演练、隔离启动检查通过，326张业务表及schema保持；已报料明细、整单、分页和补库筛选，货位及全库存成本汇总只读通过，历史000205来源成本可核验。
+- 完整时点备份 `/Library/TianmingERP/instance/backups/20261020-102348-4d7e0696.tmbackup`，SHA-256 `8317a2d6eeb5cf7fdc819afa1fa38016376daea93425cc007cf18d9512e003ba`；Manager独立完整恢复验证及原生收尾通过。backup_work_retained=false、manual_stop=false；正式业务PID 46053。
+- stop_requested `2026-10-20T02:23:26.582893+00:00`，process_ready `2026-10-20T02:29:40.488484+00:00`，停服373.91秒。相关页面及脚本HTTP200，静态字节与签名清单一致，匿名保护接口401；无正式业务写入。证据 `/Users/kimiyf/ERP-Migration/evidence/requisition-move-hotfix-20261020/release-v689`。
+- 页面不执行自动点击，由管理员刷新已报料并按正常业务移库000205后验收；人工状态待反馈。NAS状态见RESULT.json，未确认归档前保留本地证据。

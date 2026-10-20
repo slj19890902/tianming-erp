@@ -52,7 +52,7 @@ def plist_for(action):
     return dict(Label=label,ProgramArguments=['/usr/bin/python3','-I','-S','-B',str(DEST/'launcher.py'),action],
                 UserName='root',WorkingDirectory='/',RunAtLoad=True,
                 StartInterval=3600 if action=='cleanup' else 900,ThrottleInterval=300,
-                **({'KeepAlive': {'SuccessfulExit': False}} if action=='cleanup' else {}),
+                **({'KeepAlive': {'SuccessfulExit': False}, 'WatchPaths': [str(ROOT/'state.json')]} if action=='cleanup' else {}),
                 ProcessType='Background',LowPriorityIO=True,Nice=10,Umask=0o027,
                 StandardOutPath=str(DEST/(action+'.stdout.log')),
                 StandardErrorPath=str(DEST/(action+'.stderr.log')))

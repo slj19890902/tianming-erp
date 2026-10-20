@@ -222,3 +222,15 @@ def test_archive_history_does_not_keep_reproducible_expansions_forever():
     # A genuine runtime dependency still overrides its historical classification.
     _,expansions=p.program_retention_sets(state,manifests,runtime_dependencies=[backup],archive_dependencies=[backup])
     assert backup in expansions
+
+
+def test_release_state_changes_trigger_cleanup_but_not_extra_backups():
+    import importlib.util
+    source=Path(__file__).resolve().parents[2]/'scripts/local_maintenance/install.py'
+    spec=importlib.util.spec_from_file_location('release_watch_installer',source)
+    installer=importlib.util.module_from_spec(spec);spec.loader.exec_module(installer)
+    definition=installer.plist_for('cleanup')
+    assert definition['WatchPaths']==['/Library/TianmingERP/instance/state.json']
+    assert definition['KeepAlive']=={'SuccessfulExit':False}
+    assert definition['ThrottleInterval']==300
+    assert 'WatchPaths' not in installer.plist_for('backup')

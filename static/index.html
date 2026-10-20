@@ -7551,6 +7551,8 @@
               <div v-if="!emailQueueMode" class="form-grid pdf-upload-controls" style="margin-bottom:4px">
                 <div class="field wide">
                   <weekly-demand-import :customers="activeCustomerOptions" @parsed="acceptWeeklyDemand"></weekly-demand-import>
+                  <div class="toolbar-group" style="margin:8px 0"><label>清单客户 <select class="select" v-model.number="orderImportBatch.customerId"><option :value="null">按文件识别</option><option v-for="customer in activeCustomerOptions.filter(c=>['YG','GY'].includes(String(c.customer_code||'').toUpperCase()))" :key="customer.id" :value="customer.id">{{customer.name}}</option></select></label><label>要求交货日期 <input class="input" type="date" v-model="orderImportBatch.deliveryDate" /></label></div>
+                  <div class="muted">支持研光/光洋位置清单：C位置、D编码、E需求、L单价、M金额。J/K仅作原表库存参考；保存订单后可打印提前备货单。</div>
                   <label v-if="!orderImportDrafts.length">上传客户订单 PDF / Excel（可多选）</label>
                   <input class="input" type="file" multiple accept="application/pdf,.pdf,.xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" @change="onOrderPdfFileChange" />
                 </div>
@@ -7591,8 +7593,9 @@
               </details>
               <div v-for="(draft,draftIndex) in orderImportDrafts" :key="draft.file_hash || draft.source_name" v-show="(!emailQueueMode || !pdfQueueVisible) && pdfCurrentDraft(draft)" class="order-group-detail-card" style="margin-bottom:12px">
 
+                <div v-if="draft.template==='yg_gy_location_order_v1' && (draft._saved_order_id || draft.duplicate_order_id)" class="toolbar-group" style="margin-bottom:10px"><button type="button" class="btn primary" @click="openEarlyPickPrint(draft._saved_order_id || draft.duplicate_order_id)">打印提前备货单</button><span class="muted">包含未生产和缺货产品，可先备已有成品。</span></div>
                 <manual-replenishment-picker v-if="canRequisition" :customer-id="draft.matched_customer_id" :lines="draft.items"></manual-replenishment-picker>
-                <details v-if="draft.source_format==='weekly_demand'"><summary>原需求表与原单库存参考（不写入仓库）</summary><div v-for="row in draft.items" :key="row.line_no">{{row.raw_product_code}} · 原位置 {{row.source_location||'未填写'}} · 原文 {{(row.raw_lines||[]).join(' ')}}<span v-if="row.source_stock_reference"> · 原单现存 {{row.source_stock_reference.on_hand}} / 原单剩余 {{row.source_stock_reference.remaining}}</span></div></details>
+                <details v-if="draft.source_format==='weekly_demand' || draft.template==='yg_gy_location_order_v1'"><summary>原需求表与原单库存参考（不写入仓库）</summary><div v-for="row in draft.items" :key="row.line_no">{{row.raw_product_code}} · 原位置 {{row.source_location||'未填写'}} · 原文 {{(row.raw_lines||[]).join(' ')}}<span v-if="row.source_stock_reference"> · 原单现存 {{row.source_stock_reference.on_hand}} / 原单剩余 {{row.source_stock_reference.remaining}}</span></div></details>
                 <div v-if="emailQueueMode && draft.email_attachment_id && draft._show_advanced_details" class="toolbar-group" style="margin-bottom:8px">
                   <button class="btn small" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'processed')">已人工处理</button>
                   <button class="btn small" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'duplicate')">重复，不再提醒</button>
@@ -7636,7 +7639,7 @@
                 </div>
                 <div class="pdf-order-summary">
                   <div class="field"><label>客户</label><search-select v-model="draft.matched_customer_id" :options="importCustomerOptions(draft)" label-key="name" value-key="id" placeholder="确认客户" :disabled="isImportDraftLocked(draft)" @change="handleImportDraftCustomerChange(draftIndex)"></search-select></div>
-                  <div class="field"><label>客户单号</label><input class="input customer-po" v-model.trim="draft.customer_po" @input="invalidateImportDraftConfirmation(draft)" /></div>
+                  <div class="field"><label>客户单号<span v-if="draft.template==='yg_gy_location_order_v1'">（原表没有可留空）</span></label><input class="input customer-po" v-model.trim="draft.customer_po" @input="invalidateImportDraftConfirmation(draft)" /></div>
                   <div class="field"><label>交货日期</label><input class="input" type="date" v-model="draft.delivery_date" @input="invalidateImportDraftConfirmation(draft)" /></div>
                   <span :class="['status',importDraftSaveStatusClass(draft)]">{{importDraftSaveStatusText(draft)}}</span>
                 </div>
@@ -8613,6 +8616,7 @@
                 <div class="toolbar" style="margin-bottom:8px">
                   <div>
                     <strong class="sys-num">{{ order.order_number }}</strong>
+                    <button v-if="order.early_pick_available" type="button" class="btn small" @click="openEarlyPickPrint(order.id)">打印提前备货单</button>
                     <span style="margin-left:10px">{{ order.order_date || "-" }} → {{ order.delivery_date || "-" }}</span>
                     <span v-if="order.remark" class="muted" style="margin-left:10px">备注：{{ order.remark }}</span>
                   </div>
@@ -8832,6 +8836,7 @@
               <div v-if="canViewSalesAmounts" class="field sensitive-price"><label>订单金额</label><div>¥ {{ money(orderDetail.total_amount) }}</div></div>
                 <div class="field wide"><label>备注</label><div>{{ orderDetail.remark || "-" }}</div></div>
               </div>
+              <div v-if="orderDetail.early_pick_available" class="toolbar-group" style="margin-bottom:10px"><button type="button" class="btn primary" @click="openEarlyPickPrint(orderDetail.id)">打印提前备货单</button></div>
               <div class="section-title">订单详情与片料安排</div>
               <div class="table-wrap order-read-detail-wrap"><table class="order-read-detail-table"><thead><tr>
                 <th>明细系统单号</th><th>存货编码</th><th>产品名称</th><th>规格mm</th>
@@ -11145,7 +11150,7 @@
             orderEditForm: { order_ids: [], customer_name: "", customer_po: "", order_number: "", order_date: "", delivery_date: "", remark: "" },
             orderEditGroup: null,
             orderNumberPreview: "", orderNumberPreviewSequence:0,
-            orderImportBatch: { files: [], status: "idle", retryDraft: null },
+            orderImportBatch: { files: [], status: "idle", retryDraft: null, customerId: null, deliveryDate: "" },
             orderImportDrafts: [],
             orderImportRecoveryRows: [], orderImportRecoveryError:"",
             orderImportReminderCache: {},
@@ -33292,9 +33297,13 @@
 	              picker.importing = false;
 	            }
 	          },
+          openEarlyPickPrint(orderId) {
+            if (!Number.isInteger(Number(orderId)) || Number(orderId)<=0) return;
+            window.open(`/static/order-early-pick-print.html?order_id=${encodeURIComponent(orderId)}`, "_blank", "noopener");
+          },
           openOrderPdfImport() {
             this.emailQueueMode = false;
-            this.orderImportBatch = { files:[], status:"idle" };
+            this.orderImportBatch = { files:[], status:"idle", customerId:null, deliveryDate:"" };
             this.orderImportDrafts = [];
             this.orderImportReminderCache = {};
             this.modal = { type:"orderPdfImport", title:"导入客户订单（PDF / Excel）" };
@@ -33530,6 +33539,8 @@
             try {
               const form = new FormData();
               this.orderImportBatch.files.forEach(file => form.append("files", file));
+              if(this.orderImportBatch.customerId)form.append("customer_id",this.orderImportBatch.customerId);
+              if(this.orderImportBatch.deliveryDate)form.append("delivery_date",this.orderImportBatch.deliveryDate);
               const { data } = await axios.post("/api/orders/import-preview-batch", form);
               this.orderImportDrafts = (data.drafts || []).map(draft => this.prepareImportDraftReminderState({
                 ...draft,
@@ -33613,7 +33624,8 @@
             const reasons = [];
             if (!draft?.preview_safety_token) reasons.push("订单文件预览安全确认缺失，请重新识别。");
             if (!draft?.matched_customer_id) reasons.push("客户未确认。");
-            if (!String(draft?.customer_po || "").trim()) reasons.push("客户订单号未填写，不能保存。");
+            if (!String(draft?.customer_po || "").trim() && draft?.template!=="yg_gy_location_order_v1") reasons.push("客户订单号未填写，不能保存。");
+            if (draft?.template==="yg_gy_location_order_v1" && !draft.delivery_date) reasons.push("请填写要求交货日期。");
             if (draft?.matched_customer_id && draft?._reminder_loading) reasons.push("生产提醒仍在读取，请稍候。");
             else if (draft?.matched_customer_id && (!draft?._reminder_loaded || draft?._reminder_error)) reasons.push("生产提醒未读取成功，请重试。");
             else {

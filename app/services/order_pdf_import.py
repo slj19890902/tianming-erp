@@ -2880,7 +2880,7 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
             item['match_evidence'].update(policy='contract_exact_customer_code',
                 decision='matched' if selected else 'needs_confirmation',
                 reasons=[] if selected else ['编码需人工确认；候选不代表已匹配'])
-        if draft.get('source_format') == 'weekly_demand':
+        if draft.get('source_format') == 'weekly_demand' or draft.get('template') == 'yg_gy_location_order_v1':
             code = str(item.get('raw_product_code') or '').strip()
             exact = [p for p in products if code and code in {
                 str(p.product_code or '').strip(), str(p.customer_material_code or '').strip()}]
@@ -2923,7 +2923,7 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
         item["product_drawing_file"] = drawing.image_path if drawing is not None else None
         matched_items.append(item)
     # 合并相同存货编码（同单价/同交期/同常用箱）
-    merged_items = matched_items if draft.get("customer_type") in {"simair", "sat_contract"} or draft.get('source_format') == 'weekly_demand' else _merge_same_product_code(matched_items)
+    merged_items = matched_items if draft.get("customer_type") in {"simair", "sat_contract"} or draft.get('source_format') == 'weekly_demand' or draft.get('template') == 'yg_gy_location_order_v1' else _merge_same_product_code(matched_items)
     return {**draft, "matched_customer_id": customer_id, "items": merged_items}
 
 

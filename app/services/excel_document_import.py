@@ -20,7 +20,8 @@ MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 100
 OLE_SIGNATURE = bytes.fromhex("D0CF11E0A1B11AE1")
 ZIP_SIGNATURES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
-PARSER_VERSION = "excel-order-predelivery-v2"
+PARSER_VERSION = "excel-order-predelivery-v3"
+PICK_LIST_TEMPLATE = "yg_gy_location_order_v1"
 
 
 class ExcelImportError(ValueError):
@@ -52,6 +53,8 @@ class ImportedRow:
     drawing_number: str | None = None
     category: str | None = None
     model: str | None = None
+    source_location: str | None = None
+    source_stock_reference: dict[str, str | None] | None = None
     cells: dict[str, SourceCell] = field(default_factory=dict)
     issues: list[str] = field(default_factory=list)
 
@@ -483,6 +486,64 @@ def _parse_guangyang_predelivery(sheets: list[_Sheet]) -> tuple[list[ImportedRow
     return rows, delivery_date, warnings
 
 
+def _is_location_order(sheet: _Sheet) -> bool:
+    """Recognise the fixed no-header layout, never merely a code in column D."""
+    for number in range(1, min(sheet.max_row, 40) + 1):
+        if (re.fullmatch(r"C?\d{6,}", sheet.text(number, 4), re.IGNORECASE)
+                and sheet.text(number, 5) and sheet.text(number, 12)
+                and not sheet.text(number, 6) and not sheet.text(number, 7)):
+            return True
+    return False
+
+
+def _parse_location_order(sheets: list[_Sheet], document_type: str) -> tuple[list[ImportedRow], list[str]]:
+    mapping = dict(product_name=1, drawing_number=2, source_location=3,
+                   stock_code=4, requested_quantity=5, order_quantity=5,
+                   category=9, source_on_hand=10, source_remaining=11,
+                   unit_price=12, amount=13)
+    rows, warnings = [], []
+    for sheet in sheets:
+        if sheet.hidden:
+            warnings.append(f"隐藏工作表“{sheet.name}”未自动导入")
+            continue
+        for number in range(1, sheet.max_row + 1):
+            code = sheet.text(number, 4)
+            if not re.fullmatch(r"C?\d{6,}", code, re.IGNORECASE):
+                # Summary/footer prose has no product identity. A populated
+                # detail with a malformed code must not silently disappear.
+                if sheet.text(number, 8) or (sheet.text(number, 1) and sheet.text(number, 5)):
+                    raise ExcelImportError(f"{sheet.name}!D{number} 存货编码无效，请核对原表")
+                if any(sheet.text(number, col) for col in (3, 4, 5)):
+                    warnings.append(f"{sheet.name} 第{number}行备注：" +
+                                    " / ".join(sheet.text(number, col) for col in (3, 4, 5) if sheet.text(number, col)))
+                continue
+            duplicate_code = sheet.text(number, 8)
+            if duplicate_code and duplicate_code != code:
+                raise ExcelImportError(f"{sheet.name}!D{number} 与 H{number} 编码不一致")
+            row = _row(sheet, number, mapping, document_type=document_type)
+            assert row is not None
+            if row.unit_price is None or row.unit_price < 0:
+                raise ExcelImportError(f"{sheet.name}!L{number} 单价必须是非负数字")
+            calculated = Decimal(row.requested_quantity) * row.unit_price
+            if row.amount is not None and abs(row.amount - calculated) > Decimal("0.000001"):
+                raise ExcelImportError(f"{sheet.name}!M{number} 金额与 E列数量 × L列单价不一致，请核对")
+            row.amount = calculated if row.amount is None else row.amount
+            row.source_location = _clean_text(sheet.text(number, 3))
+            on_hand = _decimal(sheet.cell(number, 10).raw_value, label=f"J{number} 原表库存")
+            remaining = _decimal(sheet.cell(number, 11).raw_value, label=f"K{number} 原表剩余")
+            if remaining is None and on_hand is not None:
+                remaining = on_hand - row.requested_quantity
+            row.source_stock_reference = {
+                "on_hand": str(on_hand) if on_hand is not None else None,
+                "remaining": str(remaining) if remaining is not None else None,
+            }
+            rows.append(row)
+    if not rows:
+        raise ExcelImportError("未识别到位置清单有效明细")
+    warnings.append("C列为指定拿货位置，J/K列仅作原表库存参考；请确认交货日期。未生产和缺货行也可打印提前备货单。")
+    return rows, warnings
+
+
 def parse_excel_document(
     content: bytes,
     filename: str,
@@ -529,6 +590,23 @@ def parse_excel_document(
         if document_type == "pre_delivery":
             for row in rows:
                 row.issues = [issue.replace("请确认订单数量", "预送数量采用要求数，请核对本次预送数量") for issue in row.issues]
+    elif any(_is_location_order(sheet) for sheet in nonempty if not sheet.hidden):
+        template = PICK_LIST_TEMPLATE
+        visible_text = " ".join(_sheet_text(sheet) for sheet in nonempty if not sheet.hidden)
+        yg, gy = "研光" in visible_text, "光洋" in visible_text
+        if yg and gy:
+            raise ExcelImportError("位置清单客户不唯一，请分别上传研光或光洋文件")
+        customer_code = "YG" if yg else "GY" if gy else (expected_customer_code or "").strip().upper()
+        if customer_code not in {"YG", "GY"}:
+            raise ExcelImportError("位置清单请先选择研光或光洋客户，再识别")
+        customer_name_evidence = "清单客户文字或人工选择的研光/光洋客户"
+        matching = [sheet for sheet in nonempty if _is_location_order(sheet)]
+        unrecognized = [sheet.name for sheet in nonempty if sheet not in matching]
+        skipped.extend(unrecognized)
+        if unrecognized:
+            warnings.append("未按位置清单导入的工作表：" + "、".join(unrecognized))
+        rows, extra = _parse_location_order(matching, document_type)
+        warnings.extend(extra)
     elif document_type == "order":
         raise ExcelImportError("订单 Excel 模板未识别，请先进行列映射")
     elif "光洋" in all_text or any(

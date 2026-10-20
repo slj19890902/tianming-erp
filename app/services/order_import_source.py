@@ -85,6 +85,11 @@ def signed_source_lines(draft: dict) -> list[dict[str, Any]]:
                 "source_line_label": line_label or None,
                 "raw_line_hash": _digest(raw_lines) if raw_lines else None,
                 "recognized_line_hash": _digest(_line_values(item)),
+                **({"pick_list": {"location": item.get("source_location"),
+                     "stock_reference": item.get("source_stock_reference"),
+                     "original_quantity": item.get("quantity"),
+                     "original_code": item.get("raw_product_code")}}
+                   if draft.get("template") == "yg_gy_location_order_v1" else {}),
             }
         )
     return result
@@ -266,6 +271,7 @@ def attach(
         "integrity_status": context.claims.get("integrity_status"),
         "override_reasons": list(override_reasons),
         "line_count": len(context.signed_lines),
+        "source_template": context.claims.get("source_template"),
     }
     source = OrderImportSource(
         source_kind=context.source_kind,
@@ -291,6 +297,7 @@ def attach(
         submitted_hash = _digest(_line_values(submitted))
         recognized_hash = str(signed["recognized_line_hash"])
         line_summary = {
+            **({"pick_list": signed["pick_list"]} if signed.get("pick_list") is not None else {}),
             "client_line_id": (getattr(submitted, "client_line_id", None) or "").strip() or None,
             "manual_revision": submitted_hash != recognized_hash,
             "confirmed_product_id": getattr(submitted, "product_id", None),

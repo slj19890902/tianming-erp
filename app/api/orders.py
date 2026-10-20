@@ -272,7 +272,7 @@ from app.services.secure_uploads import (
     stored_file_metadata,
     temporary_token_file,
 )
-from app.services.excel_document_import import ExcelImportError, parse_excel_document
+from app.services.excel_document_import import ExcelImportError, PICK_LIST_TEMPLATE, parse_excel_document
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
@@ -911,6 +911,7 @@ def _encode_pdf_preview_safety_token(
         "source_name": str(draft.get("source_name") or ""),
         "source_hash": str(draft.get("file_hash") or ""),
         "source_format": str(draft.get("source_format") or "pdf"),
+        "source_template": draft.get("template"),
         "source_lines": signed_source_lines(draft),
         **states,
         "iat": now,
@@ -2494,7 +2495,10 @@ def _order_response(
             int(order.id),
         )
     business_projection = business_projection or {}
+    from app.services.order_early_pick import source_for_order
+    early_pick_available = db is not None and source_for_order(db, order.id) is not None
     data = {
+        "early_pick_available": early_pick_available,
         "id": order.id,
         **serialize_order_number_fields(order, display_registry),
         "group_key": _order_group_key(order),
@@ -4442,19 +4446,33 @@ def _order_import_preview(
     filename: str,
     digest: str,
     template_rules: list[dict],
+    expected_customer_code: str | None = None,
+    delivery_date: date | None = None,
 ) -> dict:
     if filename.lower().endswith(".pdf"):
         draft = _parse_order_pdf_preview(content, filename, template_rules)
     else:
         draft = _excel_order_draft(
             db,
-            parse_excel_document(content, filename, document_type="order"),
+            parse_excel_document(content, filename, document_type="order", expected_customer_code=expected_customer_code),
         )
+    if delivery_date is not None:
+        draft["delivery_date"] = delivery_date.isoformat()
     draft["file_hash"] = digest
-    return _finalize_pdf_preview_for_user(
-        _match_pdf_preview_for_user(db, draft, user),
-        user,
-    )
+    matched = _match_pdf_preview_for_user(db, draft, user)
+    if matched.get("template") == PICK_LIST_TEMPLATE and matched.get("matched_customer_id"):
+        from app.models.order_import_source import OrderImportSource
+        existing = db.scalar(select(OrderImportSource).where(
+            OrderImportSource.source_kind == "excel_upload", OrderImportSource.source_key == digest))
+        if existing is not None:
+            if existing.customer_id != matched["matched_customer_id"]:
+                raise ExcelImportError("该文件已导入其他客户，不能重复建单，请核对原订单")
+            original = db.get(Order, existing.order_id) if existing.order_id else None
+            matched.update(duplicate_status="duplicate_skipped",
+                duplicate_reason="该文件已保存过，请查看原订单，不要重复建单。",
+                duplicate_order_id=original.id if original else None,
+                duplicate_order_number=original.order_number if original else None)
+    return _finalize_pdf_preview_for_user(matched, user)
 
 
 def _customer_id_value(value: object) -> int | None:
@@ -4788,6 +4806,8 @@ def _excel_order_draft(db: Session, document) -> dict:
                 for cell in row.cells.values()
             ],
             "warnings": list(row.issues),
+            "source_location": row.source_location,
+            "source_stock_reference": row.source_stock_reference,
         }
         for row in document.rows
     ]
@@ -4816,17 +4836,28 @@ def _excel_order_draft(db: Session, document) -> dict:
         },
         "items": items,
         "warnings": list(document.warnings)
-        + (["未识别到客户订单号，保存前必须人工填写。"] if not document.customer_po else []),
+        + (["原表无客户单号，可留空；系统会生成订单号。"] if document.template == PICK_LIST_TEMPLATE else
+           (["未识别到客户订单号，保存前必须人工填写。"] if not document.customer_po else [])),
     }
 
 
 @router.post("/import-preview-batch")
 async def preview_order_import_batch(
     files: list[UploadFile] = File(...),
+    customer_id: int | None = Form(None),
+    delivery_date: date | None = Form(None),
     db: Session = Depends(get_db),
     user: User = Depends(can_create),
 ) -> dict:
     """Preview PDF and customer Excel orders through one guarded entry point."""
+
+    expected_customer_code = None
+    if customer_id is not None:
+        require_customer_access(customer_id, current_user=user, db=db)
+        selected_customer = db.get(Customer, customer_id)
+        if selected_customer is None or not selected_customer.is_active or selected_customer.status != "active":
+            raise HTTPException(422, "所选客户不可用")
+        expected_customer_code = selected_customer.customer_code
 
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传一个订单文件")
@@ -4870,6 +4901,8 @@ async def preview_order_import_batch(
                     filename=filename,
                     digest=digest,
                     template_rules=template_rules,
+                    expected_customer_code=expected_customer_code,
+                    delivery_date=delivery_date,
                 )
             )
         except (PdfParseError, ExcelImportError) as error:
@@ -4979,6 +5012,8 @@ def rematch_order_draft(
     ) and draft_source_hash != trusted_source_hash:
         raise _pdf_preview_token_error("PDF 预览 token 与草稿文件哈希不一致，请重新预览")
     trusted_draft = dict(payload.draft)
+    trusted_draft["template"] = trusted_claims.get("source_template")
+    trusted_draft["source_format"] = trusted_claims.get("source_format", "pdf")
     trusted_draft["source_name"] = trusted_claims["source_name"]
     trusted_draft["file_hash"] = trusted_claims["source_hash"]
     trusted_draft["recognition_status"] = trusted_claims["recognition_status"]
@@ -5013,6 +5048,8 @@ def rematch_order_draft(
             "integrity_status": trusted_claims["integrity_status"],
             "matched_customer_id": payload.customer_id,
             "source_lines": trusted_claims["source_lines"],
+            "source_template": trusted_claims.get("source_template"),
+            "source_format": trusted_claims.get("source_format", "pdf"),
         },
     )
 
@@ -6880,6 +6917,16 @@ def get_order_detail(
     return response
 
 
+@router.get("/{order_id}/early-pick")
+def get_order_early_pick(order_id: int, db: Session = Depends(get_db), user: User = Depends(can_read)):
+    from app.services.order_early_pick import build_early_pick
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(404, "订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
+    return build_early_pick(db, order)
+
+
 @router.get("/{order_id}/items/{item_id}/documents")
 def get_order_item_documents(
     order_id: int,
@@ -7545,6 +7592,8 @@ def _create_order_impl(
         user,
         observability=observability,
     )
+    if pdf_safety_claims.get("source_template") == PICK_LIST_TEMPLATE and payload.delivery_date is None:
+        raise HTTPException(422, "位置清单订单请填写要求交货日期")
     if observability is not None and pdf_safety_claims:
         observability["pdf_filename"] = _safe_pdf_log_filename(
             pdf_safety_claims.get("source_name")

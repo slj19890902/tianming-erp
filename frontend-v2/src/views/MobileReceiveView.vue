@@ -21,6 +21,8 @@ const mobile = useMobileStore(),
   tab = ref("pending"),
   pending = ref<Incoming[]>([]),
   received = ref<Incoming[]>([]),
+  receivedPage = ref(1),
+  receivedTotal = ref(0),
   loading = ref(false),
   error = ref(""),
   notice = ref("");
@@ -67,7 +69,7 @@ function requestKey(action: string, item: Incoming) {
   if (!key) { key = `${action}-${Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, "0")).join("")}`; sessionStorage.setItem(name, key); }
   return { name, key };
 }
-async function load() {
+async function load(nextPage = 1) {
   listController?.abort();
   listController = new AbortController();
   const current = listController;
@@ -76,11 +78,14 @@ async function load() {
   try {
     const [p, r] = await Promise.all([
       mobileApi.pending(current.signal),
-      mobileApi.received(current.signal),
+      mobileApi.received(current.signal, nextPage),
     ]);
     if (!current.signal.aborted && alive) {
       pending.value = p.items;
       received.value = r.items;
+      receivedTotal.value = r.total ?? r.items.length;
+      receivedPage.value = r.page ?? nextPage;
+      expanded.value = null;
     }
   } catch (e) {
     if (!current.signal.aborted && alive) error.value = safeMessage(e);
@@ -159,7 +164,7 @@ async function revert() {
     if (alive) busy.value = null;
   }
 }
-onMounted(load);
+onMounted(() => load());
 onBeforeUnmount(() => {
   alive = false;
   listController?.abort();
@@ -192,15 +197,16 @@ onBeforeUnmount(() => {
         class="m-icon-btn"
         aria-label="刷新收料"
         :disabled="loading || !!busy"
-        @click="load"
+        @click="load(tab === 'received' ? receivedPage : 1)"
       >
         <MobileIcon name="refresh" />
       </button>
     </div>
     <a v-if="canExecute" :href="backendUrl('/mobile/erp.html#incoming')" class="m-text-action">部分到货 / 选择入库位置</a>
+    <p v-if="tab === 'received'" class="m-received-range">近7天 · 共 {{ receivedTotal }} 条</p>
     <div v-if="notice" class="m-notice" role="status">{{ notice }}</div>
     <div v-if="error" class="m-status" role="alert">
-      {{ error }}<button :disabled="!!busy" @click="load">重试</button>
+      {{ error }}<button :disabled="!!busy" @click="load(tab === 'received' ? receivedPage : 1)">重试</button>
     </div>
     <div v-if="loading" class="m-empty" role="status">加载中…</div>
     <div v-else-if="!items.length && !error" class="m-empty">
@@ -332,6 +338,9 @@ onBeforeUnmount(() => {
         </button>
       </section>
     </article>
+    <nav v-if="tab === 'received' && receivedTotal > 20" class="m-pagination" aria-label="已收料分页">
+      <button :disabled="receivedPage <= 1 || loading || !!busy" @click="load(receivedPage - 1)">上一页</button><span>{{ receivedPage }} / {{ Math.ceil(receivedTotal / 20) }}</span><button :disabled="receivedPage * 20 >= receivedTotal || loading || !!busy" @click="load(receivedPage + 1)">下一页</button>
+    </nav>
     <MobileSheet v-if="undo" title="撤销收料" @close="!busy && (undo = null)"
       ><form @submit.prevent="revert">
         <label class="m-form-field"

@@ -4413,13 +4413,14 @@ def pending_items(
 def recently_received_items(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
+    days: Annotated[int, Query(ge=1, le=7)] = 1,
     page: Annotated[int | None, Query(ge=1)] = None,
     page_size: Annotated[int | None, Query(ge=1, le=100)] = None,
 ) -> dict:
     rows = _received_rows(
         db,
         user=user,
-        received_since=_utc_now() - timedelta(hours=24),
+        received_since=_utc_now() - timedelta(days=days),
     )
     if page is None and page_size is None:
         return {"items": [_incoming_row_response(row) for row in rows]}

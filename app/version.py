@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.691"
-APP_VERSION_NAME = "手机版六屏与正式接口关联"
+APP_VERSION = "v0.22.692"
+APP_VERSION_NAME = "手机成品尺寸匹配与全屏仓库地图"
 APP_BUILD_DATE = "2026-10-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6773,3 +6773,8 @@ APP_CHANGELOG = [*(f"v0.22.690：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["手机首页、现场查询、产品详情、认纸板、仓库地图及收料采用短码界面", "新旧手机入口、权限、预送货、收料实收记录与同源接口关联；保留原盘点及异常收料流程"]
 APP_VERIFICATION_STEPS = ["手机进入 /mobile/ 登录后查询产品并查看库存、工艺及图纸", "检查仓库地图和收料卡片，按实际业务操作并核对原记录"]
 APP_CHANGELOG = [*(f"v0.22.691：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.692：按成品大致尺寸辨认客户，仓库全屏并沿用原区域布局。
+APP_CHANGES = ["手机找产品按成品长宽及可选高度匹配，显示客户并按尺寸匹配度排名", "仓库全图撑满可用画面；区域沿用原手机版货架正视图、栈板俯视图", "手机已收料显示近7天记录，支持分页"]
+APP_VERIFICATION_STEPS = ["现场查询输入成品大致尺寸，核对客户及匹配度由高到低排列", "仓库全图点选货架区和栈板区，核对正视图、俯视图并返回全图", "已收料核对近7天记录，多于20条时翻页查看"]
+APP_CHANGELOG = [*(f"v0.22.692：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -19,7 +19,10 @@ const tab = ref("product"),
   query = ref(String(route.query.q || "")),
   length = ref(String(route.query.length || "")),
   width = ref(String(route.query.width || "")),
-  tolerance = ref(5);
+  height = ref(String(route.query.height || "")),
+  productTolerance = ref(20),
+  tolerance = ref(5),
+  searchMode = ref<"keyword" | "dimensions">("keyword");
 const orderItems = ref<Unfulfilled[]>([]);
 const products = ref<Product[]>([]),
   locations = ref<
@@ -60,8 +63,9 @@ async function loadOrders(nextPage = 1) {
     if (controller === current) loading.value = false;
   }
 }
-async function search(nextPage = 1) {
-  if (!query.value.trim()) return;
+async function search(nextPage = 1, mode = searchMode.value) {
+  if (tab.value === "location" || mode === "keyword") { if (!query.value.trim()) return; }
+  searchMode.value = mode;
   controller?.abort();
   controller = new AbortController();
   const current = controller;
@@ -84,9 +88,10 @@ async function search(nextPage = 1) {
     } else {
       const result = await mobileApi.products(
         new URLSearchParams({
-          q: query.value.trim(),
-          page: String(nextPage),
-          page_size: "12",
+          ...(mode === "dimensions" ? { dimension_basis: "finished", sort_by: "dimension_match",
+            length: length.value, width: width.value, ...(height.value ? { height: height.value } : {}),
+            tolerance_mm: String(productTolerance.value) } : { q: query.value.trim() }),
+          page: String(nextPage), page_size: "12",
         }),
         current.signal,
       );
@@ -103,6 +108,15 @@ async function search(nextPage = 1) {
   }
 }
 function findDimensions() {
+  if (tab.value === "product") {
+    controller?.abort();
+    loading.value = false;
+    if (![length.value, width.value].every(v => Number.isFinite(Number(v)) && Number(v) > 0) ||
+        (height.value && !(Number.isFinite(Number(height.value)) && Number(height.value) > 0))) {
+      error.value = "请输入有效成品长宽，高可留空"; return;
+    }
+    void search(1, "dimensions"); return;
+  }
   if (!(Number(length.value) > 0 && Number(width.value) > 0)) {
     error.value = "请输入有效长宽";
     return;
@@ -133,7 +147,7 @@ function scanned(value: string) {
     return;
   }
   query.value = value.trim();
-  void search();
+  void search(1, "keyword");
 }
 watch(tab, () => {
   controller?.abort();
@@ -143,7 +157,7 @@ watch(tab, () => {
   searched.value = false;
 });
 if (route.query.unfulfilled === "1") void loadOrders();
-else if (query.value) void search();
+else if (query.value) void search(1, "keyword");
 onBeforeUnmount(() => controller?.abort());
 </script>
 <template>
@@ -199,9 +213,40 @@ onBeforeUnmount(() => controller?.abort());
         </button>
       </div>
       <form
+        v-if="tab !== 'location'"
+        class="m-card m-sizecard"
+        @submit.prevent="findDimensions"
+      >
+        <h2><MobileIcon name="ruler" />{{ tab === "product" ? "成品大致尺寸" : "片料尺寸" }}</h2>
+        <div :class="['m-sizeinputs', { 'm-carton-inputs': tab === 'product' }]">
+          <label
+            >长<input
+              v-model="length"
+              inputmode="decimal"
+              type="number"
+              min="0.01"
+              step="0.01"
+              required
+              :aria-label="tab === 'product' ? '成品长' : '纸板长'" /></label
+          ><span>×</span
+          ><label
+            >宽<input
+              v-model="width"
+              inputmode="decimal"
+              type="number"
+              min="0.01"
+              step="0.01"
+              required
+              :aria-label="tab === 'product' ? '成品宽' : '纸板宽'" /></label
+          ><label v-if="tab === 'product'">高<input v-model="height" inputmode="decimal" type="number" min="0.01" step="0.01" placeholder="可留空" aria-label="成品高" /></label><span>mm</span>
+        </div>
+        <label v-if="tab === 'product'" class="m-size-tolerance">允许误差 ± <select v-model="productTolerance" aria-label="成品尺寸误差"><option v-for="value in [5, 10, 20, 50, 100]" :key="value" :value="value">{{ value }} mm</option></select></label>
+        <button class="m-primary m-wide" :disabled="loading">{{ tab === 'product' ? '找产品' : '认纸板' }}</button>
+      </form>
+      <form
         v-if="tab !== 'board'"
         class="m-searchrow"
-        @submit.prevent="search()"
+        @submit.prevent="search(1, 'keyword')"
       >
         <input
           v-model="query"
@@ -217,36 +262,6 @@ onBeforeUnmount(() => controller?.abort());
         >
           <MobileIcon name="scan" />
         </button>
-      </form>
-      <form
-        v-if="tab !== 'location'"
-        class="m-card m-sizecard"
-        @submit.prevent="findDimensions"
-      >
-        <h2><MobileIcon name="ruler" />按尺寸找</h2>
-        <div class="m-sizeinputs">
-          <label
-            >长<input
-              v-model="length"
-              inputmode="decimal"
-              type="number"
-              min="0.01"
-              step="0.01"
-              required
-              aria-label="纸板长" /></label
-          ><span>×</span
-          ><label
-            >宽<input
-              v-model="width"
-              inputmode="decimal"
-              type="number"
-              min="0.01"
-              step="0.01"
-              required
-              aria-label="纸板宽" /></label
-          ><span>mm</span>
-        </div>
-        <button class="m-primary m-wide">认纸板</button>
       </form>
       <div v-if="error" class="m-status" role="alert">{{ error }}</div>
       <div v-else-if="loading" class="m-empty" role="status">查询中…</div>

@@ -1885,7 +1885,7 @@
         const current = () => generation === state.fieldMapGeneration && actor === warehouseActor() && state.activePage === "warehouse" && !byId("warehouseMapLayer").hidden && !state.warehouseAuthPending;
         state.warehouseMapOrigin = preferred.origin === "search" ? "search" : "map";
         byId("warehouseMapLayer").hidden = false;
-        byId("closeWarehouseMap").textContent = state.fieldSourceActive ? "返回现场查询" : "返回仓库搜索";
+        byId("closeWarehouseMap").textContent = new URLSearchParams(window.location.search).get("return_mobile_map") === "1" ? "返回全图" : state.fieldSourceActive ? "返回现场查询" : "返回仓库搜索";
         byId("warehouseDiscrepancyListButton").hidden = !state.warehouseMapCanCorrect;
         if (!state.warehouseMapFloors.length) {
           showStatus("warehouseMapState", "正在读取仓库楼层与区域…", "");
@@ -2823,9 +2823,14 @@
         state.warehouseLocationPage = false;
         byId("warehouseAreaOverview").hidden = false;
         byId("warehouseMapGoods").hidden = true;
-        byId("closeWarehouseMap").textContent = state.fieldSourceActive ? "返回现场查询" : "返回仓库搜索";
+        byId("closeWarehouseMap").textContent = new URLSearchParams(window.location.search).get("return_mobile_map") === "1" ? "返回全图" : state.fieldSourceActive ? "返回现场查询" : "返回仓库搜索";
       }
 
+      function returnMobileFullMap() {
+        if (new URLSearchParams(window.location.search).get("return_mobile_map") !== "1") return false;
+        window.location.assign(`/frontend-v2/mobile/warehouse?${new URLSearchParams({floor: state.warehouseMapFloor})}`);
+        return true;
+      }
       function closeWarehouseMap() {
         if (state.warehouseLocationPage) {
           state.warehouseMapFocusLocationId = null;
@@ -2833,6 +2838,7 @@
           byId("warehouseMapLayer").querySelector(".warehouse-map-body").scrollTop = state.warehouseAreaScrollTop || 0;
           return;
         }
+        if (returnMobileFullMap()) return;
         state.warehouseMapController?.abort();
         state.warehouseMapGeneration += 1; state.fieldMapGeneration++; fieldIntent();
         byId("warehouseMapLayer").hidden = true;
@@ -3435,7 +3441,7 @@
       document.addEventListener("click", event => { if (state.warehouseAuthPending && event.target.closest?.("#warehouseMapLayer")) fieldIntent(); }, true);
       byId("warehouseMapButton").addEventListener("click", () => openWarehouseMap());
       byId("closeWarehouseMap").addEventListener("click", closeWarehouseMap);
-      byId("warehouseFloorOverviewButton").addEventListener("click", () => { state.warehouseMapArea = ""; renderWarehouseMapSelectors(); loadWarehouseFloorOverview(); });
+      byId("warehouseFloorOverviewButton").addEventListener("click", () => { if (returnMobileFullMap()) return; state.warehouseMapArea = ""; renderWarehouseMapSelectors(); loadWarehouseFloorOverview(); });
       byId("warehouseMapGroup").addEventListener("change", () => { state.warehouseMapGroup = byId("warehouseMapGroup").value; state.warehouseMapArea = ""; renderWarehouseMapSelectors(); loadWarehouseFloorOverview(); });
       byId("warehouseMapFloor").addEventListener("change", () => {
         state.warehouseMapFocusLocationId = null;

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.692"
-APP_VERSION_NAME = "手机成品尺寸匹配与全屏仓库地图"
+APP_VERSION = "v0.22.693"
+APP_VERSION_NAME = "外购现有库存送货候选修复"
 APP_BUILD_DATE = "2026-10-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6778,3 +6778,8 @@ APP_CHANGELOG = [*(f"v0.22.691：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["手机找产品按成品长宽及可选高度匹配，显示客户并按尺寸匹配度排名", "仓库全图撑满可用画面；区域沿用原手机版货架正视图、栈板俯视图", "手机已收料显示近7天记录，支持分页"]
 APP_VERIFICATION_STEPS = ["现场查询输入成品大致尺寸，核对客户及匹配度由高到低排列", "仓库全图点选货架区和栈板区，核对正视图、俯视图并返回全图", "已收料核对近7天记录，多于20条时翻页查看"]
 APP_CHANGELOG = [*(f"v0.22.692：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.693：外购产品采用现有库存后可直接选择送货。
+APP_CHANGES = ["外购产品采用已核实的现有成品库存后，待送货列表、搜索与开单选择统一按有效预占计算可送数量。", "保留实物与客户身份、单位换算、附属组件、权限及取消释放保护，防止重复扣库。"]
+APP_VERIFICATION_STEPS = ["刷新送货页面，搜索 POORD041914，核对瓦楞垫板 Z.004.000006 可选数量600只。", "按实际业务选择产品，核对送货单数量与打印内容；不需要重新导入订单或再次抵扣库存。"]
+APP_CHANGELOG = [*(f"v0.22.693：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

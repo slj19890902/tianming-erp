@@ -14,7 +14,7 @@ BASE=Path('/Library/TianmingERP')
 ROOT=BASE/'instance'
 DEST=Path('/Library/TianmingERP-LocalMaintenance')
 POINTS=Path('/Library/TianmingERP-OnlinePoints')
-SOURCE=Path('/Users/kimiyf/ERP-Migration/storage-autoreclaim-20261017')
+SOURCE=Path('/Users/kimiyf/ERP-Migration/storage200g-20261020')
 SOURCES={'launcher.py':SOURCE/'scripts/local_maintenance/launcher.py',
          'native.py':SOURCE/'scripts/local_maintenance/native.py',
          'file_points.py':SOURCE/'desktop_assistant/incremental_file_points.py',

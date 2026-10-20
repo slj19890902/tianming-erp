@@ -161,7 +161,9 @@ def delivery_receipts(manifests, current, *, now):
                     or fs.st_size > 8 * 1024**2):
                 continue
             raw=final.read_bytes();record=json.loads(raw)
-            h=(record.get('transaction') or {}).get('target')
+            if not isinstance(record,dict) or not isinstance(record.get('transaction'),dict):
+                continue
+            h=record['transaction'].get('target')
             if h not in manifests:
                 continue
             manifest=manifests[h]

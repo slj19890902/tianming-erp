@@ -257,6 +257,25 @@ def sealed_test_record(record, job):
             and bool(IDENTITY.fullmatch(record['copy_identity']['fingerprint'])))
 
 
+def activation_program_dependencies(record, body, current):
+    """Activation approval identities remain native runtime dependencies.
+
+    mac_factory_runtime._configuration checks these historical approvals on
+    every new Manager environment, even when none is the current program.
+    Malformed authority must stop reclamation, never yield an empty set.
+    """
+    try:
+        request = record['request']
+        required = ({request['execution_package_sha256'], request['monitor_package_sha256'],
+                     body['preparation']['restore']['restore_package_sha256']} if current else
+                    {request['package_sha256']})
+    except (KeyError, TypeError) as error:
+        raise ValueError('Activation program dependencies are incomplete') from error
+    if any(not isinstance(h, str) or not IDENTITY.fullmatch(h) for h in required):
+        raise ValueError('Activation program identity is invalid')
+    return required
+
+
 def program_retention_sets(state, manifests, *, runtime_dependencies=(), archive_dependencies=(), point_programs=()):
     """Historical proof hashes preserve originals, not additional runtime trees."""
     originals=protected_programs(state,manifests,

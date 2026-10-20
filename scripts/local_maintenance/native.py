@@ -655,6 +655,11 @@ def root_cleanup():
             for name in ('system-service.json','factory-activation.json','current-mac-publication.json'):
                 p=BASE/name
                 if p.is_file():extra.update(re.findall('[0-9a-f]{64}',p.read_text()))
+            activation=BASE/'factory-activation.json'
+            if os.path.lexists(activation):
+                from desktop_assistant.mac_factory_runtime import _activation
+                value,body,current=_activation(publication.read_record(activation))
+                runtime_extra.update(policy.activation_program_dependencies(value,body,current))
             for value in processes:
                 runtime_extra.update(re.findall(r'/Library/TianmingERP/published/([0-9a-f]{64})', value))
             extra.update(runtime_extra)

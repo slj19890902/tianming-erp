@@ -234,3 +234,18 @@ def test_release_state_changes_trigger_cleanup_but_not_extra_backups():
     assert definition['KeepAlive']=={'SuccessfulExit':False}
     assert definition['ThrottleInterval']==300
     assert 'WatchPaths' not in installer.plist_for('backup')
+
+
+def test_activation_approvals_retain_registry_slots_and_complete_expansions():
+    current,execution,monitor,restore,old=('a'*64,'b'*64,'c'*64,'d'*64,'e'*64)
+    record={'request':{'execution_package_sha256':execution,'monitor_package_sha256':monitor}}
+    body={'preparation':{'restore':{'restore_package_sha256':restore}}}
+    required=p.activation_program_dependencies(record,body,True)
+    assert required=={execution,monitor,restore}
+    originals,expansions=p.program_retention_sets({'current':current},{},
+        runtime_dependencies=required,archive_dependencies=[old,*required])
+    assert {current,execution,monitor,restore} <= expansions
+    assert old in originals and old not in expansions
+    assert p.activation_program_dependencies({'request':{'package_sha256':execution}},{},False)=={execution}
+    with pytest.raises(ValueError):p.activation_program_dependencies(record,{},True)
+    with pytest.raises(ValueError):p.activation_program_dependencies({'request':{'package_sha256':'bad'}},{},False)

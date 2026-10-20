@@ -9,7 +9,7 @@ from test_p1_40a_packaging_masterdata import _external_payload
 from tests.test_p1_81_receipt_purpose_flow import _seed_material_and_staging, _p181_published_map_identity
 
 
-def prepare(app, client, ratio='1'):
+def prepare(app, client, ratio='1', order_quantity=1000):
     ids = app.state.fixture
     _login(client, 'p1-40a-admin')
     product = _external_payload(ids, candidates=[{'external_product_id':ids['CG-870-A'], 'is_default':True}])
@@ -18,7 +18,7 @@ def prepare(app, client, ratio='1'):
     assert p.status_code == 201, p.text
     _seed_price(app, ids['CG-870-A'])
     payload = _order_payload_for(p.json()['id'], ids['customer_a'])
-    payload['items'][0]['quantity'] = 1000
+    payload['items'][0]['quantity'] = order_quantity
     payload['items'][0]['external_packaging_purchase_quantity_basis'] = '1'
     o = client.post('/api/orders', json=payload)
     assert o.status_code == 201, o.text
@@ -394,7 +394,7 @@ def test_existing_physical_stock_reserves_customer_quantity_for_new_order(routin
             assert (lot.quantity_available, lot.quantity_reserved) == (stock, 0)
 
 
-@pytest.mark.parametrize('receipts,expected_customer', [([199], 99), ([1, 1], 1), ([1, 2], 1)])
+@pytest.mark.parametrize('receipts,expected_customer', [([199], 99), ([1, 1], 1), ([1, 2], 1), ([400], 200)])
 def test_new_order_plan_matches_physical_stock_draft_preview(routing_app, receipts, expected_customer):
     from app.core.time_contract import beijing_today
     from app.api.deliveries import router as delivery_router, pick_router
@@ -449,6 +449,23 @@ def test_new_order_plan_matches_physical_stock_draft_preview(routing_app, receip
             assert not managed(db, item)
             lots[0].finished_detail.physical_basis_json = original_identity
             assert managed(db, item)
+        # Adopted stock has no purchase/receipt on the new order. It must be
+        # discoverable before the user can reach the already-working dispatch.
+        for endpoint, params in [
+            ('/api/deliveries/pending_items', {}),
+            ('/api/deliveries/pending-items/search', {
+                'customer_id': routing_app.state.fixture['customer_a'],
+                'order_item_id': new_item_id}),
+            ('/api/deliveries/selection-items', {
+                'customer_id': routing_app.state.fixture['customer_a'],
+                'include_inventory': False}),
+        ]:
+            listed = client.get(endpoint, params=params)
+            assert listed.status_code == 200, listed.text
+            rows = [row for row in listed.json()['items'] if row.get('order_item_id') == new_item_id]
+            assert len(rows) == 1, (endpoint, listed.json())
+            assert rows[0]['remaining_quantity'] == expected_customer
+            assert rows[0]['deliverable_quantity'] == expected_customer
         delivery = client.post('/api/deliveries', json={
             'customer_id': routing_app.state.fixture['customer_a'], 'delivery_date': beijing_today().isoformat(),
             'lines': [{'order_item_id': new_item_id, 'delivered_quantity': expected_customer}]})
@@ -467,9 +484,11 @@ def test_new_order_plan_matches_physical_stock_draft_preview(routing_app, receip
                                json={'pick_status': 'picked'})
         assert confirmed.status_code == 200, confirmed.text
         assert client.post(f"/api/delivery-picks/{pick.json()['id']}/submit").status_code == 200
-        dispatched = client.put(f'/api/deliveries/{delivery_id}/dispatch')
+        from tests.test_delivery_dispatch_commands import command
+        dispatch_body = command(client, delivery_id, 'adopted-stock-dispatch')
+        dispatched = client.put(f'/api/deliveries/{delivery_id}/dispatch', json=dispatch_body)
         assert dispatched.status_code == 200, dispatched.text
-        client.put(f'/api/deliveries/{delivery_id}/dispatch')
+        assert client.put(f'/api/deliveries/{delivery_id}/dispatch', json=dispatch_body).json() == dispatched.json()
         reprint = client.get(f'/api/deliveries/{delivery_id}/print')
         assert reprint.status_code == 200, reprint.text
         assert reprint.json()['items'][0]['quantity'] == expected_customer

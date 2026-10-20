@@ -3665,7 +3665,7 @@
                   <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
                   <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="runExplicitPageListLoad('products')">重试</button></div>
                   <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table data-viewport-page="products"><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>单位</th><th>分类</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td>{{ productUnitLabel(row) }}<span v-if="row.unit_needs_review" class="status orange">单位待完善</span></td><td :title="row.classification?.legacy_name" style="white-space:nowrap">{{ row.classification?.label || "待核对" }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '报料资料完整' : '报料资料待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="(canRequisition || canEditStockAlerts) && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table data-viewport-page="products"><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>单位</th><th>分类</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td>{{ productUnitLabel(row) }}<span v-if="row.unit_needs_review" class="status orange">单位待完善</span></td><td :title="row.classification?.legacy_name" style="white-space:nowrap">{{ row.classification?.label || "待核对" }}</td><td style="min-width:160px;max-width:320px;white-space:pre-wrap;overflow-wrap:anywhere">{{ row.customer_specification == null ? spec(row) : row.customer_specification }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '报料资料完整' : '报料资料待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="(canRequisition || canEditStockAlerts) && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <data-panel v-else-if="productTab === 'suppliers'" :empty="false">
@@ -6840,6 +6840,12 @@
                 </div>
                 <div v-if="!['其他','BOM组合'].includes(productForm.box_style)" class="field product-supply-compact"><label>结构</label><select class="select" v-model="productForm.supply_mode"><option value="corrugated_production">纸板生产</option><option value="mixed_bom">纸板＋外购组件</option></select></div>
               </div>
+              <div class="field" style="grid-column:1/-1">
+                <label>客户规格原文</label>
+                <textarea class="input" rows="2" maxlength="1000" v-model="productForm.customer_specification" placeholder="可填写客户订单中的规格与包装说明"></textarea>
+                <div class="toolbar"><button type="button" class="btn small" @click="productForm.customer_specification=null">使用产品尺寸</button><button type="button" class="btn small" @click="productForm.customer_specification=''">送货规格留空</button></div>
+                <div class="muted">客户送货规格可单独填写，不改变下方生产尺寸。{{ productForm.customer_specification == null ? "当前使用产品尺寸。" : productForm.customer_specification === "" ? "当前送货规格留空。" : "" }}</div>
+              </div>
               <details class="panel" style="grid-column:1/-1;padding:10px" :open="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">
                 <summary>客户送货资料 · 图号／类别／型番</summary>
                 <p class="muted">维护客户图号、类别和型番，保存后刷新送货单即可显示最新资料。编号前的0会保留；图片附件在“图片/图纸”维护。</p>
@@ -8910,7 +8916,7 @@
                   </div>
                   <div class="toolbar-group" style="justify-content:flex-end"><button class="btn" type="button" @click="customerChargeForm.visible=false">取消</button><button class="btn primary" type="button" :disabled="customerChargeForm.saving" @click="saveCustomerCharge">{{ customerChargeForm.saving ? '保存中…' : '保存收费草稿' }}</button></div>
                 </div>
-                <table v-if="orderCustomerCharges.length"><thead><tr><th>收费</th><th>数量/单位</th><th class="sensitive-price">应收</th><th>归属月份</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="charge in orderCustomerCharges" :key="charge.id"><td><strong>{{ charge.display_name }}</strong><div class="muted">{{ customerChargeTypeText(charge.charge_type) }}<span v-if="charge.historical_similar_charge_count"> · 已有 {{ charge.historical_similar_charge_count }} 条相似历史收费，请人工核对</span></div></td><td>{{ charge.quantity }} {{ charge.unit }}</td><td class="sensitive-price">¥ {{ money(charge.amount) }}</td><td>{{ charge.reconciliation_month || '待确认' }}</td><td><span :class="['status',charge.status==='confirmed'?'green':charge.status==='cancelled'?'gray':'orange']">{{ charge.status==='confirmed'?'已确认':charge.status==='cancelled'?'已作废':'草稿' }}</span><div v-if="charge.locked" class="muted">已进入对账单</div></td><td class="toolbar-group"><button v-if="canManageCustomerCharges && charge.status==='draft' && !charge.locked" class="btn small" @click="openCustomerChargeForm(charge)">编辑</button><button v-if="canConfirmCustomerCharges && charge.status==='draft' && !charge.locked" class="btn small success" @click="confirmCustomerCharge(charge)">确认月份</button><button v-if="canConfirmCustomerCharges && charge.status==='confirmed' && !charge.locked" class="btn small" @click="cancelCustomerChargeConfirmation(charge)">取消确认</button><button v-if="canManageCustomerCharges && charge.status!=='cancelled' && !charge.locked" class="btn small danger" @click="voidCustomerCharge(charge)">作废</button></td></tr></tbody></table>
+                <table v-if="orderCustomerCharges.length"><thead><tr><th>收费</th><th>数量/单位</th><th class="sensitive-price">应收</th><th>归属月份</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="charge in orderCustomerCharges" :key="charge.id"><td><strong>{{ charge.display_name }}</strong><div class="muted">{{ charge.source_label || customerChargeTypeText(charge.charge_type) }}<span v-if="charge.historical_similar_charge_count"> · 已有 {{ charge.historical_similar_charge_count }} 条相似历史收费，请人工核对</span></div></td><td>{{ charge.quantity }} {{ charge.unit }}</td><td class="sensitive-price">¥ {{ money(charge.amount) }}</td><td>{{ charge.reconciliation_month || '待确认' }}</td><td><span :class="['status',charge.status==='confirmed'?'green':charge.status==='cancelled'?'gray':'orange']">{{ charge.status==='confirmed'?'已确认':charge.status==='cancelled'?'已作废':'草稿' }}</span><div v-if="charge.locked" class="muted">{{ charge.statement_id ? '已进入对账单' : '历史来源已冻结' }}</div></td><td class="toolbar-group"><button v-if="canManageCustomerCharges && charge.status==='draft' && !charge.locked" class="btn small" @click="openCustomerChargeForm(charge)">编辑</button><button v-if="canConfirmCustomerCharges && charge.status==='draft' && !charge.locked" class="btn small success" @click="confirmCustomerCharge(charge)">确认月份</button><button v-if="canConfirmCustomerCharges && charge.status==='confirmed' && !charge.locked" class="btn small" @click="cancelCustomerChargeConfirmation(charge)">取消确认</button><button v-if="canManageCustomerCharges && charge.status!=='cancelled' && !charge.locked" class="btn small danger" @click="voidCustomerCharge(charge)">作废</button></td></tr></tbody></table>
                 <div v-else class="empty">本订单暂无客户附加收费。</div>
               </div>
               <div v-if="orderDetail.items.some(hasExternalPackagingRequirements)" class="external-packaging-order-panel">
@@ -9670,7 +9676,7 @@
 </div></div></td></tr>
                 </template>
               </tbody></table>
-              <div v-if="pendingStatementCharges.length" style="margin-top:12px"><div class="section-title">已确认客户附加收费</div><table><thead><tr><th>选择</th><th>客户单号</th><th>收费名称</th><th>数量/单位</th><th class="sensitive-price">应收金额</th></tr></thead><tbody><tr v-for="charge in pendingStatementCharges" :key="`statement-charge-${charge.id}`"><td><input type="checkbox" v-model="statementForm.selectedCharges[charge.id]" /></td><td><order-reference :row="charge"></order-reference></td><td>{{ charge.display_name }}<div class="muted">{{ customerChargeTypeText(charge.charge_type) }}</div></td><td>{{ charge.quantity }} {{ charge.unit }}</td><td class="sensitive-price">¥ {{ financeNumber(charge.amount) }}</td></tr></tbody></table></div>
+              <div v-if="pendingStatementCharges.length" style="margin-top:12px"><div class="section-title">已确认客户附加收费</div><table><thead><tr><th>选择</th><th>客户单号</th><th>收费名称</th><th>数量/单位</th><th class="sensitive-price">应收金额</th></tr></thead><tbody><tr v-for="charge in pendingStatementCharges" :key="`statement-charge-${charge.id}`"><td><input type="checkbox" v-model="statementForm.selectedCharges[charge.id]" /></td><td><order-reference :row="charge"></order-reference></td><td>{{ charge.display_name }}<div class="muted">{{ charge.source_label || customerChargeTypeText(charge.charge_type) }}</div></td><td>{{ charge.quantity }} {{ charge.unit }}</td><td class="sensitive-price">¥ {{ financeNumber(charge.amount) }}</td></tr></tbody></table></div>
               <div v-if="statementForm.customer_id && !pendingStatements.length && !pendingStatementCharges.length" class="empty">该客户当前月份暂无可生成对账单的送货明细或附加收费。</div>
               <div v-else-if="!statementForm.customer_id && statementCustomers.length" class="empty">请先选择客户，再查看可对账明细。</div>
             </div>
@@ -9732,7 +9738,7 @@
                 <tbody>
                   <tr v-for="item in statementDetail.items.filter(item=>!statementEditSourceCustomerId || Number(item.source_customer_id)===Number(statementEditSourceCustomerId))" :key="item.statement_item_id">
                     <td>{{ item.source_customer_name || '-' }}</td>
-                    <td>{{ item.source_type==='customer_charge' ? '-' : item.delivery_date || item.actual_received_date }}</td>
+                    <td>{{ item.source_type==='customer_charge' && item.source_kind!=='historical_delivery' ? '-' : item.delivery_date || item.actual_received_date }}</td>
                     <td>{{ item.delivery_number || '-' }}</td>
                     <td><order-reference :row="item"></order-reference></td>
                     <td>{{ item.product_code || '-' }}</td>
@@ -10557,7 +10563,7 @@
       const blankProduct = () => ({
         id: null, version: null, customer_id: null, product_code: "", customer_material_code: "",
         product_name: "", material_id: null, legacy_material_text: null,
-        customer_drawing_number:null, customer_category:null, customer_model:null,
+        customer_drawing_number:null, customer_category:null, customer_model:null, customer_specification:null,
         length_mm: null, width_mm: null, height_mm: null, box_category: "normal",
         box_style: "", print_content: "无印刷", printing_colors:"",
         _printing_situation: "无印刷", _printing_colors: [], _printing_colors_original_count: 0, _printing_colors_touched: false,
@@ -13067,7 +13073,7 @@
                 label:"常用箱", api:"products", formKey:"productForm", collection:"products",
                 fields:[
                   ["customer_id","客户"], ["product_code","存货编码"], ["customer_material_code","客户料号"],
-                  ["customer_drawing_number","客户图号"], ["customer_category","客户类别"], ["customer_model","型番"],
+                  ["customer_drawing_number","客户图号"], ["customer_category","客户类别"], ["customer_model","型番"], ["customer_specification","客户规格原文"],
                   ["product_name","产品名称"], ["box_style","箱型"], ["supply_mode","供货方式"],
                   ["external_packaging_category_code","外购包材类别"],
                   ["external_packaging_specification_summary","外购客户规格"],
@@ -13124,7 +13130,7 @@
             this.masterChangeConfirm = blankMasterChangeConfirm();
           },
           masterComparableValue(entity, field, value) {
-            if (entity === "product" && ["customer_drawing_number","customer_category","customer_model","customer_product_name","customer_drawing_display"].includes(field)) return value == null ? null : String(value).trim();
+            if (entity === "product" && ["customer_drawing_number","customer_category","customer_model","customer_product_name","customer_drawing_display","customer_specification"].includes(field)) return value == null ? null : String(value).trim();
             if (Array.isArray(value)) return value.map(item => String(item || "").trim()).filter(Boolean).sort();
             if (value === null || value === undefined || value === "") return "";
             if (typeof value === "boolean") return value;
@@ -13152,7 +13158,7 @@
             return String(value).trim();
           },
           masterDisplayValue(entity, field, value) {
-            if (entity === "product" && ["customer_drawing_number","customer_category","customer_model","customer_product_name","customer_drawing_display"].includes(field) && (value == null || value === "")) return value == null ? "未维护" : "已明确留空";
+            if (entity === "product" && ["customer_drawing_number","customer_category","customer_model","customer_product_name","customer_drawing_display","customer_specification"].includes(field) && (value == null || value === "")) return value == null ? "未维护" : "已明确留空";
             if (value === null || value === undefined || value === "") return "（空）";
             if (Array.isArray(value)) return value.length ? value.join("、") : "（空）";
             if (typeof value === "object") return JSON.stringify(value);
@@ -14438,6 +14444,9 @@
             const dimensions = [row.length_mm,row.width_mm];
             if (row.height_mm !== null && row.height_mm !== undefined && Number(row.height_mm) > 0) dimensions.push(row.height_mm);
             return `${dimensions.map(fmt).join("×")}mm`;
+          },
+          customerProductSpecification(row) {
+            return row?.customer_specification == null ? this.spec(row) : String(row.customer_specification);
           },
           orderSpecificationText(value, emptyValue = "-") {
             const text = String(value ?? "").replace(/[（(]\s*单片尺寸未登记\s*[）)]|单片尺寸未登记/g, "").trim();
@@ -30212,7 +30221,7 @@
             return {
               customer_id: f.customer_id, product_code: f.product_code, unit: f.unit,
               customer_material_code: f.customer_material_code, product_name: f.product_name,
-              customer_drawing_number:f.customer_drawing_number, customer_category:f.customer_category, customer_model:f.customer_model,
+              customer_drawing_number:f.customer_drawing_number, customer_category:f.customer_category, customer_model:f.customer_model, customer_specification:f.customer_specification,
               material_id: f.material_id, box_category: f.box_category, box_style: f.box_style,
               supply_mode: f.supply_mode,
               external_packaging_category_code: f.external_packaging_category_code,
@@ -33865,7 +33874,7 @@
               try {
                 const { data } = await axios.get(`/api/master/products/${item.matched_product_id}`);
                 item.product_name = data.product_name || "";
-                 item.specification = this.spec(data) !== "-" ? this.orderSpecificationText(this.spec(data), "") : this.orderSpecificationText(item.raw_spec_model, "");
+                 item.specification = data.customer_specification != null ? this.customerProductSpecification(data) : this.spec(data) !== "-" ? this.orderSpecificationText(this.spec(data), "") : this.orderSpecificationText(item.raw_spec_model, "");
                 item.layer_count = data.layer_count || null;
                 item.flute_type = data.flute_type || null;
                 item.material_base_code = (data.material_code || "").split("-")[0];
@@ -34830,7 +34839,7 @@
               product_code: product.product_code || "", product_name: product.product_name || "",
               material_id: product.material_id || null,
               material: product.material_code || this.materialName(product.material_id, product.legacy_material_text),
-              specification: this.orderSpecificationText(this.spec(product), ""), production_notes: product.production_notes || "",
+              specification: this.orderSpecificationText(this.customerProductSpecification(product), ""), production_notes: product.production_notes || "",
               _layer_filter: product.layer_count || null, _flute_filter: product.flute_type || null,
               _material_supplier: "", quantity: sets * perSet, unit_price: this.unitPrice(product.sale_unit_price),
               cost_status: "pending", estimated_cost: null, _from_product: true,
@@ -34841,7 +34850,7 @@
               temp_drawing_preview_url: null, drawing_save_option: "order_only",
               client_line_id: createIdempotencyKey(), _inventory: this.newOrderInventoryState(),
               _inventory_product: product, order_parent_inventory_eligible:product.order_parent_inventory_eligible,
-              _original_product: { specification: this.orderSpecificationText(this.spec(product), ""), sale_unit_price: product.sale_unit_price, layer_count: product.layer_count, flute_type: product.flute_type, version: product.version },
+              _original_product: { specification: this.orderSpecificationText(this.customerProductSpecification(product), ""), sale_unit_price: product.sale_unit_price, layer_count: product.layer_count, flute_type: product.flute_type, version: product.version },
               combination_mode_snapshot: "component_priced", combination_role: "priced_component",
               composite_fulfillment_mode_snapshot: "component_delivery",
               combination_group_key: groupKey, combination_parent_product_id: parent.id,
@@ -35029,7 +35038,7 @@
             item.external_packaging_purchase_quantity_basis = data.external_packaging_default_purchase_quantity_basis ?? null;
             item.material_id = data.material_id || null;
             item.material = data.material_code || this.materialName(data.material_id, data.legacy_material_text);
-            item.specification = this.orderSpecificationText(this.spec(data), "");
+            item.specification = this.orderSpecificationText(this.customerProductSpecification(data), "");
             item.production_notes = data.production_notes || "";
             item.unit_price = this.unitPrice(data.sale_unit_price);
             // v0.19.2-B: 常用箱自动带出层数/楞型/材质快照，锁定不允许直接修改
@@ -35057,7 +35066,7 @@
             if (!current()) return;
             item._common_box_readiness = this.commonBoxReadiness(data);
             // 保存原始常用箱字段，用于提交时比对是否需要同步
-            item._original_product = { specification: this.orderSpecificationText(this.spec(data), ""), sale_unit_price: data.sale_unit_price, layer_count: data.layer_count, flute_type: data.flute_type, version:data.version };
+            item._original_product = { specification: this.orderSpecificationText(this.customerProductSpecification(data), ""), sale_unit_price: data.sale_unit_price, layer_count: data.layer_count, flute_type: data.flute_type, version:data.version };
             await this.recalculateOrderCost(index);
             if (!current()) return;
             this.refreshOrderLineInventory(item, this.orderForm.customer_id);

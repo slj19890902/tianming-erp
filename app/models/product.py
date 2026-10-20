@@ -132,6 +132,7 @@ class Product(Base):
     customer_drawing_number: Mapped[str | None] = mapped_column(String(150), nullable=True)
     customer_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     customer_model: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    customer_specification: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     customer_product_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     customer_drawing_display: Mapped[str | None] = mapped_column(String(250), nullable=True)
     material_id: Mapped[int | None] = mapped_column(

@@ -216,7 +216,9 @@ def actor_guard(user, expected):
 def require_activation(db):
     try:
         from desktop_assistant.delivery_dispatch_contract import require_managed_dispatch_activation
-        require_managed_dispatch_activation(db.get_bind().url.database)
+        # A caller-owned transaction binds Session to Connection, not Engine.
+        # Both expose .engine; keep activation tied to the actual database.
+        require_managed_dispatch_activation(db.get_bind().engine.url.database)
     except (ValueError, ImportError) as error:
         raise HTTPException(503, '确认发货的恢复保护尚未激活，请联系管理员升级助手后再操作。', headers=headers()) from error
 

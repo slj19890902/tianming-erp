@@ -69,7 +69,7 @@
      const old=line._inventory_product;
      const inventoryChanged=!old || inventoryBasis(old)!==inventoryBasis(product);
      const updateNotes=!line.production_notes || (old && line.production_notes===old.production_notes);
-     Object.assign(line,{product_name:product.product_name||'',specification:this.orderSpecificationText(this.spec(product),''),
+     Object.assign(line,{product_name:product.product_name||'',specification:this.orderSpecificationText(this.customerProductSpecification(product),''),
       layer_count:product.layer_count||null,flute_type:product.flute_type||null,_inventory_product:product,
       _common_box_readiness:this.commonBoxReadiness(product),supply_mode:product.supply_mode||'corrugated_production',
       external_packaging_order_quantity_basis:product.external_packaging_default_order_quantity_basis??null,
@@ -87,7 +87,7 @@
        _from_product:true,_manual_modified:!!product.manual_modified,_layer_filter:product.layer_count||null,
        _flute_filter:product.flute_type||null,_material_code:product.material_code||'',
        _material_supplier_name:product.material_supplier_name||'',_material_weight:product.material_weight||'',_product_drawings:product.drawings||[],
-       _original_product:{specification:this.orderSpecificationText(this.spec(product),''),sale_unit_price:product.sale_unit_price,layer_count:product.layer_count,flute_type:product.flute_type,version:product.version}});
+       _original_product:{specification:this.orderSpecificationText(this.customerProductSpecification(product),''),sale_unit_price:product.sale_unit_price,layer_count:product.layer_count,flute_type:product.flute_type,version:product.version}});
      }
      // Quantities, entered prices, notes, drawings, BOM overrides and line identities are owned by the order.
      // A changed product invalidates only this line's inventory decision; the existing planner rechecks eligibility.

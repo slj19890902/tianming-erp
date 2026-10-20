@@ -2,10 +2,10 @@ const fs=require('fs'),vm=require('vm'),path=require('path'),assert=require('ass
 const root=process.argv[2],html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
 const scripts=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(x=>x[1]).filter(x=>x.trim());
 const pending=[];
-const box={axios:{defaults:{},interceptors:{response:{use(){}}},get(url,options){return new Promise((resolve,reject)=>pending.push({url,options,resolve,reject}))}},
+const box={axios:{defaults:{},interceptors:{request:{use(){}},response:{use(){}}},get(url,options){return new Promise((resolve,reject)=>pending.push({url,options,resolve,reject}))}},
  Vue:{createApp(d){box.d=d;return {component(){return this},mount(){return this}}}},window:{},document:{},
  localStorage:{getItem(){return ''},setItem(){},removeItem(){}},TMOrderReference:{component:{}},URLSearchParams,setTimeout,clearTimeout,console};
-vm.createContext(box);vm.runInContext(scripts[0],box);
+vm.createContext(box);vm.runInContext(fs.readFileSync(path.join(root,'static/ui/incoming-actual.js'),'utf8'),box);vm.runInContext(scripts[0].slice(0,scripts[0].indexOf('window.TmDeliveryEditorLayout.install(app);')),box);
 const ctx={...box.d.methods,user:{id:1},authGeneration:1,orderForm:{customer_id:9},errorMessage:e=>e.message};
 const answer=(request,items)=>request.resolve({data:{items,total:71,page:1,total_pages:2}});
 (async()=>{

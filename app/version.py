@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.692"
-APP_VERSION_NAME = "手机成品尺寸匹配与全屏仓库地图"
+APP_VERSION = "v0.22.695"
+APP_VERSION_NAME = "位置清单订单导入与提前备货单"
 APP_BUILD_DATE = "2026-10-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6778,3 +6778,18 @@ APP_CHANGELOG = [*(f"v0.22.691：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["手机找产品按成品长宽及可选高度匹配，显示客户并按尺寸匹配度排名", "仓库全图撑满可用画面；区域沿用原手机版货架正视图、栈板俯视图", "手机已收料显示近7天记录，支持分页"]
 APP_VERIFICATION_STEPS = ["现场查询输入成品大致尺寸，核对客户及匹配度由高到低排列", "仓库全图点选货架区和栈板区，核对正视图、俯视图并返回全图", "已收料核对近7天记录，多于20条时翻页查看"]
 APP_CHANGELOG = [*(f"v0.22.692：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.693：外购产品采用现有库存后可直接选择送货。
+APP_CHANGES = ["外购产品采用已核实的现有成品库存后，待送货列表、搜索与开单选择统一按有效预占计算可送数量。", "保留实物与客户身份、单位换算、附属组件、权限及取消释放保护，防止重复扣库。"]
+APP_VERIFICATION_STEPS = ["刷新送货页面，搜索 POORD041914，核对瓦楞垫板 Z.004.000006 可选数量600只。", "按实际业务选择产品，核对送货单数量与打印内容；不需要重新导入订单或再次抵扣库存。"]
+APP_CHANGELOG = [*(f"v0.22.693：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.694：客户规格与可追溯历史送货应收。
+APP_CHANGES = ["常用箱客户规格按原文单独保存，保留生产尺寸和库存实物身份", "已明确授权的历史送货可形成独立期间应收，保留来源和旧票款，不重复库存移动", "整批补录支持调用方事务，历史来源在对账明细、导出与开票中保持存货编码、规格和数量"]
+APP_VERIFICATION_STEPS = ["打开天华常用箱，核对客户规格与Excel N列；生产资料保持原值", "正式补录后核对天华10月270条来源、36177个、含税103376.75元及B列日期", "核对旧票款保留，采购邮件关联订单且差额和原附件保留"]
+APP_CHANGELOG = [*(f"v0.22.694：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.695：位置清单订单导入与提前备货单。
+APP_CHANGES = ["研光、光洋位置清单支持按存货编码和完整需求导入订单，保留原行位置与来源参考量", "订单保存后即可打印提前备货单，按指定位置显示当前可拿与待补，缺货及未生产行仍保留", "提前备货单不依赖送货单，打印不扣库存；保留客户范围、产品匹配和相同文件防重复保护"]
+APP_VERIFICATION_STEPS = ["订单导入选择客户和要求交期，上传位置清单，核对需求、单价和原表位置后保存", "点击打印提前备货单，核对位置、可拿与待补；关闭打印页返回原订单", "订单详情再次打印；重复上传同一文件应提示原订单，不新增第二张"]
+APP_CHANGELOG = [*(f"v0.22.695：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

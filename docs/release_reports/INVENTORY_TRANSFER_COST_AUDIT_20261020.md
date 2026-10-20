@@ -1,6 +1,6 @@
 # v0.22.690 库存移库来源与成本继承修复
 
-状态：开发验证，待正式技术发布。
+状态：v0.22.690 技术发布及原生收尾完成，服务正常，管理员人工验收待反馈。
 
 用户要求检查其他正常入库库存的同类问题，修复后直接发布。工作区为 inventory-transfer-cost-audit-20261020，基于实时正式 v689 源码821fe81b及报告c36d838d；远端factory-current-baseline仍为旧b9a077bc，未作为新基线。
 
@@ -25,3 +25,12 @@
 ## 现场入口
 
 刷新手机仓库，按正常业务进行部分移库和再次移库；展开目标货位成本，核对数量、原成本及整批移动。尚未收到管理员人工验收反馈。
+
+## v0.22.690 正式技术发布
+
+- 正式源码 `ded3869514f51b049ba0244b6485d67dc06133b2`，签名包 `1b093718d10550f44436340c65c600d0e0b4e1e4c5291fe4b807a15f365a14be`，manifest `1c5ad362f8a643c3f4be82cc7ad320312bc8765e087c665c45129ae0e2dfcfe9`，原包 `6f994bd2060c4a6014ab30cdf29f66bde0b0426a7ed9a518f52189f753a55b95`。revision `et1019fl`不变，无DDL；8个应用载荷成员更新。
+- 定向回归57项通过，1项已证实的旧subkit单位夹具排除；原代码三个成本场景复现失败。760个实存批次成本检查，751个可拆分批次隔离移库全部通过。另31个来源/单件/历史样本完成93次真实隔离提交、同键重放和连续/整批移库，五个数量桶、成本及日期守恒。
+- 新鲜签名包在线演练、隔离启动检查通过，326张业务表及schema不变。正式全实存成本只读核验：见formal_reported_and_cost_readonly_passed事件；已报料与成本接口正常。
+- 完整时点备份 `/Library/TianmingERP/instance/backups/20261020-105717-8beb325a.tmbackup`，SHA-256 `6f2efa0dc635cc0f0f3d18e3f0ac1e90ca8f64c60c19ba8e7be5a34a6a2959cb`；Manager独立完整恢复及原生收尾通过。backup_work_retained=false、manual_stop=false；业务PID 49418。
+- stop_requested `2026-10-20T02:56:55.894055+00:00`，process_ready `2026-10-20T03:02:56.153357+00:00`，停服360.26秒。页面HTTP200，静态字节与签名清单一致，匿名保护接口401；无正式业务写入。证据 `/Users/kimiyf/ERP-Migration/evidence/inventory-transfer-cost-audit-20261020/release-v690`。
+- 无正式页面自动点击；管理员按实际业务刷新仓库移库并检查成本后反馈人工验收。NAS写入及读回状态见RESULT.json。

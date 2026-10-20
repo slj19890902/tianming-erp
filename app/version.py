@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.695"
-APP_VERSION_NAME = "订单提前备货与收料默认库位"
+APP_VERSION = "v0.22.696"
+APP_VERSION_NAME = "对账更正后应收与开票金额同步"
 APP_BUILD_DATE = "2026-10-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6798,3 +6798,8 @@ APP_CHANGELOG = [*(f"v0.22.695：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES += ["收料默认位置按常用箱库位或区域、客户区域、一楼待送区的顺序选择；未配置默认位置不再阻止收料", "客户可选择整个楼层当前可用区域，明确失效或冲突的位置仍提示核对"]
 APP_VERIFICATION_STEPS = APP_VERIFICATION_STEPS[:2] + ["正常收料核对常用箱位置优先、客户区域其次；两者未设置时进入一楼待送区，重复提交不重复入库"]
 APP_CHANGELOG = [*(f"v0.22.695：本次更新｜{item}" for item in APP_CHANGES[-2:]), *APP_CHANGELOG]
+
+# v0.22.696：更正明细与对账应收同事务汇总。
+APP_CHANGES = ["修复客户异议改价或更正签收数量后，对账应收仍停留在旧金额、导致登记开票被拦截的问题。", "开票累计金额按账本精度比较，保留真实超额、重复提交、权限与审计保护。"]
+APP_VERIFICATION_STEPS = ["在实际需要更正的对账单保存改价或签收数量后，核对总额与明细合计一致。", "登记已核对金额的真实发票，确认成功且重复点击不会重复累计；历史差额账单须先完成专项核对。"]
+APP_CHANGELOG = [*(f"v0.22.696：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

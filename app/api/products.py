@@ -497,6 +497,7 @@ class ProductPayload(BaseModel):
     customer_drawing_number: str | None = Field(default=None, max_length=150)
     customer_category: str | None = Field(default=None, max_length=100)
     customer_model: str | None = Field(default=None, max_length=500)
+    customer_specification: str | None = Field(default=None, max_length=1000)
     material_id: int | None = None
     mold_tool_id: int | None = None
     legacy_material_text: str | None = None
@@ -1335,7 +1336,7 @@ def _product_write_data(payload: ProductPayload, user: User) -> dict:
     if "sheet_cutting_settings" not in payload.model_fields_set:
         data.pop("sheet_cutting_settings", None)
     from app.services.customer_document_fields import FIELDS
-    for field in FIELDS:
+    for field in (*FIELDS, "customer_specification"):
         if field not in payload.model_fields_set:
             data.pop(field, None)
         elif data[field] is not None:
@@ -1603,6 +1604,7 @@ def _summary_response(product: Product, user: User, *, bom_profiles: dict | None
         "customer_material_code": product.customer_material_code,
         "customer_document": document_snapshot(product, allow_source_reference=False),
         "product_name": product.product_name,
+        "customer_specification": product.customer_specification,
         "supply_mode": product.supply_mode,
         "external_packaging_category_code": product.external_packaging_category_code,
         "external_packaging_specification_summary": product.external_packaging_specification_summary,

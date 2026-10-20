@@ -31,6 +31,22 @@ def has_supplier_trim_facts(db):
 
 
 MOLD_LABEL_TEXT_READER = 'mold_label_text_v3'
+CUSTOMER_SPECIFICATION_READER = 'customer_specification_v1'
+
+
+def has_customer_specification_facts(db):
+    if any(r[1] == 'customer_specification' for r in db.execute('PRAGMA table_info(products)')):
+        if db.execute(
+            'SELECT 1 FROM products WHERE customer_specification IS NOT NULL LIMIT 1'
+        ).fetchone():
+            return True
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='master_data_object_versions'").fetchone():
+        return db.execute(
+            "SELECT 1 FROM master_data_object_versions WHERE object_type='product' "
+            "AND json_valid(snapshot_json) "
+            "AND json_type(snapshot_json, '$.customer_specification') NOT IN ('null') LIMIT 1"
+        ).fetchone() is not None
+    return False
 
 
 def has_mold_label_text_facts(db):
@@ -72,6 +88,7 @@ def target_readers(database, source, target, inventory_record, dispatch_record, 
         else:
             required.discard(MOLD_LABEL_TEXT_READER)
         if has_supplier_trim_facts(db): required.add('supplier_sheet_trim_v1')
+        if has_customer_specification_facts(db): required.add(CUSTOMER_SPECIFICATION_READER)
         if physical_kit.has_facts(db): required.add(physical_kit.CAPABILITY)
     if inventory_record is not None: required.add(inventory.CAPABILITY)
     if dispatch_record is not None: required.add(dispatch.CAPABILITY)

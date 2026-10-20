@@ -70,6 +70,7 @@ _PRODUCT_FIELDS = (
     "customer_drawing_number",
     "customer_category",
     "customer_model",
+    "customer_specification",
     "customer_product_name",
     "customer_drawing_display",
     "customer_id",

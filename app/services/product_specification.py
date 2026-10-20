@@ -164,6 +164,9 @@ def delivery_specification(product):
     """
     if product is None:
         return ''
+    customer_text = getattr(product, 'customer_specification', None)
+    if customer_text is not None:
+        return str(customer_text).strip()
     if getattr(product, 'supply_mode', None) == 'external_purchase':
         text = str(getattr(product, 'external_packaging_specification_summary', None) or '').strip()
         if text in _MISSING_SPECIFICATIONS or any(note in text for note in ('待完善', '待补', '未登记')):

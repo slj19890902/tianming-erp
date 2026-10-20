@@ -51,3 +51,12 @@
 - 14项定向测试通过，具体范围见证据目录 `targeted-tests-r3.log`。
 - 其他聊天已推进v692/v693；本分支以v693提交4a6a816b611e40371c142dec076911d0df37e496重新接续，候选暂定v694，发布时必须再次核对当时最新程序和业务版本。候选不能覆盖后来发布内容。
 - 最新业务口径单独冻结于 `authorized-scope-r3.json`，覆盖早期核对清单中的范围待定描述；旧票款仍不允许重写。正式停服发布和受限系统写入尚待当次授权。
+
+
+## 2026-10-20 R2正式发布结果与数据收尾缺项
+
+- v0.22.694 / 181f3fd426bf350d734b1f4e003a6b09222108b0 / ev1020hr 已上线；签名包6462699515d4509b730974fb64985cec0e9edf5613cc2b02bfc644af8f03948a，健康200，原生备份收尾closed。
+- 后续业务操作在正式货位校验抛出WarehouseStocktakeBatchError，单事务全部回滚，committed=false。没有正式新增本批常用箱修改、出入库、送货、应收和邮件处置。禁止使用副本单号报告成功。
+- 已复现维护入口漏设正式地图环境：migration没有server数据链接。data-only-r3已改为显式绑定既有地图及423货位前置检查，业务脚本及原清单不变；地图身份和脚本语法定向验证通过，无重新发布或停服需求，尚未执行。
+- R2单次受限授权已耗用，免停服收尾的新单次授权已询问未触发。先等空间任务释放窗口并协调v695，执行前核验当前包，绝不回退覆盖。
+- 证据：evidence/tianhua-statement-20261020/release-r2-result.json、data-only-r3/preparation-result.json、map-environment-diagnosis.json；NAS独立回执已更新。

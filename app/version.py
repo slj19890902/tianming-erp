@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.688"
-APP_VERSION_NAME = "片料用途按开数匹配"
-APP_BUILD_DATE = "2026-10-19"
+APP_VERSION = "v0.22.689"
+APP_VERSION_NAME = "已报料与历史组套移库修复"
+APP_BUILD_DATE = "2026-10-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -6743,3 +6743,16 @@ APP_VERIFICATION_STEPS = [
     "选中实际库存查用途，核对匹配度和开数，返回库存查询条件保持。",
 ]
 APP_CHANGELOG = [*(f"v0.22.688：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.689：修复已报料查询与历史组套库存移位。
+APP_CHANGES = [
+    "已报料列表补全冻结开料出数字段，恢复明细、整单和筛选查询。",
+    "历史组套库存移位按真实移库流水继承原成本和实物身份，不再误判为新组套入库。",
+    "修复转换成品货位成本汇总，移除入库提示中误导性的管理员权限说明。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新已报料，核对列表、搜索、筛选和翻页正常。",
+    "手机仓库正常移库000205，核对原位与目标位置数量；重复提交不重复移动。",
+    "展开货位成本，核对汇总与批次明细正常显示。",
+]
+APP_CHANGELOG = [*(f"v0.22.689：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

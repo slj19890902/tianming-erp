@@ -20329,6 +20329,9 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                     "crease_right_mm"
                 ),
                 StockReplenishmentOrderItem.quantity.label("quantity"),
+                StockReplenishmentOrderItem.stock_yield_per_sheet.label(
+                    "stock_yield_per_sheet"
+                ),
                 StockReplenishmentOrderItem.stocked_quantity.label(
                     "stocked_quantity"
                 ),
@@ -20409,7 +20412,8 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
 
     stock_progresses = receipt_progress_map(db, [
         SimpleNamespace(id=item['item_id'], quantity=item['quantity'],
-                        stocked_quantity=item['stocked_quantity'])
+                        stocked_quantity=item['stocked_quantity'],
+                        stock_yield_per_sheet=item['stock_yield_per_sheet'])
         for projected in stock_items_by_order.values() for item in projected
     ])
     for header in stock_headers:

@@ -124,6 +124,11 @@ def validate_entries(session):
         lot = session.get(InventoryLot, lid, populate_existing=True)
         if lot is None:
             continue
+        # A split move inherits the assembly's source_ref_type for traceability.
+        # It is not a new assembly: require the actual transfer and both ledger
+        # movements before accepting unchanged historical entry facts.
+        if _verified_location_split(session, lot):
+            continue
         missing = []
         issues = []
         try:
@@ -248,6 +253,52 @@ def validate_entries(session):
                 product_id=detail.product_id if detail else None,
                 repair_url=(product_issues[0].get('repair_page') if product_issues else None),
                 retry_action='refresh_preflight'))
+
+
+def _verified_location_split(session, lot):
+    from sqlalchemy import select
+    from app.models.warehouse_inventory import InventoryLot, InventoryLotTransfer, InventoryMovement
+    from app.services.warehouse_inventory import _transfer_key
+    if lot.source_type != 'transfer':
+        return False
+    edges = list(session.scalars(select(InventoryLotTransfer).where(
+        InventoryLotTransfer.target_lot_id == lot.id,
+        InventoryLotTransfer.source_lot_id != lot.id)))
+    if len(edges) != 1:
+        return False
+    edge = edges[0]
+    source = session.get(InventoryLot, edge.source_lot_id)
+    # Source-before-target prevents a fabricated circular inheritance chain.
+    if source is None or source.id >= lot.id:
+        return False
+    fields = ('inventory_type', 'unit', 'source_ref_type', 'source_ref_id',
+              'stock_date', 'stock_date_accuracy', 'stock_date_original_text',
+              'estimated_unit_cost_snapshot', 'estimated_square_price_snapshot',
+              'estimated_cost_area_m2_snapshot', 'cost_snapshot_source',
+              'cost_snapshot_detail_json', 'cost_snapshot_at')
+    if any(getattr(source, key) != getattr(lot, key) for key in fields):
+        return False
+    for name in ('finished_detail', 'semi_finished_detail'):
+        old, new = getattr(source, name), getattr(lot, name)
+        if (old is None) != (new is None):
+            return False
+        if old is not None and any(getattr(old, column.key) != getattr(new, column.key)
+                for column in old.__table__.columns if column.key != 'inventory_lot_id'):
+            return False
+    for role, lid, sign in (('source', source.id, -1), ('target', lot.id, 1)):
+        movement = session.scalar(select(InventoryMovement).where(
+            InventoryMovement.idempotency_key == _transfer_key('location-transfer', edge.idempotency_key, role)))
+        if (movement is None or movement.inventory_lot_id != lid
+                or movement.movement_type != 'location_transfer'
+                or movement.quantity != edge.quantity or movement.unit != lot.unit
+                or movement.after_available - movement.before_available != sign * edge.available_quantity
+                or movement.after_reserved - movement.before_reserved != sign * edge.reserved_quantity
+                or any(getattr(movement, 'before_' + bucket) != getattr(movement, 'after_' + bucket)
+                       for bucket in ('consumed', 'damaged', 'scrapped'))):
+            return False
+        if role == 'target' and (movement.before_available or movement.before_reserved):
+            return False
+    return True
 
 
 @event.listens_for(ReceiptPriceGuardSession, 'after_transaction_end')

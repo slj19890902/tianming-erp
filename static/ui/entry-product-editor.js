@@ -130,8 +130,8 @@
     const notice=el('aside');notice.id='entry-repair-notice';notice.setAttribute('role','alert');
     notice.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;max-width:min(420px,90vw);background:white;border:1px solid #d5a530;border-radius:12px;padding:16px;box-shadow:0 6px 24px #0002';
     const issues=Array.isArray(detail.issues)?detail.issues:[];
-    const message=el('p',detail.message+'。原录入数量、日期、位置、备注和选择均保留；保存资料后请在原表单重新核对。');notice.append(message);
-    if(issues.length){const list=el('ul');issues.forEach(issue=>{const item=el('li',`${issue.product_code?issue.product_code+' · ':''}${issue.label}：${issue.reason}${issue.repairable?'':'（需管理员处理）'}`);list.append(item);});notice.append(list);}
+    const message=el('p',detail.message);notice.append(message);
+    if(issues.length){const list=el('ul');issues.forEach(issue=>{const item=el('li',`${issue.product_code?issue.product_code+' · ':''}${issue.label}：${issue.reason}`);list.append(item);});notice.append(list);}
     const firstRepair=issues.find(issue=>issue.repairable&&issue.product_id)||null;
     const repairProductId=firstRepair?.product_id||detail.product_id;
     if(repairProductId&&(firstRepair||!issues.length)){const button=el('button',firstRepair?`补充${firstRepair.label}`:'核对产品入库资料');button.type='button';button.onclick=async()=>{button.disabled=true;try{await open({productId:Number(repairProductId),focusField:firstRepair?.repair_field||null});message.textContent='产品资料已保存，请回到原表单重新核对。本次入库内容未被覆盖。';}catch(e){message.textContent=e.message;}finally{button.disabled=false;}};notice.append(button);}

@@ -146,7 +146,8 @@ def _batch_response(db: Session, batch: TianhuaPreDeliveryImportBatch) -> dict:
     if batch.source_type == "excel_upload":
         from app.services.pre_delivery_readiness import refresh_excel_readiness
         refresh_excel_readiness(db, batch, payload)
-    return payload
+    from app.services.pre_delivery_stock_preview import enrich_stock_preview
+    return enrich_stock_preview(db, batch, payload)
 
 
 @router.post("/tianhua-preimport/{batch_id}/readiness-preview")
@@ -161,8 +162,10 @@ def readiness_preview(batch_id: int, request: DraftRequest,
     ids = [line.item_id for line in request.items]
     if any(i not in allowed for i in ids) or len(set(ids)) != len(ids):
         raise HTTPException(400, "预览行不属于当前批次或重复")
-    return refresh_excel_readiness(db, batch, payload,
+    refresh_excel_readiness(db, batch, payload,
         {line.item_id: line.model_dump() for line in request.items})
+    from app.services.pre_delivery_stock_preview import enrich_stock_preview
+    return enrich_stock_preview(db, batch, payload)
 
 
 @router.post("/tianhua-preimport/upload",status_code=status.HTTP_201_CREATED)

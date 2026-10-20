@@ -16,6 +16,7 @@
     <script src="/static/ui/order-context.js?v=round-experience-d1b"></script>
     <script src="/static/ui/workspace.js?v=71e4c13edadc"></script>
     <script src="/static/ui/delivery-editor-layout.js?v=3ce1f96d2bfa"></script>
+    <script src="/static/ui/pre-delivery-list.js?v=f5ac96a1b443"></script>
     <script src="/static/ui/workflow-continuity.js?v=7ef70dee3ee7"></script>
     <link rel="stylesheet" href="/static/ui/workflow-continuity.css?v=431e9b0f41d3" />
     <script src="/static/ui/order-import-save-recovery.js?v=20261010-save1"></script>
@@ -9579,21 +9580,23 @@
               <div class="toolbar" style="margin-bottom:8px">
                 <div class="section-title" style="margin:0">识别结果</div>
                 <div class="toolbar-group">
+                  <button class="btn small primary" :disabled="!tianhuaPreimport.items.length || loading" @click="printTianhuaPickList">打印 / 导出 A4 清单</button>
                   <button class="btn small" :disabled="!tianhuaGeneratableCount()" @click="selectTianhuaRows('all')">全选可生成</button>
                   <button class="btn small" :disabled="!tianhuaPreimport.items.some(row => row.status==='ok')" @click="selectTianhuaRows('ok')">只选正常可送</button>
                   <button class="btn small" :disabled="!tianhuaSelectedCount()" @click="selectTianhuaRows('none')">取消全选</button>
                 </div>
               </div>
+              <div class="muted" style="margin:8px 0">库存剩余数＝现存成品（含预占）－建议送货数量；负数表示缺口，同一产品多行按清单顺序扣减。点击位置查看地图，返回后继续填写。</div>
               <div class="table-wrap pre-delivery-table-wrap" tabindex="0" aria-label="预送货明细，可横向滚动查看全部17列">
                 <table class="pre-delivery-table">
                   <colgroup><col style="width:64px" /><col style="width:88px" /><col style="width:142px" /><col style="width:84px" /><col style="width:110px" /><col style="width:112px" /><col style="width:268px" /><col style="width:160px" /><col style="width:244px" /><col style="width:76px" /><col style="width:210px" /><col style="width:116px" /><col style="width:116px" /><col style="width:144px" /><col style="width:168px" /><col style="width:230px" /><col style="width:164px" /></colgroup>
-                  <thead><tr><th><input type="checkbox" :checked="tianhuaAllGeneratableSelected()" :disabled="!tianhuaGeneratableCount()" title="全选或取消当前可生成行" @change="toggleAllTianhuaRows($event.target.checked)" /> 勾选</th><th>状态</th><th>存货编码</th><th>预送数量</th><th>系统未送数量</th><th>建议送货数量</th><th>备货结论 / 位置</th><th>产品名称</th><th>订单号</th><th>候选数</th><th>匹配说明</th><th>手机拿货状态</th><th>实际拿货数量</th><th>拿货备注</th><th>拿货时间</th><th>风险提示</th><th>操作</th></tr></thead>
+                  <thead><tr><th><input type="checkbox" :checked="tianhuaAllGeneratableSelected()" :disabled="!tianhuaGeneratableCount()" title="全选或取消当前可生成行" @change="toggleAllTianhuaRows($event.target.checked)" /> 勾选</th><th>状态</th><th>存货编码</th><th>预送数量</th><th>库存剩余数</th><th>建议送货数量</th><th>位置</th><th>图号</th><th>订单号</th><th>候选数</th><th>匹配说明</th><th>手机拿货状态</th><th>实际拿货数量</th><th>拿货备注</th><th>拿货时间</th><th>风险提示</th><th>操作</th></tr></thead>
                   <tbody>
                     <tr v-for="row in tianhuaPreimport.items" :key="row.row_no" :class="'tianhua-row-'+row.status">
                       <td><input type="checkbox" v-model="row.selected" :disabled="!isTianhuaRowGeneratable(row)" :title="tianhuaRowDisabledReason(row)" /></td>
-                      <td>{{ row.status_label }}</td><td>{{ row.stock_code || "-" }}</td><td>{{ row.image_qty ?? "-" }}</td><td>{{ row.system_pending_qty ?? "-" }}</td>
-                      <td><input class="input compact-input" type="number" min="1" v-model.number="row.final_delivery_qty" @input="scheduleTianhuaReadiness()" :disabled="!isTianhuaRowGeneratable(row)" /></td><td><strong>{{row.fulfillment_label||'-'}}</strong><div v-for="location in row.pick_locations||[]" :key="location.location_id||location.location_code" class="muted">{{location.location_name||location.location_code||'位置待核'}} ×{{location.quantity}}</div><template v-if="row.source_payload?.shortage_diagnostic"><div class="muted">成品可拿 {{row.source_payload.shortage_diagnostic.finished_available}}；待组套/加工 {{row.source_payload.shortage_diagnostic.pending_processing}}；有效在途 {{row.source_payload.shortage_diagnostic.effective_inbound}}；需新购 {{row.source_payload.shortage_diagnostic.new_purchase_shortage}}<span v-if="row.source_payload.shortage_diagnostic.unresolved_quantity">；待核数量 {{row.source_payload.shortage_diagnostic.unresolved_quantity}}</span></div><div v-if="row.source_payload.shortage_diagnostic.pending_review" class="status orange">{{(row.source_payload.shortage_diagnostic.review_reasons||[]).join("；")||"订单分配待核对"}}</div><div v-if="row._readinessLoading" class="muted">正在刷新备货数量…</div><div v-if="row._readinessError" class="status orange">{{row._readinessError}}</div></template><div v-else-if="row.shortage_qty" class="status orange">缺 {{row.shortage_qty}}</div></td>
-                      <td>{{ row.product_name || "-" }}</td><td><order-reference v-if="!(row.source_payload?.candidates?.length>1)" :row="row"></order-reference><div v-else class="field" style="min-width:220px"><label v-for="candidate in row.source_payload.candidates" :key="candidate.order_item_id" style="display:flex;gap:5px;align-items:center"><input type="checkbox" v-model="candidate._selected" @change="scheduleTianhuaReadiness()" /><span>{{candidate.order_number}} / {{candidate.customer_order_no||'无客户单号'}}（可送{{candidate.finished_available}}）</span><input v-if="candidate._selected" class="input compact-input" type="number" min="1" :max="candidate.finished_available" v-model.number="candidate._qty" @input="scheduleTianhuaReadiness()" placeholder="分配数" /></label></div></td><td>{{ row.candidate_count ?? 0 }}</td><td>{{ row.match_reason || "-" }}</td>
+                      <td>{{ row.status_label }}</td><td>{{ row.stock_code || "-" }}</td><td>{{ row.image_qty ?? "-" }}</td><td :style="{color:tianhuaStockRemaining(row)<0 ? 'var(--danger,#b42318)' : ''}" :title="'现存成品（含预占）：'+(row.stock_on_hand_qty ?? '待核对')">{{ tianhuaStockRemaining(row) ?? "—" }}</td>
+                      <td><input class="input compact-input" type="number" min="1" v-model.number="row.final_delivery_qty" @input="scheduleTianhuaReadiness()" :disabled="!isTianhuaRowGeneratable(row)" /></td><td><div v-for="location in row.stock_locations||[]" :key="location.lot_id||location.location_id"><button class="delivery-location-link" type="button" :disabled="!location.location_id" @click="openTianhuaLocation(location,row)">{{location.location_name||location.location_code||'位置待核'}}</button><span class="muted"> ×{{location.quantity}}</span></div><span v-if="!row.stock_locations?.length" class="muted">暂无成品位置</span><div v-if="row._readinessLoading" class="muted">正在刷新库存…</div><div v-if="row._readinessError" class="status orange">{{row._readinessError}}</div></td>
+                      <td>{{ row.customer_drawing_number || "—" }}</td><td><order-reference v-if="!(row.source_payload?.candidates?.length>1)" :row="row"></order-reference><div v-else class="field" style="min-width:220px"><label v-for="candidate in row.source_payload.candidates" :key="candidate.order_item_id" style="display:flex;gap:5px;align-items:center"><input type="checkbox" v-model="candidate._selected" @change="scheduleTianhuaReadiness()" /><span>{{candidate.order_number}} / {{candidate.customer_order_no||'无客户单号'}}（可送{{candidate.finished_available}}）</span><input v-if="candidate._selected" class="input compact-input" type="number" min="1" :max="candidate.finished_available" v-model.number="candidate._qty" @input="scheduleTianhuaReadiness()" placeholder="分配数" /></label></div></td><td>{{ row.candidate_count ?? 0 }}</td><td>{{ row.match_reason || "-" }}</td>
                       <td>{{ tianhuaPickStatusLabel(row.mobile_pick_status) }}</td><td>{{ row.mobile_picked_qty ?? "-" }}</td><td>{{ row.mobile_pick_note || "-" }}</td><td>{{ row.mobile_picked_at ? formatTime(row.mobile_picked_at) : "-" }}</td><td>{{ row.warning || "-" }}</td>
                       <td class="toolbar-group"><button v-if="row.order_item_id && canDelivery" class="btn small" :disabled="loading" @click="deferTianhuaRow(row)">等待下次送货</button><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaImageQty(row)">按图片数量</button><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaPendingQty(row)">补齐未送数量</button></td>
                     </tr>
@@ -15266,6 +15269,10 @@
                   .find(element => element.dataset.pdfDraftKey === restore.draftKey)
                 : null;
               if (table) table.scrollTop = restore.tableScrollTop || 0;
+              if (restore.tableElement?.isConnected) {
+                restore.tableElement.scrollTop = restore.tableScrollTop || 0;
+                restore.tableElement.scrollLeft = restore.tableScrollLeft || 0;
+              }
               if (restore.focusElement?.isConnected) restore.focusElement.focus({preventScroll:true});
               else if (restore.focusId) document.getElementById(restore.focusId)?.focus();
             });
@@ -39683,6 +39690,29 @@
           tianhuaPickStatusLabel(status) {
             return ({pending:"待拿货",picked:"已拿货",no_stock:"没货",partial:"部分拿货"})[status] || "待拿货";
           },
+          tianhuaStockRemaining(row) {
+            return window.PreDeliveryList.remaining(this.tianhuaPreimport.items, row);
+          },
+          openTianhuaLocation(location, row) {
+            if (this.pdfWarehouseLocator.visible || !location.location_id) return;
+            this.openDeliveryLocation({id:location.location_id,lotId:location.lot_id,
+              floor:location.warehouse_floor,label:`${row.stock_code || ''} · ${location.location_name || location.location_code || ''}`});
+            const table = document.querySelector('.pre-delivery-table-wrap');
+            Object.assign(this.pdfWarehouseLocator, {returnLabel:'返回预送货',tableElement:table,
+              tableScrollTop:table?.scrollTop || 0,tableScrollLeft:table?.scrollLeft || 0});
+          },
+          printTianhuaPickList() {
+            const state = this.tianhuaPreimport;
+            if (!state.items.length) return;
+            if (state.items.some(row => window.PreDeliveryList.quantity(row) == null))
+              return this.showToast('请先填写有效的建议送货数量（非负整数）', true);
+            const popup = window.open('about:blank', '_blank');
+            if (!popup) return this.showToast('打印窗口被浏览器拦截，请允许弹出窗口后重试', true);
+            popup.opener = null;
+            popup.document.open();
+            popup.document.write(window.PreDeliveryList.render(state));
+            popup.document.close();
+          },
           scheduleTianhuaReadiness() {
             if (!this.tianhuaPreimport.items.some(row => row.source_payload?.shortage_diagnostic)) return;
             clearTimeout(this._tianhuaReadinessTimer);
@@ -39707,7 +39737,7 @@
                 for (const row of state.items) {
                   const fresh = data.items.find(value=>value.item_id===row.item_id);
                   if (!fresh) continue;
-                  for (const key of ["status", "status_label", "warning", "available_qty", "system_pending_qty"]) {
+                  for (const key of ["status", "status_label", "warning", "available_qty", "system_pending_qty", "stock_on_hand_qty", "stock_pool_key", "stock_locations", "customer_drawing_number"]) {
                     row[key] = fresh[key];
                   }
                   row.source_payload.shortage_diagnostic = fresh.source_payload.shortage_diagnostic;

@@ -15100,6 +15100,7 @@
             if (!state || state.loading || state.authoritative_loading) return "库存计算中";
             if (state.stale) return "库存待刷新";
             if (state.api_error || state.authoritative_error) return "库存查询失败";
+            if (state.authoritative?.finished_stock_identity_conflicts?.length) return "库存身份待核对";
             if (Object.values(state.semi || {}).some(part => (part.candidates || []).length || (part.manual_candidates || []).length)) return "材料库存 · 抵扣";
             return ({
               full:"有库存",
@@ -15128,6 +15129,11 @@
           pdfInventoryBalanceHint(line) {
             const state = line?._inventory;
             const authority = state?.authoritative;
+            if (authority?.finished_stock_identity_conflicts?.length) {
+              return authority.finished_stock_identity_conflicts.map(row =>
+                `${row.location || "位置待核对"}：原登记 ${row.quantity} ${row.unit || "原单位待核对"}，未计入可抵扣量。${row.reason}`
+              ).join("；");
+            }
             if (authority?.finished_stock_balance_unavailable_reason && !state.loading && !state.stale && !state.api_error && !state.authoritative_loading && !state.authoritative_error) return authority.finished_stock_balance_unavailable_reason;
             if (!authority || ["待匹配", "计算中", "待刷新", "查询失败", "待核对"].includes(this.pdfInventoryBalanceText(line))) return "";
             const unit = authority.finished_stock_unit;

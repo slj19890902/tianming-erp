@@ -58,6 +58,52 @@ def _signature(row):
     ))
 
 
+def _unmeasured_die_contract(identity):
+    """Prove a descriptive SKU using frozen tooling, never today's master."""
+    fields = identity.get("fields") or {}
+    from app.services.sheet_cutting_settings import component_settings
+    from app.services.sheet_cutting_contract import SheetCuttingContractError
+    if any(_number(fields.get(key)) not in (None, "0")
+            for key in ("length_mm", "width_mm", "height_mm")):
+        return None
+    try:
+        setting = component_settings(fields.get("sheet_cutting_settings"))
+        if not setting or not setting.is_die_cut or not fields.get("mold_tool_id"):
+            return None
+        return dict(product_id=identity["product_id"], mold_tool_id=str(fields["mold_tool_id"]),
+            product_code=str(fields.get("product_code") or "").strip(),
+            mold_count=setting.mold_count, length_parts=setting.length_parts,
+            width_parts=setting.width_parts)
+    except (SheetCuttingContractError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _supply_basis_matches(source, demand):
+    from app.services.finished_stock_identity import matches_stock_identity
+    if matches_stock_identity(source["basis"], demand["basis"]):
+        return True
+    contract = source.get("unmeasured_die_contract")
+    if not contract or contract != demand.get("unmeasured_die_contract"):
+        return False
+    # A generated warehouse caption is not a measured finished dimension.
+    # The independently frozen mold, imposition and every other physical fact
+    # must still agree. Genuine/custom specifications cannot enter this path.
+    import re
+    from app.services.product_specification import strip_unregistered_size_note
+    documents = [_json(row["basis"]).copy() for row in (source, demand)]
+    for doc in documents:
+        if (doc.get("product_id") != contract["product_id"]
+                or str(doc.get("mold_tool_id")) != contract["mold_tool_id"]
+                or doc.get("assembly")):
+            return False
+        spec = strip_unregistered_size_note(str(doc.get("spec") or "")).strip()
+        pattern = rf"模切成品 {re.escape(contract['product_code'])}；模具 .+；{contract['mold_count']}模"
+        if spec and not re.fullmatch(pattern, spec):
+            return False
+        doc["spec"] = None
+    return matches_stock_identity(*(json.dumps(doc, sort_keys=True) for doc in documents))
+
+
 def _ordinary_row(db, item, order, component, requirement):
     from app.api.requisition import _component_crease, _resolved_sheet_cutting
     cutting = _resolved_sheet_cutting(item, component)
@@ -96,10 +142,18 @@ def _ordinary_basis(db, item, row):
         basis = _json(identity.get("physical_basis"))
         # The order's own frozen spec/material must also agree with that history.
         from app.services.product_specification import normalized_specification_text
-        if (basis.get("spec") != normalized_specification_text(item.snapshot_spec)
+        spec = normalized_specification_text(item.snapshot_spec)
+        contract = _unmeasured_die_contract(identity)
+        fields = identity.get("fields") or {}
+        aliases = {None, normalized_specification_text(fields.get("product_name")),
+            normalized_specification_text(fields.get("product_code"))}
+        descriptive_order = contract and spec in aliases and not basis.get("assembly")
+        if ((basis.get("spec") != spec and not descriptive_order)
                 or str(basis.get("material") or "").strip().upper() != str(item.snapshot_material or "").strip().upper()
                 or str(basis.get("flute") or "").strip().upper() != str(item.flute_type or "").strip().upper()):
             return None
+        if descriptive_order:
+            row["unmeasured_die_contract"] = contract
         return identity["physical_basis"]
     except (WarehouseInventoryError, ValueError, TypeError, KeyError, AttributeError):
         return None
@@ -293,7 +347,7 @@ def _supplies(db, *, order_item_ids=None, source_item_ids=None):
             component_type=item.component_type, pieces_per_box=item.pieces_per_box,
             yield_per_sheet=item.stock_yield_per_sheet, basis=identity["physical_basis"],
             parent_product_id=parent_contract.get("parent_product_id"), parent_basis=identity.get("bom_parent_basis"),
-            created_at=item.order.created_at)
+            created_at=item.order.created_at, unmeasured_die_contract=_unmeasured_die_contract(identity))
         closed = bool(db.scalar(select(short_closed_clause(item.id))))
         from app.models.procurement_source import ProcurementSourceLink
         from app.models.supplier_requisition_order import SupplierRequisitionOrder, SupplierRequisitionOrderItem
@@ -360,7 +414,7 @@ def allocations(db, *, order_item_ids=None, source_item_ids=None):
             remaining = demand["quantity"]
             for source in supplies:
                 if (not remaining or not source["quantity"] or _signature(source) != _signature(demand)
-                        or not matches_stock_identity(source["basis"], demand["basis"])
+                        or not _supply_basis_matches(source, demand)
                         or (source["created_at"] and demand["order"].created_at and source["created_at"] > demand["order"].created_at)
                         or (source["parent_product_id"] is not None and (source["parent_product_id"] != demand["item"].product_id
                             or not demand["parent_basis"] or not matches_stock_identity(source["parent_basis"], demand["parent_basis"])))):

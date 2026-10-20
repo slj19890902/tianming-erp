@@ -4203,6 +4203,8 @@ def preview_order_inventory_draft(
             verified_candidates.append(lot)
         candidates = verified_candidates
         finished_lots_by_product[product.id] = candidates
+        from app.services.order_stock_conflicts import parent_stock_conflicts
+        identity_conflicts = parent_stock_conflicts(db, product)
         finished_stock_on_hand_quantity = sum(
             max(int(lot.quantity_available or 0), 0) + max(int(lot.quantity_reserved or 0), 0)
             for lot in stock_projection_lots
@@ -4364,6 +4366,7 @@ def preview_order_inventory_draft(
                 "finished_stock_reserved_quantity": finished_stock_reserved_quantity,
                 "finished_stock_available_quantity": finished_stock_available_quantity,
                 "finished_stock_unavailable_quantity": finished_stock_unavailable_quantity,
+                "finished_stock_identity_conflicts": identity_conflicts,
                 "finished_stock_line_allocated_quantity": finished_stock_line_allocated_quantity,
                 "finished_stock_allocated_quantity": finished_stock_allocated_quantity,
                 "finished_stock_remaining_quantity": finished_stock_remaining_quantity,

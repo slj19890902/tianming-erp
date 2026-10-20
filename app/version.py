@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.697"
-APP_VERSION_NAME = "扫描邮件订单识别"
+APP_VERSION = "v0.22.698"
+APP_VERSION_NAME = "订单库存与补库覆盖核对"
 APP_BUILD_DATE = "2026-10-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6808,3 +6808,8 @@ APP_CHANGELOG = [*(f"v0.22.696：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["扫描采购单按实际表格边界读取订单号、编码及交期，逐行核对数量、含税金额、税率与完整行序。", "旧识别失败缓存自动重试一次，保留人工工作草稿；同款不同交期逐行保留并写入本行原单交期备注。", "仅在当前客户内唯一匹配常用箱，缺少生产资料继续明确提示，不猜填材质、报料尺寸或模具。"]
 APP_VERIFICATION_STEPS = ["打开邮箱收单，核对并作及驶安特原5份扫描单的订单号、编码、数量和单价。", "核对SATE20261008006同款300与700两行及其不同交期；返回原PDF核对。", "资料完善后按原保存入口录单；遇生产资料缺项，编辑对应常用箱后回到原草稿保存。"]
 APP_CHANGELOG = [*(f"v0.22.697：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.698：订单补库覆盖和原库存身份说明。
+APP_CHANGES = ["无尺寸模切产品按已冻结模具与工艺核对补库覆盖，避免把客户型号显示文字当规格冲突而重复报料。", "订单导入显示旧库存身份待核对的原单位、数量、位置和原因；未确认的单件库存不自动换算成BOM套件。"]
+APP_VERIFICATION_STEPS = ["核对80010335订单450：成品预占120、已报料补库覆盖330、仍需报料0；80012415仍覆盖100。", "导入82021154时查看库存身份待核对及原位置数量；实际整套/子件身份由现场确认。"]
+APP_CHANGELOG = [*(f"v0.22.698：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

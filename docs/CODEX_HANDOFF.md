@@ -6315,3 +6315,7 @@ v0.22.686 / 281eed29c8551324d388fffffabe5e2249aa25aa / d407b603602330a78993637ca
 ## 2026-10-20 v0.22.692 手机尺寸查询/地图/七天实收技术发布
 
 实际正式源码36bf4b3767cf8a8c1e57ffe7627128be4b8ed55c，签名包9f6d967512f6b7c7f5170be37a21e7dd577f714a09bca4ea0e836c43e201b0fa，唯一head et1019fl；backend/前端同源修正。备份、恢复演练、原生收尾、健康/静态核对通过，人工手机验收待反馈。frontend-v2独立同步64da4a7c840fe9fb0e59c20ced87bef73ac62bf5，无历史合并。报告docs/release_reports/MOBILE_REFINE_20261020.md；原业务事实未代改。
+
+## 2026-10-20 v0.22.699 原始单价与精确金额技术发布
+
+实际源码 `262d1078ab1876d4f854e32b3280c4805fb05dbd`，签名包 `ef3f22e12c1f6827d9c439a4d3c8afa7d4f4b1d5688b918ce24b0b53be28e51a`，revision `ew1020em`（前驱ev1020hr）；基于健康v698保留其改动。后续候选必须继承精确金额六TEXT字段、`exact_sales_decimal_v1`读写合同及受控首次失败空结构恢复，不能从b00旧基线直接发布覆盖。最终签名Mac正常/失败恢复及原v698监督实际拉起通过，正式业务健康、备份原生收尾完成。正式停服460.268541秒，16条历史差异未代改，人工验收及NAS回执同步待完成（挂载超时）。详情 `docs/release_reports/ORDER_PRICE_EXACT_20261020.md`；完整本地回执 `evidence/order-price-exact-20261020/delivery-receipt.json`。

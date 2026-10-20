@@ -59,3 +59,10 @@ def test_completion_uses_frozen_physical_input_and_inherits_cost(production_app)
         assert unit == Decimal('2.4'), evidence
         assert evidence['total_cost'] == '12.0000'
         assert output.cost_snapshot_source == 'sheet_cut_production'
+
+        from test_transfer_cost_lineage import relocate, assert_cost
+        first = relocate(db, output, ids['temp1'], 3, 'cut-split')
+        assert_cost(db, first, unit)
+        second = relocate(db, first, ids['temp2'], 2, 'cut-chain')
+        assert_cost(db, second, unit)
+        assert_cost(db, relocate(db, second, ids['temp1'], 2, 'cut-full'), unit)

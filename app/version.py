@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.689"
-APP_VERSION_NAME = "已报料与历史组套移库修复"
+APP_VERSION = "v0.22.690"
+APP_VERSION_NAME = "库存移库来源与成本继承修复"
 APP_BUILD_DATE = "2026-10-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6756,3 +6756,15 @@ APP_VERIFICATION_STEPS = [
     "展开货位成本，核对汇总与批次明细正常显示。",
 ]
 APP_CHANGELOG = [*(f"v0.22.689：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.690：多来源库存拆分移库与成本追溯。
+APP_CHANGES = [
+    "自动补库、裁切成品与实际规格来料拆分移库后，沿真实移库流水核验原入库成本。",
+    "盘点导入库存拆分与首次入库正确区分，保留原导入行、冻结成本和日期，支持连续移库。",
+    "补全实际来料的货位成本汇总字段，原新入库、防重复与数量保护保持。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新手机仓库，选择正常库存进行部分移库，再将移动部分移到另一位置。",
+    "展开目标货位成本，核对数量及成本与原批次一致，整批移库和重试正常。",
+]
+APP_CHANGELOG = [*(f"v0.22.690：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

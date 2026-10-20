@@ -31,6 +31,8 @@ def read_inventory_cost_page(db, scoped_ids, *, page=1, page_size=50, keyword=""
         Finished.owner_customer_name_snapshot.label("finished_customer"), Finished.inventory_code_snapshot,
         Finished.product_name_snapshot, Semi.owner_customer_name_snapshot.label("semi_customer"),
         Semi.internal_name, Location.location_name,
+        Semi.inventory_lot_id.label("semi_id"), Semi.material_id.label("semi_material_id"),
+        Semi.board_length_mm, Semi.board_width_mm,
     ).select_from(Lot).outerjoin(Finished, Finished.inventory_lot_id == Lot.id).outerjoin(
         Semi, Semi.inventory_lot_id == Lot.id).outerjoin(Product, Product.id == Finished.product_id).outerjoin(Location, Location.id == Lot.warehouse_location_id
     ).where(Lot.id.in_(scoped_ids)).order_by(Lot.id).execution_options(yield_per=SUMMARY_BATCH_SIZE)
@@ -44,7 +46,11 @@ def read_inventory_cost_page(db, scoped_ids, *, page=1, page_size=50, keyword=""
                 physical_basis_json=row.physical_basis_json, owner_customer_id=row.owner_customer_id,
                 product=SimpleNamespace(unit=row.product_unit) if row.product_id is not None else None)
                 if row.finished_id is not None else None)
-            snapshot = SimpleNamespace(**{name:row[name] for name in snapshot_fields}, finished_detail=physical)
+            sheet = (SimpleNamespace(material_id=row.semi_material_id,
+                board_length_mm=row.board_length_mm, board_width_mm=row.board_width_mm)
+                if row.semi_id is not None else None)
+            snapshot = SimpleNamespace(**{name:row[name] for name in snapshot_fields},
+                finished_detail=physical, semi_finished_detail=sheet)
             value = cost_payload(snapshot, db)
             total_lots += 1
             if value["inventory_value"] is None:

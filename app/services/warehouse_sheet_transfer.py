@@ -91,13 +91,14 @@ def transfer_sheet_lot_between_locations(db, **args):
         lot.warehouse_location_id = target.id
         target_lot = lot
     else:
+        from app.services.inventory_transfer_lineage import split_source_ref_type
         target_lot = InventoryLot(**_copy_columns(lot, {
             'id', 'lot_number', 'warehouse_location_id', 'quantity_available', 'quantity_reserved',
             'quantity_consumed', 'quantity_damaged', 'quantity_scrapped', 'version',
-            'created_at', 'updated_at', 'created_by', 'last_movement_at', 'source_type', 'remarks'}),
+            'created_at', 'updated_at', 'created_by', 'last_movement_at', 'source_type', 'source_ref_type', 'remarks'}),
             lot_number=inv._number('SI'), warehouse_location_id=target.id,
             quantity_available=available_take, quantity_reserved=reserved_take,
-            source_type='transfer', created_by=args['operator_id'], last_movement_at=now,
+            source_type='transfer', source_ref_type=split_source_ref_type(lot), created_by=args['operator_id'], last_movement_at=now,
             remarks=f'由批次 {lot.lot_number} 移位拆分')
         target_lot.semi_finished_detail = SemiFinishedInventoryDetail(
             **_copy_columns(lot.semi_finished_detail, {'inventory_lot_id'}))

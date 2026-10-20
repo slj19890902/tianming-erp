@@ -1,5 +1,6 @@
 """Read frozen purchase/processing entry costs, without consulting current prices."""
 from decimal import Decimal
+from app.services.inventory_transfer_lineage import is_original_or_location_split
 
 
 SOURCES = {'receipt_sheet_actual', 'direct_external_receipt', 'external_bom_receipt', 'raw_purchase_receipt',
@@ -28,7 +29,7 @@ def source_entry_cost(db, lot, detail, visited):
             fact=db.get(SupplierReceiptSettlementPriceFact,detail['supplier_receipt_price_fact_id'])
             receipt=db.get(IncomingReceiptItem,fact.incoming_receipt_item_id) if fact else None
             physical=lot.semi_finished_detail
-            if (not receipt or receipt.received_inventory_lot_id!=lot.id or not physical
+            if (not receipt or not is_original_or_location_split(db, lot, receipt.received_inventory_lot_id) or not physical
                     or fact.source_hash!=detail['source_hash'] or fact.material_id!=physical.material_id
                     or fact.report_length_mm!=physical.board_length_mm or fact.report_width_mm!=physical.board_width_mm):
                 raise ValueError('实际纸板成本与原收料价或实物不一致')

@@ -7,7 +7,7 @@ from app.models.warehouse_inventory import InventoryLot, InventoryLotTransfer, I
 from test_fixed_shelf import setup, rack_factory, incoming, move
 
 
-@pytest.mark.parametrize('source_ref', ['preparation_assembly', 'bom_assembly', 'stock_preparation_finish'])
+@pytest.mark.parametrize('source_ref', ['preparation_assembly', 'bom_assembly', 'stock_preparation_finish', 'inventory_onboarding_line'])
 def test_legacy_split_move_preserves_cost_time_and_replays(setup, source_ref):
     factory, pid, cid, locations = setup
     with factory() as db:
@@ -28,7 +28,8 @@ def test_legacy_split_move_preserves_cost_time_and_replays(setup, source_ref):
         assert (lot.quantity_available, target.quantity_available) == (75, 50)
         assert target.cost_snapshot_at is None and lot.cost_snapshot_at is None
         assert (target.cost_snapshot_detail_json, target.estimated_unit_cost_snapshot) == before
-        assert (target.source_ref_type, target.source_ref_id) == (source_ref, lid)
+        assert (target.source_ref_type, target.source_ref_id) == (
+            'inventory_onboarding_transfer' if source_ref == 'inventory_onboarding_line' else source_ref, lid)
         counts = tuple(db.scalar(select(func.count()).select_from(model)) for model in (InventoryLot, InventoryLotTransfer, InventoryMovement))
         # Replay the original request despite the now advanced source version.
         from app.services.warehouse_inventory import transfer_finished_lot_between_locations
@@ -41,12 +42,13 @@ def test_legacy_split_move_preserves_cost_time_and_replays(setup, source_ref):
         assert tuple(db.scalar(select(func.count()).select_from(model)) for model in (InventoryLot, InventoryLotTransfer, InventoryMovement)) == counts
 
 
+@pytest.mark.parametrize('source_ref', ['preparation_assembly', 'inventory_onboarding_line'])
 @pytest.mark.parametrize('tamper', ['timestamp', 'cost', 'movement', 'transfer'])
-def test_transfer_exemption_requires_unchanged_source_and_real_moves(setup, tamper):
+def test_transfer_exemption_requires_unchanged_source_and_real_moves(setup, tamper, source_ref):
     factory, pid, cid, locations = setup
     with factory() as db:
         lot = incoming(db, pid, cid, locations[0], qty=125)
-        lot.source_type = 'transfer'; lot.source_ref_type = 'preparation_assembly'
+        lot.source_type = 'transfer'; lot.source_ref_type = source_ref; lot.source_ref_id = lot.id
         lot.cost_snapshot_at = None
         db.commit(); lid = lot.id
     factory.class_ = ReceiptPriceGuardSession

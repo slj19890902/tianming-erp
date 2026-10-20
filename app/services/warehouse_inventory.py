@@ -2318,6 +2318,7 @@ def _transfer_finished_lot_location(
         )
         if updated.rowcount != 1:
             raise WarehouseInventoryError("待送批次数量或版本已变化，请刷新后重试", 409)
+        from app.services.inventory_transfer_lineage import split_source_ref_type
         detail = lot.finished_detail
         target_lot = InventoryLot(
             lot_number=_number("FG"),
@@ -2331,7 +2332,7 @@ def _transfer_finished_lot_location(
             unit=lot.unit,
             status="active",
             source_type="transfer",
-            source_ref_type=lot.source_ref_type,
+            source_ref_type=split_source_ref_type(lot),
             source_ref_id=lot.source_ref_id,
             stock_date=lot.stock_date,
             stock_date_accuracy=lot.stock_date_accuracy,

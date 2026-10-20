@@ -2,6 +2,7 @@
 import json
 from decimal import Decimal
 from sqlalchemy import select
+from app.services.inventory_transfer_lineage import is_original_or_location_split
 from app.models.warehouse_inventory import InventoryLot, InventoryLotTransfer, InventoryMovement, InventoryReservation
 
 
@@ -17,7 +18,7 @@ def derived_cost(db, lot, visited):
             from app.services.production_workflow import _stable_key
             completion = db.get(ProductionCompletion, detail['completion_id'])
             qty = int(detail['output_quantity'])
-            if not completion or completion.status != 'posted' or completion.inventory_lot_id != lot.id or completion.actual_output_quantity != qty or qty <= 0:
+            if not completion or completion.status != 'posted' or not is_original_or_location_split(db, lot, completion.inventory_lot_id) or completion.actual_output_quantity != qty or qty <= 0:
                 return None, {'validation_issue':'裁切完工来源不一致'}
             total = Decimal(0)
             evidence = []
@@ -44,7 +45,7 @@ def derived_cost(db, lot, visited):
             if detail.get('automatic_batch'):
                 qty=int(detail['output_quantity']);total=Decimal(detail['total_cost'])
                 anchor=db.get(StockPreparationJob,lot.source_ref_id)
-                if (not anchor or anchor.status!='completed' or anchor.output_lot_id!=lot.id
+                if (not anchor or anchor.status!='completed' or not is_original_or_location_split(db, lot, anchor.output_lot_id)
                         or anchor.actual_output!=qty or qty<=0 or not isinstance(detail.get('inputs'),list)):
                     return None, {'validation_issue':'补库自动成品来源不一致'}
                 calculated=Decimal(0);evidence=[];seen=set()
@@ -55,7 +56,7 @@ def derived_cost(db, lot, visited):
                     if (row['job_id'] in seen or not job or not reservation or not origin or not movement
                             or job.receipt_item_id!=row['receipt_item_id'] or job.reservation_id!=reservation.id
                             or job.product_id!=row['product_id'] or job.status!='completed'
-                            or job.input_quantity!=row['quantity'] or job.output_lot_id not in (None,lot.id)
+                            or job.input_quantity!=row['quantity'] or job.output_lot_id not in (None,anchor.output_lot_id)
                             or reservation.inventory_lot_id!=origin.id or reservation.status!='consumed'
                             or reservation.reserved_stock_quantity!=row['quantity']
                             or reservation.consumed_stock_quantity!=row['quantity']

@@ -17,6 +17,82 @@ from app.models.order_import_source import OrderImportSource, OrderImportSourceL
 SOURCE_HASH_LENGTH = 64
 
 
+def _deleted_order_id(db: Session, source: OrderImportSource) -> int:
+    """A NULL FK alone is not proof of a guarded order deletion."""
+    from app.models.audit import OperationLog
+
+    if source.order_id is not None or any(line.order_item_id is not None for line in source.lines):
+        raise HTTPException(409, "原导入来源的订单或明细关联不一致，请核对原删除记录，不能直接重新建单")
+    creates = db.scalars(select(OperationLog).where(
+        OperationLog.action_code == "order.pdf_create",
+        OperationLog.customer_id_snapshot == source.customer_id,
+        OperationLog.result == "success",
+    ))
+    for created in creates:
+        try:
+            details = json.loads(created.details or "{}")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(details, dict):
+            continue
+        summary = details.get("import_source_summary") or {}
+        if not isinstance(summary, dict):
+            continue
+        if summary.get("source_id") != source.id or created.entity_id is None:
+            continue
+        deleted = db.scalar(select(OperationLog.id).where(
+            OperationLog.action_code == "order.delete",
+            OperationLog.customer_id_snapshot == source.customer_id,
+            OperationLog.result == "success",
+            OperationLog.entity_type == "order",
+            OperationLog.entity_id == created.entity_id,
+            OperationLog.object_ref == created.object_ref,
+            OperationLog.id > created.id,
+        ).limit(1))
+        if deleted is not None:
+            return created.entity_id
+    raise HTTPException(409, "原导入来源已无关联订单，但缺少对应的完整删除审计；请核对原订单删除记录后处理")
+
+
+def resolve_upload_source(
+    db: Session, *, source_kind: str, source_hash: str, customer_id: int,
+) -> tuple[OrderImportSource | None, OrderImportSource | None, int | None]:
+    """Return effective source or proven predecessor, preserving all history.
+
+    Called under the normal create write transaction; a deterministic successor
+    key and the existing unique constraint also protect concurrent reimports.
+    Email occurrences keep their separate attachment/disposition protocol.
+    """
+    if source_kind not in {"pdf_upload", "excel_upload"}:
+        raise ValueError("Only manual file uploads support successor imports")
+    history = list(db.scalars(select(OrderImportSource)
+        .options(selectinload(OrderImportSource.lines))
+        .where(OrderImportSource.source_kind == source_kind,
+               OrderImportSource.source_hash == source_hash)
+        .order_by(OrderImportSource.id)))
+    if any(row.customer_id != customer_id for row in history):
+        raise HTTPException(409, "该文件来源已归属其他客户，不能重新建单")
+    effective = []
+    for source in history:
+        order = db.get(Order, source.order_id) if source.order_id is not None else None
+        if source.order_id is not None and order is None:
+            raise HTTPException(409, "原导入来源的订单关联异常，请核对原订单，不能直接重新建单")
+        if order is not None and order.customer_id != source.customer_id:
+            raise HTTPException(409, "原导入来源与订单客户不一致，请核对来源关联，不能再次导入")
+        if order is not None and order.status != "cancelled":
+            effective.append(source)
+    if len(effective) > 1:
+        raise HTTPException(409, "该文件存在多个有效订单，请核对来源关联，不能再次导入")
+    if effective:
+        return effective[0], None, None
+    if not history:
+        return None, None, None
+    prior_order_id = None
+    for source in history:
+        prior_order_id = source.order_id if source.order_id is not None else _deleted_order_id(db, source)
+    return None, history[-1], prior_order_id
+
+
 def _json_value(value: Any) -> Any:
     if isinstance(value, Decimal):
         return format(value, "f")
@@ -124,6 +200,9 @@ class ImportSourceContext:
     email_attachment_id: int | None
     claims: dict[str, Any]
     signed_lines: list[dict[str, Any]]
+    supersedes_source_id: int | None = None
+    supersedes_order_id: int | None = None
+    supersedes_order_status: str | None = None
 
 
 def prepare(
@@ -165,7 +244,19 @@ def prepare(
         if attachment_id is not None
         else ("excel_upload" if source_format in {"xls", "xlsx"} else "pdf_upload")
     )
-    source_key = str(attachment_id) if attachment_id is not None else source_hash
+    predecessor = None
+    predecessor_order_id = None
+    if attachment_id is None:
+        existing, predecessor, predecessor_order_id = resolve_upload_source(
+            db, source_kind=source_kind, source_hash=source_hash, customer_id=int(payload.customer_id),
+        )
+        source_key = source_hash if predecessor is None else f"{source_hash}:after:{predecessor.id}"
+    else:
+        source_key = str(attachment_id)
+        existing = db.scalar(select(OrderImportSource)
+            .options(selectinload(OrderImportSource.lines))
+            .where(OrderImportSource.source_kind == source_kind,
+                   OrderImportSource.source_key == source_key))
     digest = payload_hash(payload)
     context = ImportSourceContext(
         source_kind=source_kind,
@@ -178,14 +269,9 @@ def prepare(
         email_attachment_id=attachment_id,
         claims=claims,
         signed_lines=signed_lines,
-    )
-    existing = db.scalar(
-        select(OrderImportSource)
-        .options(selectinload(OrderImportSource.lines))
-        .where(
-            OrderImportSource.source_kind == source_kind,
-            OrderImportSource.source_key == source_key,
-        )
+        supersedes_source_id=predecessor.id if predecessor else None,
+        supersedes_order_id=predecessor_order_id,
+        supersedes_order_status=("deleted" if predecessor.order_id is None else "cancelled") if predecessor else None,
     )
     if existing is None:
         return context, None
@@ -272,6 +358,10 @@ def attach(
         "override_reasons": list(override_reasons),
         "line_count": len(context.signed_lines),
         "source_template": context.claims.get("source_template"),
+        **({"supersedes_source_id": context.supersedes_source_id,
+            "supersedes_order_id": context.supersedes_order_id,
+            "supersedes_order_status": context.supersedes_order_status}
+           if context.supersedes_source_id is not None else {}),
     }
     source = OrderImportSource(
         source_kind=context.source_kind,

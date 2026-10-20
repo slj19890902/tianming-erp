@@ -14,7 +14,7 @@ from app.models.order_import_source import OrderImportSource, OrderImportSourceL
 from app.models.product import Product
 from app.models.supplier import Supplier
 from tests.test_phase16_pdf_order_import import _signed_pdf_preview_token
-from tests.test_semi_finished_order_reservation import b1_app, login, order_item
+from tests.test_semi_finished_order_reservation import b1_app, login, order_item, fictional_document_evidence
 
 
 def _ready_product(factory) -> None:
@@ -220,7 +220,7 @@ def test_different_trusted_sources_without_po_create_independent_orders(b1_app) 
         assert all(order.customer_po is None for order in orders)
 
 
-def test_cancelled_source_replays_original_and_new_source_does_not_reopen_it(
+def test_cancelled_source_creates_replacement_and_never_reopens_original(
     b1_app,
 ) -> None:
     app, factory = b1_app
@@ -243,8 +243,8 @@ def test_cancelled_source_replays_original_and_new_source_does_not_reopen_it(
         )
 
     assert replay.status_code == 201
-    assert replay.json()["id"] == created.json()["id"]
-    assert replay.json()["status"] == "cancelled"
+    assert replay.json()["id"] != created.json()["id"]
+    assert replay.json()["status"] != "cancelled"
     assert replacement.status_code == 201, replacement.text
     assert replacement.json()["id"] != created.json()["id"]
     with factory() as db:

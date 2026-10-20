@@ -4465,12 +4465,14 @@ def _order_import_preview(
     draft["file_hash"] = digest
     matched = _match_pdf_preview_for_user(db, draft, user)
     if matched.get("template") == PICK_LIST_TEMPLATE and matched.get("matched_customer_id"):
-        from app.models.order_import_source import OrderImportSource
-        existing = db.scalar(select(OrderImportSource).where(
-            OrderImportSource.source_kind == "excel_upload", OrderImportSource.source_key == digest))
+        from app.services.order_import_source import resolve_upload_source
+        try:
+            existing, _predecessor, _old_order_id = resolve_upload_source(
+                db, source_kind="excel_upload", source_hash=digest,
+                customer_id=matched["matched_customer_id"])
+        except HTTPException as error:
+            raise ExcelImportError(str(error.detail)) from error
         if existing is not None:
-            if existing.customer_id != matched["matched_customer_id"]:
-                raise ExcelImportError("该文件已导入其他客户，不能重复建单，请核对原订单")
             original = db.get(Order, existing.order_id) if existing.order_id else None
             matched.update(duplicate_status="duplicate_skipped",
                 duplicate_reason="该文件已保存过，请查看原订单，不要重复建单。",
@@ -8652,7 +8654,6 @@ def _order_save_proof_from_record(previous, record, raw_key, user, db, *, matche
 def resolve_order_save(idempotency_key: str, payload: OrderSaveResolve,
                        db: Session = Depends(get_db), user: User = Depends(can_create)):
     from app.services import order_import_save_recovery as recovery
-    from app.models.order_import_source import OrderImportSource
     _order_save_actor_guard(payload.expected_actor_id, user)
     if not 8 <= len(idempotency_key) <= 100:
         raise HTTPException(422, "保存请求标识无效", headers=recovery.HEADERS)
@@ -8677,7 +8678,7 @@ def resolve_order_save(idempotency_key: str, payload: OrderSaveResolve,
                 require_customer_access(record.get("save_customer_id", frozen["customer_id"]), current_user=user, db=db)
                 require_customer_access(frozen["customer_id"], current_user=user, db=db)
                 order = db.get(Order, frozen["id"])
-                if order is None:
+                if order is None or order.order_number != frozen.get("order_number"):
                     raise recovery.conflict("原订单已不存在，请保留请求并核对历史记录。")
                 require_customer_access(order.customer_id, current_user=user, db=db)
                 if original is not None and _order_create_identity(original, user.id)[1] != record["digest"]:
@@ -8694,9 +8695,10 @@ def resolve_order_save(idempotency_key: str, payload: OrderSaveResolve,
             claims = _decode_pdf_preview_safety_token(payload.source_preview_token, user)
             require_customer_access(claims["matched_customer_id"], current_user=user, db=db)
             kind = "excel_upload" if claims.get("source_format") in {"xls", "xlsx"} else "pdf_upload"
-            source = db.scalar(select(OrderImportSource).where(
-                OrderImportSource.source_kind == kind, OrderImportSource.source_hash == claims["source_hash"],
-                OrderImportSource.customer_id == claims["matched_customer_id"]))
+            from app.services.order_import_source import resolve_upload_source
+            source, _predecessor, _old_order_id = resolve_upload_source(
+                db, source_kind=kind, source_hash=claims["source_hash"],
+                customer_id=claims["matched_customer_id"])
             if source is not None and source.order_id is not None:
                 require_customer_access(source.customer_id, current_user=user, db=db)
                 order = db.get(Order, source.order_id)
@@ -8811,7 +8813,7 @@ def create_order(
                 if record["digest"] != digest:
                     raise HTTPException(409, "此保存请求已完成，不能以同一请求标识提交不同内容；请核对原订单。")
                 order = db.get(Order, record["response"]["id"])
-                if order is None:
+                if order is None or order.order_number != record["response"].get("order_number"):
                     raise HTTPException(409, "原订单已不存在，请核对历史记录，不能重复创建。")
                 require_customer_access(order.customer_id, current_user=user, db=db)
                 response = _order_response(order, user, db=db)

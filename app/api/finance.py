@@ -980,6 +980,7 @@ def _customer_charge_statement_id(db: Session, charge_id: int) -> int | None:
 
 
 def _customer_charge_response(db: Session, charge: CustomerCharge) -> dict:
+    from app.services.historical_delivery_receivables import historical_fields
     order = db.get(Order, charge.order_id)
     statement_id = _customer_charge_statement_id(db, charge.id)
     similar_filters = [
@@ -1022,7 +1023,8 @@ def _customer_charge_response(db: Session, charge: CustomerCharge) -> dict:
         "status": charge.status,
         "version": charge.version,
         "statement_id": statement_id,
-        "locked": statement_id is not None,
+        "locked": statement_id is not None or bool(charge.historical_source_key),
+        **historical_fields(charge.historical_delivery_snapshot_json),
         "historical_similar_charge_count": historical_similar_charge_count,
         "created_at": charge.created_at,
         "updated_at": charge.updated_at,
@@ -1204,6 +1206,8 @@ def update_customer_charge(
     if replay is not None:
         return replay
     charge = _customer_charge_for_user(db, charge_id, user)
+    if charge.historical_source_key:
+        raise HTTPException(409, "历史送货来源已冻结，不能通过附加收费编辑改写")
     if charge.status != "draft" or _customer_charge_statement_id(db, charge.id):
         raise HTTPException(status_code=409, detail="只有未进入对账单的草稿收费可以修改")
     if charge.version != payload.expected_version:
@@ -1263,6 +1267,8 @@ def _customer_charge_transition(
     if replay is not None:
         return replay
     charge = _customer_charge_for_user(db, charge_id, user)
+    if charge.historical_source_key:
+        raise HTTPException(409, "历史送货来源已冻结，须使用可追溯的历史更正流程")
     if charge.version != payload.expected_version:
         raise HTTPException(
             status_code=409,
@@ -1777,6 +1783,7 @@ def _statement_detail_response(
             Order.customer_po,
             CustomerCharge.display_name.label("product_name"),
             CustomerCharge.charge_type,
+            CustomerCharge.historical_delivery_snapshot_json,
             StatementItem.charge_quantity_snapshot,
             StatementItem.unit_snapshot,
             StatementItem.unit_price_snapshot,
@@ -1799,6 +1806,8 @@ def _statement_detail_response(
     ).all()
     for item in charge_items:
         data = dict(item._mapping)
+        from app.services.historical_delivery_receivables import historical_fields
+        history = historical_fields(data.pop("historical_delivery_snapshot_json"))
         data.update(
             {
                 "source_type": "customer_charge",
@@ -1814,6 +1823,9 @@ def _statement_detail_response(
                 "charge_quantity": data.pop("charge_quantity_snapshot"),
             }
         )
+        data.update(history)
+        if history:
+            data["actual_received_date"] = history["delivery_date"]
         statement_items.append(data)
     statement_items.sort(key=lambda item: item["statement_item_id"])
     source_customers = {
@@ -1969,6 +1981,7 @@ def export_statement_excel(
             source_customer.name.label("source_customer_name"),
             Order.customer_po,
             CustomerCharge.display_name,
+            CustomerCharge.historical_delivery_snapshot_json,
             StatementItem.charge_quantity_snapshot,
             StatementItem.unit_snapshot,
             StatementItem.unit_price_snapshot,
@@ -2086,20 +2099,22 @@ def export_statement_excel(
             ]
         )
     for line in charge_lines:
+        from app.services.historical_delivery_receivables import historical_fields
+        history = historical_fields(line.historical_delivery_snapshot_json)
         sheet.append(
             [
                 line.source_customer_name or customer.name,
                 line.customer_po,
-                "",
-                "",
-                "",
+                history.get("product_code", ""),
+                history.get("delivery_date", ""),
+                history.get("delivery_number", ""),
                 line.display_name,
-                f"{format_reconciliation_number(line.charge_quantity_snapshot)}{line.unit_snapshot}",
-                "客户附加收费",
+                history.get("specification", f"{format_reconciliation_number(line.charge_quantity_snapshot)}{line.unit_snapshot}"),
+                "" if history else "客户附加收费",
                 "",
+                history.get("actual_received_quantity", ""),
                 "",
-                "",
-                "",
+                history.get("actual_received_quantity", ""),
                 float(line.unit_price_snapshot),
                 float(line.receivable_amount),
                 line.note,
@@ -2303,6 +2318,7 @@ def _customer_statement_export_data(
             Order.order_number,
             Order.customer_po,
             CustomerCharge.display_name,
+            CustomerCharge.historical_delivery_snapshot_json,
             StatementItem.charge_quantity_snapshot,
             StatementItem.unit_price_snapshot,
             StatementItem.receivable_amount,
@@ -2313,6 +2329,8 @@ def _customer_statement_export_data(
         .where(StatementItem.statement_id == statement.id)
     ).all()
     for row in charge_rows:
+        from app.services.historical_delivery_receivables import historical_fields
+        history = historical_fields(row.historical_delivery_snapshot_json)
         mode = (
             row.price_tax_mode_snapshot
             if row.price_tax_mode_snapshot in VALID_PRICE_TAX_MODES
@@ -2325,11 +2343,11 @@ def _customer_statement_export_data(
         rows.append(
             {
                 "statement_item_id": row.statement_item_id,
-                "delivery_date": None,
-                "delivery_number": "",
+                "delivery_date": history.get("delivery_date"),
+                "delivery_number": history.get("delivery_number", ""),
                 "order_number": row.order_number or "",
                 "customer_po": row.customer_po,
-                "product_code": "",
+                "product_code": history.get("product_code", ""),
                 "product_name": row.display_name,
                 "quantity": quantity,
                 "unit_price": unit_price,

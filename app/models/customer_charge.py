@@ -20,7 +20,11 @@ from app.models import Base
 
 
 class CustomerCharge(Base):
-    """A customer receivable source that is not a delivered inventory item."""
+    """Receivable sources without a new inventory movement.
+
+    Historical delivery evidence is explicitly identified and frozen, rather
+    than being misrepresented as a second shipment or an ordinary surcharge.
+    """
 
     __tablename__ = "finance_customer_charges"
     __table_args__ = (
@@ -95,6 +99,8 @@ class CustomerCharge(Base):
     )
     reconciliation_month: Mapped[str | None] = mapped_column(String(7), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    historical_source_key: Mapped[str | None] = mapped_column(String(120), nullable=True, unique=True)
+    historical_delivery_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(20), default="draft", server_default="draft", nullable=False
     )

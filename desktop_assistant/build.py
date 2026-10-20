@@ -334,6 +334,7 @@ def main():
                             'schema_contract': schema_contract,
                             'reader_capabilities': {'order_inventory_v1': 1, 'mold_label_text_v3': 1, 'quotation_write_v1': 1,
                                                     'customer_specification_v1': 1,
+                                                    'historical_delivery_receivable_v1': 1,
                                                     'shared_finished_v1': 1,
                                                     'shared_finished_management_v1': 1,
                                                     'shared_customer_members_v1': 1,

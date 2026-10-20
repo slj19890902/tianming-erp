@@ -933,6 +933,8 @@ def _snapshot_for_statement(
         rules = rules_by_customer.get(source_customer_id, {})
         default_rule = rules.get(None)
         if charge is not None:
+            from app.services.historical_delivery_receivables import historical_snapshot
+            historical = historical_snapshot(charge)
             mode = statement_item.price_tax_mode_snapshot
             rate_value = statement_item.tax_rate_snapshot
             project_name = _text(charge.tax_project_name)
@@ -980,12 +982,12 @@ def _snapshot_for_statement(
                     "statement_item_id": statement_item.id,
                     "source_type": "customer_charge",
                     "customer_charge_id": charge.id,
-                    "product_id": None,
-                    "product_code_snapshot": None,
+                    "product_id": historical["product_id"] if historical else None,
+                    "product_code_snapshot": historical["product_code"] if historical else None,
                     "product_name_snapshot": charge.display_name,
                     "project_name": project_name,
                     "tax_classification_code": classification_code,
-                    "specification": None,
+                    "specification": historical["customer_drawing_number"] or None if historical else None,
                     "unit": unit,
                     "quantity": quantity,
                     "unit_price": unit_price,

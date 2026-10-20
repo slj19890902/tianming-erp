@@ -32,6 +32,7 @@ def has_supplier_trim_facts(db):
 
 MOLD_LABEL_TEXT_READER = 'mold_label_text_v3'
 CUSTOMER_SPECIFICATION_READER = 'customer_specification_v1'
+HISTORICAL_RECEIVABLE_READER = 'historical_delivery_receivable_v1'
 
 
 def has_customer_specification_facts(db):
@@ -89,6 +90,9 @@ def target_readers(database, source, target, inventory_record, dispatch_record, 
             required.discard(MOLD_LABEL_TEXT_READER)
         if has_supplier_trim_facts(db): required.add('supplier_sheet_trim_v1')
         if has_customer_specification_facts(db): required.add(CUSTOMER_SPECIFICATION_READER)
+        if any(r[1] == 'historical_source_key' for r in db.execute('PRAGMA table_info(finance_customer_charges)')):
+            if db.execute('SELECT 1 FROM finance_customer_charges WHERE historical_source_key IS NOT NULL OR historical_delivery_snapshot_json IS NOT NULL LIMIT 1').fetchone():
+                required.add(HISTORICAL_RECEIVABLE_READER)
         if physical_kit.has_facts(db): required.add(physical_kit.CAPABILITY)
     if inventory_record is not None: required.add(inventory.CAPABILITY)
     if dispatch_record is not None: required.add(dispatch.CAPABILITY)

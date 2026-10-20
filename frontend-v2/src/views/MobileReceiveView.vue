@@ -1,311 +1,349 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { incomingApi, type IncomingItem } from '../api/client'
-import { useRouter } from 'vue-router'
-import { useAuthStore } from '../stores/auth'
-import { useTabsStore } from '../stores/tabs'
-
-const router = useRouter()
-const auth = useAuthStore()
-const tabs = useTabsStore()
-
-const loading = ref(false)
-const dataReady = ref(false)
-const loadError = ref('')
-let loadRequest = 0
-let disposed = false
-const pendingItems = ref<IncomingItem[]>([])
-const receivedItems = ref<IncomingItem[]>([])
-const confirmingId = ref<number | null>(null)
-
-async function loadAll() {
-  if (disposed) return
-  const request = ++loadRequest
-  loading.value = true
-  dataReady.value = false
-  loadError.value = ''
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { request } from "../api/client";
+import {
+  mobileApi,
+  backendUrl,
+  type Incoming,
+  type IncomingDetail,
+} from "../mobile/api";
+import {
+  compactText,
+  dimensions,
+  quantity,
+  safeMessage,
+  shortCode,
+} from "../mobile/format";
+import { useMobileStore } from "../mobile/store";
+import MobileIcon from "../mobile/components/MobileIcon.vue";
+import MobileSheet from "../mobile/components/MobileSheet.vue";
+const mobile = useMobileStore(),
+  tab = ref("pending"),
+  pending = ref<Incoming[]>([]),
+  received = ref<Incoming[]>([]),
+  loading = ref(false),
+  error = ref(""),
+  notice = ref("");
+const expanded = ref<string | null>(null),
+  details = ref<IncomingDetail | null>(null),
+  detailError = ref(""),
+  detailLoading = ref(false),
+  busy = ref<string | null>(null),
+  undo = ref<Incoming | null>(null),
+  reason = ref(""),
+  imageFailed = ref(false);
+let listController: AbortController | null = null,
+  detailController: AbortController | null = null,
+  alive = true;
+const items = computed(() =>
+  tab.value === "pending" ? pending.value : received.value,
+);
+const canRevert = computed(() => mobile.shell?.user.role === "admin");
+const canExecute = computed(
+  () => mobile.entry("incoming")?.can_execute === true,
+);
+const drawing = computed(
+  () =>
+    details.value?.production_tasks.find((t) => t.drawing_path)?.drawing_path ||
+    details.value?.incoming_item.drawing_path ||
+    "",
+);
+const drawingUrl = computed(() =>
+  drawing.value ? backendUrl(drawing.value) : "",
+);
+const summary = (item: Incoming) =>
+  item.requisition_spec ||
+  dimensions(
+    item.report_length_mm ?? item.cardboard_len,
+    item.report_width_mm ?? item.cardboard_width,
+  );
+const rowKey = (item: Incoming) => item.history_key || String(item.receipt_item_id || item.item_id);
+const count = (item: Incoming) => quantity(tab.value === "received"
+  ? item.received_quantity_this_time ?? item.incoming_quantity
+  : item.remaining_quantity ?? item.incoming_quantity ?? item.requisition_qty);
+function requestKey(action: string, item: Incoming) {
+  const name = `mobile-receipt:${mobile.shell?.user.id}:${action}:${rowKey(item)}`;
+  let key = sessionStorage.getItem(name);
+  if (!key) { key = `${action}-${Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, "0")).join("")}`; sessionStorage.setItem(name, key); }
+  return { name, key };
+}
+async function load() {
+  listController?.abort();
+  listController = new AbortController();
+  const current = listController;
+  loading.value = true;
+  error.value = "";
   try {
-    const [pending, received] = await Promise.all([
-      incomingApi.listPending(),
-      incomingApi.listReceived(),
-    ])
-    if (request !== loadRequest) return
-    pendingItems.value = pending.items
-    receivedItems.value = received.items
-    dataReady.value = true
-  } catch (error) {
-    if (request !== loadRequest) return
-    loadError.value = (error instanceof Error ? error.message : '') || '收料数据加载失败'
-    ElMessage.error(loadError.value)
+    const [p, r] = await Promise.all([
+      mobileApi.pending(current.signal),
+      mobileApi.received(current.signal),
+    ]);
+    if (!current.signal.aborted && alive) {
+      pending.value = p.items;
+      received.value = r.items;
+    }
+  } catch (e) {
+    if (!current.signal.aborted && alive) error.value = safeMessage(e);
   } finally {
-    if (request === loadRequest) loading.value = false
+    if (alive && current === listController) loading.value = false;
   }
 }
-
-/** 确认收料：后端整单确认（PUT /api/incoming/receive/{item_id}，无 body） */
-async function confirmReceive(item: IncomingItem) {
-  if (disposed || !dataReady.value || !auth.hasPermission('incoming.execute') || confirmingId.value !== null) return
-  confirmingId.value = item.item_id
+async function expand(item: Incoming) {
+  detailController?.abort();
+  details.value = null;
+  detailError.value = "";
+  imageFailed.value = false;
+  if (expanded.value === rowKey(item)) {
+    expanded.value = null;
+    return;
+  }
+  expanded.value = rowKey(item);
+  if (tab.value === "received") return;
+  detailController = new AbortController();
+  const current = detailController;
+  detailLoading.value = true;
   try {
-    await incomingApi.receiveItem(item.item_id)
-    if (disposed) return
-    ElMessage.success('收料已确认')
-    await loadAll()
-  } catch (error) {
-    if (disposed) return
-    ElMessage.error(error instanceof Error ? error.message : '确认收料失败')
+    const result = await mobileApi.incomingDetail(
+      String(item.item_id),
+      current.signal,
+    );
+    if (!current.signal.aborted && alive) details.value = result;
+  } catch (e) {
+    if (!current.signal.aborted && alive) detailError.value = safeMessage(e);
   } finally {
-    if (!disposed) confirmingId.value = null
+    if (current === detailController && alive) detailLoading.value = false;
   }
 }
-
-/** 撤销收料：PUT /api/incoming/revert/{item_id} */
-async function revertReceive(item: IncomingItem) {
-  if (disposed || !dataReady.value || !auth.hasPermission('incoming.execute')) return
+async function confirm(item: Incoming) {
+  if (busy.value || !canExecute.value) return;
+  busy.value = rowKey(item);
+  error.value = "";
+  notice.value = "";
   try {
-    await incomingApi.revertItem(item.item_id)
-    if (disposed) return
-    ElMessage.success('已撤销该条收料')
-    await loadAll()
-  } catch (error) {
-    if (disposed) return
-    ElMessage.error(error instanceof Error ? error.message : '撤销失败')
+    const identity = requestKey("receive", item);
+    await request(`/api/incoming/receive/${encodeURIComponent(item.item_id)}`, {
+      method: "PUT", body: JSON.stringify({ idempotency_key: identity.key }),
+    });
+    sessionStorage.removeItem(identity.name);
+    if (!alive) return;
+    notice.value = "已确认收料";
+    expanded.value = null;
+    await load();
+  } catch (e) {
+    if (alive) error.value = safeMessage(e);
+  } finally {
+    if (alive) busy.value = null;
   }
 }
-
-const totalPendingQty = computed(() =>
-  pendingItems.value.reduce((sum: number, item: IncomingItem) => sum + (Number(item.remaining_quantity ?? item.incoming_quantity ?? 0) || 0), 0),
-)
-
-async function logout() {
-  await auth.logout()
-  tabs.reset()
-  await router.replace('/login')
+async function revert() {
+  if (!undo.value || !reason.value.trim() || busy.value || !canRevert.value)
+    return;
+  const item = undo.value;
+  busy.value = rowKey(item);
+  error.value = "";
+  try {
+    const identity = requestKey("revert", item);
+    const target = item.receipt_item_id ? `receipt-items/${item.receipt_item_id}/revert` : `revert/${encodeURIComponent(item.item_id)}`;
+    await request(`/api/incoming/${target}`, {
+      method: "PUT",
+      body: JSON.stringify({ reason: reason.value.trim(), idempotency_key: identity.key }),
+    });
+    if (!alive) return;
+    sessionStorage.removeItem(identity.name);
+    undo.value = null;
+    notice.value = "已撤销收料";
+    await load();
+  } catch (e) {
+    if (alive) error.value = safeMessage(e);
+  } finally {
+    if (alive) busy.value = null;
+  }
 }
-
-onMounted(loadAll)
-onUnmounted(() => {
-  disposed = true
-  loadRequest++
-})
+onMounted(load);
+onBeforeUnmount(() => {
+  alive = false;
+  listController?.abort();
+  detailController?.abort();
+});
 </script>
-
 <template>
-  <div class="mobile-page">
-    <header class="mobile-header">
-      <div class="brand-logo">天</div>
-      <div>
-        <h1>移动收料 <span class="v2-badge">v2</span></h1>
-        <p class="tm-muted">天明包装 ERP · 仓管专用</p>
+  <section>
+    <div class="m-receive-toolbar">
+      <div class="m-seg">
+        <button
+          :class="{ on: tab === 'pending' }"
+          @click="
+            tab = 'pending';
+            expanded = null;
+          "
+        >
+          待收料</button
+        ><button
+          :class="{ on: tab === 'received' }"
+          @click="
+            tab = 'received';
+            expanded = null;
+          "
+        >
+          已收料
+        </button>
       </div>
-      <div class="mobile-actions">
-        <span class="tm-muted">{{ auth.displayName() }}</span>
-        <el-button link @click="router.push('/')">返回工作台</el-button>
-        <el-button link @click="logout">退出</el-button>
-        <el-button class="refresh-btn" type="primary" circle @click="loadAll">↻</el-button>
-      </div>
-    </header>
-
-    <main class="mobile-main" v-loading="loading">
-      <section v-if="loadError" class="tm-card tm-section" role="alert">
-        <el-alert type="error" show-icon :closable="false" title="收料数据加载失败" :description="loadError" />
-        <p class="tm-muted">当前数量暂不可用，旧记录需重新加载后核对。</p>
-        <el-button type="primary" @click="loadAll">重新加载</el-button>
-      </section>
-      <p v-else-if="!dataReady" class="tm-muted" role="status">正在加载收料数据，数量暂不可用。</p>
-      <section class="stat-row">
-        <div class="tm-kpi">
-          <div class="kpi-label">待收料任务</div>
-          <div class="kpi-value">{{ dataReady ? pendingItems.length : '—' }}</div>
+      <button
+        class="m-icon-btn"
+        aria-label="刷新收料"
+        :disabled="loading || !!busy"
+        @click="load"
+      >
+        <MobileIcon name="refresh" />
+      </button>
+    </div>
+    <a v-if="canExecute" :href="backendUrl('/mobile/erp.html#incoming')" class="m-text-action">部分到货 / 选择入库位置</a>
+    <div v-if="notice" class="m-notice" role="status">{{ notice }}</div>
+    <div v-if="error" class="m-status" role="alert">
+      {{ error }}<button :disabled="!!busy" @click="load">重试</button>
+    </div>
+    <div v-if="loading" class="m-empty" role="status">加载中…</div>
+    <div v-else-if="!items.length && !error" class="m-empty">
+      {{ tab === "pending" ? "暂无待收料" : "暂无收料记录" }}
+    </div>
+    <article
+      v-for="item in items"
+      :key="rowKey(item)"
+      class="m-card m-receive-card"
+      :class="{ open: expanded === rowKey(item) }"
+    >
+      <button
+        class="m-receive-head"
+        :aria-expanded="expanded === rowKey(item)"
+        @click="expand(item)"
+      >
+        <span class="m-receive-spec"
+          >{{ compactText(summary(item))
+          }}<span>{{ compactText(item.flute_type) }}</span></span
+        ><span class="m-receive-qty"
+          >数量 <b>{{ count(item) }}</b> 张<span class="m-expand"
+            >{{ expanded === rowKey(item) ? "收起" : "展开"
+            }}<MobileIcon name="chevron" :size="17" /></span
+        ></span>
+      </button>
+      <section
+        v-if="expanded === rowKey(item)"
+        class="m-receive-details"
+      >
+        <div class="m-receive-meta">
+          供应商
+          <b>{{
+            compactText(
+              details?.incoming_item.snapshot_supplier_name || details?.incoming_item.supplier_name || (item.snapshot_supplier_name || item.supplier_name),
+            ) || "—"
+          }}</b>
+          ·
+          {{
+            compactText(
+              item.supplier_delivery_time || item.material_received_at,
+            ) || "—"
+          }}
         </div>
-        <div class="tm-kpi">
-          <div class="kpi-label">待收纸板（张）</div>
-          <div class="kpi-value">{{ dataReady ? totalPendingQty : '—' }}</div>
-        </div>
-      </section>
-
-      <section>
-        <h2 class="tm-section-title">待收料</h2>
-        <div v-if="dataReady && pendingItems.length === 0" class="empty-card tm-card tm-muted">
-          暂无待收料任务，纸板到厂后会在此显示。
-        </div>
-        <div v-for="item in pendingItems" :key="item.item_id" class="tm-card receive-card">
-          <div class="receive-head">
-            <strong>{{ item.product_name || item.order_number || `任务 #${item.item_id}` }}</strong>
-            <el-tag type="warning">待收</el-tag>
-          </div>
-          <div class="receive-meta">
-            <span>客户：{{ item.customer_name || '—' }}</span>
-            <span>订单：<strong class="tm-mono">{{ item.quantity ?? '—' }} {{ item.order_unit_label || '单位待完善' }}</strong></span>
-            <span>报料：<strong class="tm-mono">{{ item.planned_quantity ?? item.requisition_qty ?? '—' }} 张</strong></span>
-            <span>已收：{{ item.cumulative_received_quantity ?? 0 }} 张</span>
-            <span>待收：<strong class="tm-mono">{{ item.remaining_quantity ?? item.incoming_quantity ?? '—' }} 张</strong></span>
-            <span>纸板规格：{{ item.requisition_spec || '—' }}</span>
-            <span>供应商：{{ item.snapshot_supplier_name || '—' }}</span>
-            <span>材质：{{ item.material || '—' }}</span>
-          </div>
-          <div class="receive-meta tm-muted tm-mono">
-            {{ item.delivery_date || '' }}
-          </div>
-          <el-button
-            type="success"
-            size="large"
-            class="receive-btn"
-            :loading="confirmingId === item.item_id"
-            :disabled="!dataReady || !auth.hasPermission('incoming.execute')"
-            @click="confirmReceive(item)"
+        <h2>对应产品</h2>
+        <div class="m-receive-product">
+          <a
+            v-if="drawingUrl"
+            :href="drawingUrl"
+            target="_blank"
+            rel="noopener"
+            class="m-thumb"
+            :aria-label="`查看图纸 图-${shortCode(details?.incoming_item.product_code || item.product_code)}`"
+            ><img
+              v-if="!imageFailed"
+              :src="drawingUrl"
+              alt="图纸缩略图"
+              @error="imageFailed = true"
+            /><MobileIcon v-else name="doc" :size="32" /><span
+              >图-{{
+                shortCode(
+                  details?.incoming_item.product_code || item.product_code,
+                )
+              }}</span
+            ></a
           >
-            确认收料
-          </el-button>
-          <a class="legacy-receive" href="/mobile/erp.html" target="_blank" rel="noopener">部分到货或异常：打开现版收料流程</a>
+          <dl>
+            <div>
+              <dt>短码</dt>
+              <dd>
+                <strong>{{
+                  shortCode(
+                    details?.incoming_item.product_code || item.product_code,
+                  )
+                }}</strong>
+                ·
+                {{
+                  compactText(
+                    details?.incoming_item.customer_name || item.customer_name,
+                  )
+                }}
+              </dd>
+            </div>
+            <div>
+              <dt>品名</dt>
+              <dd>
+                {{
+                  compactText(
+                    details?.incoming_item.product_name || item.product_name,
+                  ) || "—"
+                }}
+              </dd>
+            </div>
+            <div>
+              <dt>工艺</dt>
+              <dd>
+                {{
+                  details?.production_tasks
+                    .flatMap((t) => t.process_tags || [])
+                    .map(compactText)
+                    .join(" → ") ||
+                  compactText(item.production_process) ||
+                  "—"
+                }}
+              </dd>
+            </div>
+          </dl>
         </div>
-      </section>
-
-      <section>
-        <h2 class="tm-section-title">已收料</h2>
-        <div class="tm-muted" style="margin-bottom: 10px">后端仅返回近 24 小时已收料记录。</div>
-        <div v-if="dataReady && receivedItems.length === 0" class="empty-card tm-card tm-muted">暂无收料记录。</div>
-        <div v-for="item in receivedItems.slice(0, 20)" :key="item.item_id" class="tm-card received-card">
-          <div class="receive-head">
-            <strong>{{ item.product_name || item.order_number || `任务 #${item.item_id}` }}</strong>
-            <el-tag type="success">已收</el-tag>
-          </div>
-          <div class="receive-meta tm-muted">
-            <span>订单：{{ item.quantity ?? '—' }} {{ item.order_unit_label || '单位待完善' }}</span>
-            <span>本次实收：{{ item.incoming_quantity ?? '—' }} 张</span>
-            <span>{{ item.material_received_at || '' }}</span>
-            <span v-if="item.received_by_name">经手：{{ item.received_by_name }}</span>
-          </div>
-          <el-button type="warning" link :disabled="!dataReady || !auth.hasPermission('incoming.execute')" @click="revertReceive(item)">撤销收料</el-button>
+        <div v-if="detailLoading" role="status">加载中…</div>
+        <div v-if="detailError" class="m-status" role="alert">
+          {{ detailError }}
         </div>
+        <button
+          v-if="tab === 'pending' && canExecute"
+          class="m-primary m-wide"
+          :disabled="!!busy"
+          @click="confirm(item)"
+        >
+          {{ busy === rowKey(item) ? "收料中…" : "确认收料" }}</button
+        ><button
+          v-if="tab === 'received' && canRevert && item.can_revert_receipt !== false"
+          class="m-outline m-wide"
+          :disabled="!!busy"
+          @click="
+            undo = item;
+            reason = '';
+          "
+        >
+          撤销收料
+        </button>
       </section>
-
-      <section class="tm-card tm-section">
-        <h2 class="tm-section-title">工序流转</h2>
-        <el-alert
-          type="info"
-          show-icon
-          :closable="false"
-          title="后端暂未提供工序流转接口，开始/完成工序按钮待后端补充后启用。"
-        />
-      </section>
-    </main>
-  </div>
+    </article>
+    <MobileSheet v-if="undo" title="撤销收料" @close="!busy && (undo = null)"
+      ><form @submit.prevent="revert">
+        <label class="m-form-field"
+          >撤销原因<input
+            v-model="reason"
+            required
+            maxlength="500"
+            :disabled="!!busy" /></label
+        ><button class="m-primary m-wide" :disabled="!!busy || !reason.trim()">
+          {{ busy ? "处理中…" : "确认撤销" }}
+        </button>
+      </form></MobileSheet
+    >
+  </section>
 </template>
-
-<style scoped>
-.mobile-page {
-  min-height: 100vh;
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 0 12px 32px;
-}
-
-.mobile-header {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 16px 4px;
-}
-
-.mobile-header h1 {
-  margin: 0;
-  font-size: 19px;
-  color: var(--tm-title);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.mobile-header p {
-  margin: 2px 0 0;
-  font-size: 12px;
-}
-
-.brand-logo {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: 10px;
-  color: var(--tm-on-accent);
-  background: var(--tm-accent-gradient);
-  box-shadow: var(--tm-glow);
-  font-size: 24px;
-  font-weight: 900;
-  flex-shrink: 0;
-}
-
-.v2-badge {
-  font-size: 11px;
-  font-weight: 800;
-  padding: 2px 8px;
-  border-radius: 20px;
-  color: var(--tm-on-accent);
-  background: var(--tm-accent-gradient);
-}
-
-.refresh-btn {
-  width: 44px;
-  height: 44px;
-  font-size: 20px;
-}
-
-.mobile-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-
-.stat-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-bottom: 4px;
-}
-
-.receive-card {
-  padding: 16px;
-  margin-bottom: 12px;
-}
-
-.receive-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.receive-head strong {
-  font-size: 16px;
-  color: var(--tm-title);
-}
-
-.receive-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 18px;
-  font-size: 14px;
-  color: var(--tm-text-dim);
-  margin-bottom: 12px;
-}
-
-.receive-btn {
-  width: 100%;
-  min-height: 52px;
-  font-size: 17px;
-  font-weight: 800;
-  letter-spacing: 4px;
-}
-.legacy-receive { display: inline-block; margin-top: 9px; color: var(--tm-accent-b); font-size: 13px; }
-
-.received-card {
-  padding: 12px 16px;
-  margin-bottom: 8px;
-  opacity: 0.85;
-}
-
-.empty-card {
-  padding: 24px;
-  text-align: center;
-  margin-bottom: 12px;
-}
-</style>

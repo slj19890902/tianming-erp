@@ -40,12 +40,16 @@ export const routes: RouteRecordRaw[] = [
   { path: '/review/deliveries', name: 'deliveries', component: DeliveryView, meta: { title: '送货与回单', permission: 'deliveries.view' } },
   { path: '/review/warehouse', name: 'warehouse', component: WarehouseView, meta: { title: '库存与拿货', permission: 'warehouse.view' } },
   { path: '/review/statements', name: 'statements', component: StatementView, meta: { title: '月结对账', permission: 'finance.view' } },
-  {
-    path: '/mobile-receive',
-    name: 'mobile-receive',
-    component: MobileReceiveView,
-    meta: { title: '移动收料', permission: 'incoming.view' },
-  },
+  { path: '/mobile-receive', redirect: '/mobile/receive' },
+  { path: '/mobile', component: () => import('./mobile/MobileLayout.vue'), meta: { mobile: true }, children: [
+    { path: '', name: 'mobile-home', component: () => import('./mobile/MobileHome.vue'), meta: { title: '天明包装' } },
+    { path: 'query', name: 'mobile-query', component: () => import('./mobile/MobileQuery.vue'), meta: { title: '现场查询' } },
+    { path: 'products/:id', name: 'mobile-product', component: () => import('./mobile/MobileProduct.vue'), meta: { title: '产品详情' } },
+    { path: 'recognize', name: 'mobile-recognize', component: () => import('./mobile/MobileRecognize.vue'), meta: { title: '认纸板' } },
+    { path: 'warehouse', name: 'mobile-warehouse', component: () => import('./mobile/MobileWarehouse.vue'), meta: { title: '仓库地图', permission: 'warehouse.view' } },
+    { path: 'receive', name: 'mobile-receive', component: MobileReceiveView, meta: { title: '收料', permission: 'incoming.view' } },
+    { path: 'more', name: 'mobile-more', component: () => import('./mobile/MobileMore.vue'), meta: { title: '更多' } },
+  ] },
 ]
 
 export const router = createRouter({
@@ -72,6 +76,7 @@ router.beforeEach(async (to) => {
   if (!auth.user) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
+  if (to.path === '/' && window.matchMedia('(max-width: 760px)').matches) return { path: '/mobile' }
   const permission = typeof to.meta.permission === 'string' ? to.meta.permission : ''
   if (permission && !auth.hasPermission(permission)) return '/'
   const any = Array.isArray(to.meta.permissionAny) ? to.meta.permissionAny.map(String) : []
@@ -81,7 +86,7 @@ router.beforeEach(async (to) => {
 
 /** 每次进入业务页时同步标签页（登录页不进标签） */
 router.afterEach((to) => {
-  if (to.meta.public === true) return
+  if (to.meta.public === true || to.meta.mobile === true) return
   const tabs = useTabsStore()
   tabs.openTab({
     name: String(to.name || to.path),

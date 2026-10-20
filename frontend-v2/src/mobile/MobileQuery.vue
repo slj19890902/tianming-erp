@@ -1,0 +1,293 @@
+<script setup lang="ts">
+import { onBeforeUnmount, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { mobileApi, backendUrl, type Product, type Unfulfilled } from "./api";
+import {
+  safeMessage,
+  shortLocation,
+  mobileQrRoute,
+  shortCode,
+  compactText,
+  quantity,
+} from "./format";
+import ProductRow from "./components/ProductRow.vue";
+import MobileIcon from "./components/MobileIcon.vue";
+import MobileScanner from "./components/MobileScanner.vue";
+const router = useRouter(),
+  route = useRoute();
+const tab = ref("product"),
+  query = ref(String(route.query.q || "")),
+  length = ref(String(route.query.length || "")),
+  width = ref(String(route.query.width || "")),
+  tolerance = ref(5);
+const orderItems = ref<Unfulfilled[]>([]);
+const products = ref<Product[]>([]),
+  locations = ref<
+    {
+      location_id: number;
+      location_name: string;
+    short_location_label?: string;
+    employee_location_name?: string;
+      floor_code: string;
+      area_code: string;
+    }[]
+  >([]);
+const loading = ref(false),
+  error = ref(""),
+  searched = ref(false),
+  scanner = ref(false),
+  page = ref(1),
+  total = ref(0);
+let controller: AbortController | null = null;
+async function loadOrders(nextPage = 1) {
+  controller?.abort();
+  controller = new AbortController();
+  const current = controller;
+  loading.value = true;
+  error.value = "";
+  searched.value = true;
+  orderItems.value = [];
+  try {
+    const result = await mobileApi.unfulfilled(nextPage, current.signal);
+    if (!current.signal.aborted) {
+      orderItems.value = result.groups[0]?.items || [];
+      total.value = result.groups[0]?.total || 0;
+      page.value = result.groups[0]?.page || nextPage;
+    }
+  } catch (e) {
+    if (!current.signal.aborted) error.value = safeMessage(e);
+  } finally {
+    if (controller === current) loading.value = false;
+  }
+}
+async function search(nextPage = 1) {
+  if (!query.value.trim()) return;
+  controller?.abort();
+  controller = new AbortController();
+  const current = controller;
+  loading.value = true;
+  error.value = "";
+  products.value = [];
+  locations.value = [];
+  searched.value = true;
+  total.value = 0;
+  try {
+    if (tab.value === "location") {
+      const result = await mobileApi.locations(
+        query.value.trim(),
+        current.signal,
+      );
+      if (!current.signal.aborted) {
+        locations.value = result.items;
+        total.value = result.total;
+      }
+    } else {
+      const result = await mobileApi.products(
+        new URLSearchParams({
+          q: query.value.trim(),
+          page: String(nextPage),
+          page_size: "12",
+        }),
+        current.signal,
+      );
+      if (!current.signal.aborted) {
+        products.value = result.items;
+        total.value = result.total;
+        page.value = nextPage;
+      }
+    }
+  } catch (e) {
+    if (!current.signal.aborted) error.value = safeMessage(e);
+  } finally {
+    if (controller === current) loading.value = false;
+  }
+}
+function findDimensions() {
+  if (!(Number(length.value) > 0 && Number(width.value) > 0)) {
+    error.value = "请输入有效长宽";
+    return;
+  }
+  void router.push({
+    path: "/mobile/recognize",
+    query: {
+      length: length.value,
+      width: width.value,
+      tolerance: String(tolerance.value),
+    },
+  });
+}
+function scanned(value: string) {
+  scanner.value = false;
+  // Preserve the existing scanner route for signed production/warehouse QR tokens.
+  if (/^(https?:\/\/|\/)/.test(value)) {
+    const target = mobileQrRoute(
+      value,
+      window.location.origin,
+      backendUrl("/"),
+    );
+    if (!target) {
+      error.value = "条码地址无效";
+      return;
+    }
+    window.location.assign(backendUrl(target));
+    return;
+  }
+  query.value = value.trim();
+  void search();
+}
+watch(tab, () => {
+  controller?.abort();
+  products.value = [];
+  locations.value = [];
+  error.value = "";
+  searched.value = false;
+});
+if (route.query.unfulfilled === "1") void loadOrders();
+else if (query.value) void search();
+onBeforeUnmount(() => controller?.abort());
+</script>
+<template>
+  <section>
+    <template v-if="route.query.unfulfilled === '1'"
+      ><h2>未送齐订单</h2>
+      <div v-if="error" class="m-status">{{ error }}</div>
+      <div v-if="loading" class="m-empty">加载中…</div>
+      <div v-else-if="!orderItems.length && !error" class="m-empty">暂无未送齐订单</div>
+      <RouterLink
+        v-for="item in orderItems"
+        :key="item.order_item_id"
+        :to="
+          item.product_id
+            ? `/mobile/products/${item.product_id}`
+            : '/mobile/query'
+        "
+        class="m-product-row"
+        ><strong class="m-code">{{ shortCode(item.product_code) }}</strong
+        ><span class="m-product-mid"
+          ><b>{{ compactText(item.product_name) }}</b
+          ><span>{{ compactText(item.customer_name) }}</span
+          ><span>{{ compactText(item.specification) }}</span></span
+        ><span class="m-product-stock"
+          ><b>{{ quantity(item.remaining_quantity) }}</b
+          ><span>未送齐</span></span
+        ></RouterLink
+      >
+      <div v-if="total > 12" class="m-pagination">
+        <button :disabled="page === 1" @click="loadOrders(page - 1)">
+          上一页</button
+        ><span>{{ page }} / {{ Math.ceil(total / 12) }}</span
+        ><button :disabled="page * 12 >= total" @click="loadOrders(page + 1)">
+          下一页
+        </button>
+      </div></template
+    >
+    <template v-else
+      ><div class="m-seg" role="tablist" aria-label="查询方式">
+        <button
+          v-for="t in [
+            { id: 'product', label: '找产品' },
+            { id: 'board', label: '认纸板' },
+            { id: 'location', label: '查货位' },
+          ]"
+          :key="t.id"
+          role="tab"
+          :aria-selected="tab === t.id"
+          :class="{ on: tab === t.id }"
+          @click="tab = t.id"
+        >
+          {{ t.label }}
+        </button>
+      </div>
+      <form
+        v-if="tab !== 'board'"
+        class="m-searchrow"
+        @submit.prevent="search()"
+      >
+        <input
+          v-model="query"
+          :placeholder="tab === 'location' ? '货位简称' : '短码、客户或品名'"
+          aria-label="查询内容"
+          maxlength="100"
+        /><button class="m-primary" :disabled="loading">查询</button
+        ><button
+          class="m-icon-btn m-scan"
+          type="button"
+          aria-label="扫码"
+          @click="scanner = true"
+        >
+          <MobileIcon name="scan" />
+        </button>
+      </form>
+      <form
+        v-if="tab !== 'location'"
+        class="m-card m-sizecard"
+        @submit.prevent="findDimensions"
+      >
+        <h2><MobileIcon name="ruler" />按尺寸找</h2>
+        <div class="m-sizeinputs">
+          <label
+            >长<input
+              v-model="length"
+              inputmode="decimal"
+              type="number"
+              min="0.01"
+              step="0.01"
+              required
+              aria-label="纸板长" /></label
+          ><span>×</span
+          ><label
+            >宽<input
+              v-model="width"
+              inputmode="decimal"
+              type="number"
+              min="0.01"
+              step="0.01"
+              required
+              aria-label="纸板宽" /></label
+          ><span>mm</span>
+        </div>
+        <button class="m-primary m-wide">认纸板</button>
+      </form>
+      <div v-if="error" class="m-status" role="alert">{{ error }}</div>
+      <div v-else-if="loading" class="m-empty" role="status">查询中…</div>
+      <div
+        v-else-if="searched && !products.length && !locations.length"
+        class="m-empty"
+      >
+        无匹配结果
+      </div>
+      <div class="m-result-list">
+        <ProductRow
+          v-for="product in products"
+          :key="product.id"
+          :product="product"
+        /><RouterLink
+          v-for="location in locations"
+          :key="location.location_id"
+          class="m-location-result"
+          :to="{
+            path: '/mobile/warehouse',
+            query: {
+              floor: location.floor_code,
+              area: location.area_code,
+              location: location.location_id,
+            },
+          }"
+          ><MobileIcon name="pin" />{{ shortLocation(location.short_location_label || location.employee_location_name || location.location_name)
+          }}<MobileIcon name="chevron"
+        /></RouterLink>
+      </div>
+      <div v-if="total > 12 && products.length" class="m-pagination">
+        <button :disabled="page === 1" @click="search(page - 1)">上一页</button
+        ><span>{{ page }} / {{ Math.ceil(total / 12) }}</span
+        ><button :disabled="page * 12 >= total" @click="search(page + 1)">
+          下一页
+        </button>
+      </div> </template
+    ><MobileScanner
+      v-if="scanner"
+      @close="scanner = false"
+      @decoded="scanned"
+    />
+  </section>
+</template>

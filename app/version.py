@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.690"
-APP_VERSION_NAME = "库存移库来源与成本继承修复"
+APP_VERSION = "v0.22.691"
+APP_VERSION_NAME = "手机版六屏与正式接口关联"
 APP_BUILD_DATE = "2026-10-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6768,3 +6768,8 @@ APP_VERIFICATION_STEPS = [
     "展开目标货位成本，核对数量及成本与原批次一致，整批移库和重试正常。",
 ]
 APP_CHANGELOG = [*(f"v0.22.690：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.691：手机六屏与现有业务接口同源集成。
+APP_CHANGES = ["手机首页、现场查询、产品详情、认纸板、仓库地图及收料采用短码界面", "新旧手机入口、权限、预送货、收料实收记录与同源接口关联；保留原盘点及异常收料流程"]
+APP_VERIFICATION_STEPS = ["手机进入 /mobile/ 登录后查询产品并查看库存、工艺及图纸", "检查仓库地图和收料卡片，按实际业务操作并核对原记录"]
+APP_CHANGELOG = [*(f"v0.22.691：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

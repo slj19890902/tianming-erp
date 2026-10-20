@@ -11,6 +11,7 @@ import { router } from './router'
 import { onUnauthorized } from './api/client'
 import { useAuthStore } from './stores/auth'
 import { useTabsStore } from './stores/tabs'
+import { useMobileStore } from './mobile/store'
 
 // 默认浅色由共享 CSS tokens 提供；不强制覆盖已有根节点 class。
 
@@ -31,6 +32,7 @@ onUnauthorized(() => {
   const auth = useAuthStore()
   const tabs = useTabsStore()
   auth.handleUnauthorized()
+  useMobileStore().clear()
   tabs.reset()
   // A guest's initial session restore normally returns 401. The route guard
   // still owns that pending navigation and preserves its intended return URL.

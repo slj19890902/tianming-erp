@@ -20,7 +20,7 @@ const mobileMenuOpen = ref(false)
 watch(() => route.path, () => { mobileMenuOpen.value = false })
 
 const isLogin = computed(() => ['/login','/connection'].includes(route.path))
-const isMobileReceive = computed(() => route.path === '/mobile-receive')
+const isMobileReceive = computed(() => route.meta.mobile === true)
 const isFormalWorkspace = computed(() => route.meta.formalCompatibility === true)
 const formalWorkspaces = computed(() => tabsStore.tabs.flatMap(tab => {
   const target = router.resolve(tab.path)

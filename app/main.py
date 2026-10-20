@@ -211,7 +211,7 @@ class HSTSMiddleware(BaseHTTPMiddleware):
             response.headers["X-Frame-Options"] = "DENY"
         response.headers["Permissions-Policy"] = (
             "camera=(self), microphone=(), geolocation=()"
-            if request.url.path == "/mobile/scan"
+            if request.url.path == "/mobile/scan" or request.url.path.startswith("/frontend-v2/")
             else "camera=(), microphone=(), geolocation=()"
         )
         return response
@@ -690,13 +690,16 @@ def create_app() -> FastAPI:
         / "static"
         / "mobile_erp.html"
     )
-    if not any(route.path == "/mobile/" for route in application.routes):
-        application.add_api_route(
-            "/mobile/",
-            lambda: FileResponse(mobile_erp_path),
-            methods=["GET"],
-            include_in_schema=False,
-        )
+    # New mobile UI is served from the same signed SPA and session origin.
+    # Keep /mobile/erp.html and concrete stocktake/pick/scanner routes unchanged.
+    async def mobile_frontend_entry(request: Request):
+        from fastapi.responses import RedirectResponse
+        if request.url.query:
+            return FileResponse(mobile_erp_path)
+        return RedirectResponse("/frontend-v2/mobile", status_code=307)
+
+    application.add_api_route("/mobile", mobile_frontend_entry, methods=["GET"], include_in_schema=False)
+    application.add_api_route("/mobile/", mobile_frontend_entry, methods=["GET"], include_in_schema=False)
     if not any(route.path == "/mobile/erp.html" for route in application.routes):
         application.add_api_route(
             "/mobile/erp.html",

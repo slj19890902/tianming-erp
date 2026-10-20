@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.696"
-APP_VERSION_NAME = "对账更正后应收与开票金额同步"
+APP_VERSION = "v0.22.697"
+APP_VERSION_NAME = "扫描邮件订单识别"
 APP_BUILD_DATE = "2026-10-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6803,3 +6803,8 @@ APP_CHANGELOG = [*(f"v0.22.695：本次更新｜{item}" for item in APP_CHANGES[
 APP_CHANGES = ["修复客户异议改价或更正签收数量后，对账应收仍停留在旧金额、导致登记开票被拦截的问题。", "开票累计金额按账本精度比较，保留真实超额、重复提交、权限与审计保护。"]
 APP_VERIFICATION_STEPS = ["在实际需要更正的对账单保存改价或签收数量后，核对总额与明细合计一致。", "登记已核对金额的真实发票，确认成功且重复点击不会重复累计；历史差额账单须先完成专项核对。"]
 APP_CHANGELOG = [*(f"v0.22.696：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.697：扫描邮件订单识别；原生产资料与正式订单不自动改写。
+APP_CHANGES = ["扫描采购单按实际表格边界读取订单号、编码及交期，逐行核对数量、含税金额、税率与完整行序。", "旧识别失败缓存自动重试一次，保留人工工作草稿；同款不同交期逐行保留并写入本行原单交期备注。", "仅在当前客户内唯一匹配常用箱，缺少生产资料继续明确提示，不猜填材质、报料尺寸或模具。"]
+APP_VERIFICATION_STEPS = ["打开邮箱收单，核对并作及驶安特原5份扫描单的订单号、编码、数量和单价。", "核对SATE20261008006同款300与700两行及其不同交期；返回原PDF核对。", "资料完善后按原保存入口录单；遇生产资料缺项，编辑对应常用箱后回到原草稿保存。"]
+APP_CHANGELOG = [*(f"v0.22.697：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -1809,17 +1809,20 @@ def _register_issued_invoice_task_result(
             raise HTTPException(422, "合并开票必须提供全部来源账单的财务流水版本")
         for share in shares:
             expected_ledger = (payload.expected_ledger_versions or {}).get(share.statement_id, payload.expected_ledger_version)
+            # SQLite NUMERIC arithmetic can add a binary tail (0.1 + 0.2 > 0.3).
+            # Compare and store at the ledger's existing three-decimal precision;
+            # do not introduce a cent-sized tolerance or relax the atomic CAS.
             updated_statement = db.execute(
                 text(
                     """
                     UPDATE finance_statements
-                    SET invoiced_amount = invoiced_amount + :amount,
+                    SET invoiced_amount = ROUND(invoiced_amount + :amount, 3),
                         ledger_version = ledger_version + 1
                     WHERE id = :statement_id
                       AND confirmation_status = 'confirmed'
                       AND version = :statement_version
                       AND ledger_version = :expected_ledger_version
-                      AND invoiced_amount + :amount <= total_receivable
+                      AND ROUND(invoiced_amount + :amount, 3) <= ROUND(total_receivable, 3)
                     RETURNING id, total_receivable, invoiced_amount, settled_amount,
                               status, confirmation_status, version, ledger_version
                     """

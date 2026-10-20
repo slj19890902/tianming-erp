@@ -2876,6 +2876,16 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
             item["match_evidence"] = decision_evidence
         if draft.get("customer_type") == "sat_contract":
             exact = [p for p,e in scored_with_evidence if e['signals']['primary_code'] >= 100]
+            if item.get('verified_contract_layout'):
+                # Only the fixed SATJ1TP/SATJITP family glyph varies in these
+                # documents. Never translate numeric suffixes (O/0, G/6, etc.).
+                def contract_key(value):
+                    value = re.sub(r'\s+', '', str(value or '')).upper()
+                    return re.sub(r'^SATJ[1I]TP(?=\d{6,}$)', 'SATJ1TP', value)
+                key = contract_key(_preferred_item_product_code(item))
+                if re.fullmatch(r'SATJ1TP\d{6,}', key):
+                    exact = [p for p in products if key in {
+                        contract_key(p.product_code),contract_key(p.customer_material_code)}]
             selected = exact[0] if len(exact) == 1 else None
             item['match_evidence'].update(policy='contract_exact_customer_code',
                 decision='matched' if selected else 'needs_confirmation',
@@ -2900,6 +2910,16 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
         else:
             item["standard_match"] = {"matched": False}
             item["readiness"] = None
+        if draft.get("customer_type") == "sat_contract" and item.get("verified_contract_layout"):
+            # Orders have one header due date. Keep each printed line's date in
+            # its frozen notes as well, including repeated SKUs with split dates.
+            from app.services.pdf_sat_contract import parse_date
+            due = parse_date(item.get("delivery_date"))
+            if due:
+                note = f"客户原单本行交期：{due}"
+                notes = str(item.get("production_notes") or "")
+                if note not in notes:
+                    item["production_notes"] = "\n".join(filter(None, (notes, note)))
         # 客户单价仍以 PDF 为准；仅当 PDF 未识别到单价时回退常用箱默认价
         has_pdf_price = item.get("unit_price") not in (None, "")
         if selected and not has_pdf_price and selected.sale_unit_price is not None and not item.get("preserve_pdf_price"):

@@ -16,6 +16,13 @@ def compact(value):
     return re.sub(r'\s+', '', str(value or ''))
 
 
+def contract_code(value):
+    # The printed catalogue prefix "3." is not part of the SKU. Reject an
+    # unreadable suffix instead of accepting a shorter, different product.
+    match = re.fullmatch(r'(?:\d+[.．、])?(SAT[A-Z0-9]{6,})', compact(value).upper())
+    return match.group(1) if match else ''
+
+
 def code_candidate_key(value):
     """For suggestions only: never writes a normalized code or selects a product."""
     match = re.match(r'SATJ[1I]TP([A-Z0-9]{6,})$', compact(value).upper())
@@ -69,7 +76,7 @@ def text_column_regions(page):
 def parse_sat_contract(text, source_name, route=None):
     """Return None for unrelated formats; incomplete contracts stay reviewable."""
     source = str(text)
-    pos = list(dict.fromkeys(m.group(0) for m in PO.finditer(source)))
+    pos = list({m.group(0).upper(): m.group(0) for m in PO.finditer(compact(source))}.values())
     names = [name for name in CUSTOMERS.values()
              if re.search(r'需方[）):：]{0,4}'+re.escape(name), compact(source))]
     if not pos or not names or '需方' not in compact(source):
@@ -84,6 +91,8 @@ def parse_sat_contract(text, source_name, route=None):
     warnings = ['扫描订单：请核对编码和规格；原单未列数量单位。']
     items = []
     source_count = 0
+    source_sequences = []
+    verified_layout = bool(getattr(text, 'contract_layout_verified', False))
     pages = getattr(text, 'pages', [])
     if not pages:
         errors.append('表格位置证据缺失，请重新识别或人工核对。')
@@ -109,8 +118,16 @@ def parse_sat_contract(text, source_name, route=None):
         bottom = min(notes) if notes else float('inf')
         edges = [xs[0]-(xs[1]-xs[0])/2, *[(a+b)/2 for a,b in zip(xs,xs[1:])], xs[-1]+(xs[-1]-xs[-2])/2]
         cells = [[] for _ in labels]
+        sequences = []
         for b in entries:
             if not header_y < b['y'] < bottom:
+                continue
+            if verified_layout and 'contract_column' in b:
+                column = b['contract_column']
+                if column == 0:
+                    sequences.append(b)
+                elif 1 <= column <= 9:
+                    cells[column-1].append(b)
                 continue
             for col in range(len(labels)):
                 if edges[col] <= b['x'] < edges[col+1]:
@@ -123,19 +140,26 @@ def parse_sat_contract(text, source_name, route=None):
         if not anchors or len(anchors) != len(delivery):
             errors.append(f'第{page_number}页数量行与交期行不一致，可能漏行。')
         ys = [b['y'] for b in anchors]
+        if verified_layout:
+            sequence_values = [number(b['text']) for b in sorted(sequences,key=lambda b:b['y'])]
+            source_sequences.extend(sequence_values)
+            codes = [b for b in cells[0] if contract_code(b['text'])]
+            if len(sequences) != len(anchors) or len(codes) != len(anchors):
+                errors.append(f'第{page_number}页序号、编码与数量行数不一致，请核对漏行。')
         for i, anchor in enumerate(anchors):
             lo = (ys[i-1]+ys[i])/2 if i else header_y
             hi = (ys[i]+ys[i+1])/2 if i+1 < len(ys) else bottom
             grouped = [[b for b in col if lo <= b['y'] < hi] for col in cells]
             values = [' '.join(b['text'] for b in sorted(col,key=lambda b:(b['y'],b['x']))) for col in grouped]
-            code_match = re.search(r'SAT[A-Z0-9]+', compact(values[0]), re.I)
-            code = code_match.group(0).upper() if code_match else ''
+            code = contract_code(values[0])
             quantity, net, rate, price, amount = [number(values[j].replace('%','')) for j in (3,4,5,6,7)]
             due = parse_date(values[8])
             line = len(items)+1
             item_warnings = []
-            if not code or not re.fullmatch(r'SATJ[1I]TP\d{6,}', code):
+            if not code or not re.fullmatch(r'SAT[A-Z0-9]{6,}', code):
                 item_warnings.append('编码疑似误读或裁切，请选择常用箱核对。')
+                if verified_layout:
+                    errors.append(f'第{line}行完整存货编码未识别，请核对原单。')
             if not due or quantity is None or quantity <= 0 or price is None or amount is None:
                 errors.append(f'第{line}行数量、含税价、金额或交期缺失/无效。')
             if quantity is not None and price is not None and amount is not None and abs(quantity*price-amount)>Decimal('0.005'):
@@ -153,19 +177,29 @@ def parse_sat_contract(text, source_name, route=None):
                 tax_rate=str(rate) if rate is not None else None, delivery_date=due,
                 raw_lines=values, warnings=item_warnings, ocr_confidence=confidence,
                 source_page=page_number, matched_product_id=None, preserve_pdf_price=True))
+            items[-1]['verified_contract_layout'] = verified_layout
     if not items:
         errors.append('未能定位明细，请核对原单。')
     if source_count != len(items):
         errors.append('原单行数与解析行数不一致。')
+    if verified_layout and source_sequences != list(range(1,len(items)+1)):
+        errors.append('原单序号不连续或未完整识别，请核对全部明细。')
+    complete = verified_layout and not errors and bool(items)
+    if complete:
+        warnings = ['原单未列数量单位，沿用已匹配常用箱的成品单位；数量、价格和交期保留原单。']
     return dict(source_name=source_name, source_type='purchase_order_pdf',
         customer_name=name if not conflicts else None, customer_name_raw=name if not conflicts else None,
         customer_type='sat_contract', customer_po=pos[0], order_date=parse_date(order_date_match.group(1)) if order_date_match else None,
         delivery_date=min((i['delivery_date'] for i in items if i['delivery_date']), default=None),
         items=items, item_count=len(items), warnings=errors+warnings,
-        recognition_status='needs_confirmation', parse_status='needs_confirmation', is_tianhua=False,
+        recognition_status='recognized' if complete else 'needs_confirmation',
+        parse_status='recognized' if complete else 'needs_confirmation', is_tianhua=False,
         customer_route={'status':'needs_confirmation' if conflicts else 'locked', 'customer_name':name if not conflicts else None,
                         'parser_key':'sat_contract', 'customer_type':'sat_contract'},
         integrity_check={'source_detail_count':source_count, 'parsed_detail_count':len(items),
-                         'integrity_status':'failed' if errors else 'unknown', 'integrity_errors':errors,
-                         'integrity_warnings':['原单无独立总计，请逐行核对。']},
+                         'integrity_status':'failed' if errors else 'passed' if complete else 'unknown',
+                         'integrity_errors':errors,
+                         'verification_basis':'ruled_columns_sequential_rows_quantity_price_tax_and_dates' if complete else None,
+                         'source_line_numbers':source_sequences if verified_layout else [],
+                         'integrity_warnings':[] if complete else ['原单无独立总计，请逐行核对。']},
         message='采购订单已识别，请核对后保存。')

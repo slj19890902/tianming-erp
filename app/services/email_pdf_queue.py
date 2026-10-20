@@ -7,11 +7,24 @@ from sqlalchemy import select
 from sqlalchemy.orm import defer
 from app.models.email_intake import (
     EmailIntakeSettings, EmailIntakeMessage, EmailIntakeAttachment,
-    EmailIntakeOrderLink, EmailPdfRecognition, EmailPdfDisposition,
+    EmailIntakeOrderLink, EmailPdfRecognition, EmailPdfDisposition, EmailPdfWorkingDraft,
 )
 from app.services.email_sender_filter import normalize_senders, sender_matches
 
 recognition_lock = threading.Lock()
+RECOGNITION_VERSION = 'mail-layout-20261020-v1'
+
+
+def needs_recognition_refresh(record):
+    if record is None:
+        return True
+    if record.status != 'improve':
+        return False
+    try:
+        data = json.loads(record.draft_json or '{}')
+    except (ValueError, TypeError):
+        data = {}
+    return data.get('recognition_version') != RECOGNITION_VERSION
 
 
 ORDER_START = date(2026, 9, 1)
@@ -141,9 +154,11 @@ def recognize_pending(db, limit=5, retry_id=None):
         from app.services.order_pdf_import import match_import_draft
         from app.api.orders import load_active_pdf_template_rules, PdfParseError
         settle_queue(db)
-        cached = set(db.scalars(select(EmailPdfRecognition.sha256)))
+        cached = {r.sha256:r for r in db.scalars(select(EmailPdfRecognition))}
+        working = set(db.scalars(select(EmailPdfWorkingDraft.attachment_id)))
         rows = [a for a in pending_attachments(db)
-                if (a.id == retry_id if retry_id is not None else a.sha256 not in cached)][:limit]
+                if (a.id == retry_id if retry_id is not None else
+                    a.id not in working and needs_recognition_refresh(cached.get(a.sha256)))][:limit]
         if retry_id is not None and not rows:
             raise ValueError('此PDF已处理、早于收单日期或不在发件人名单中，请刷新')
         rules = load_active_pdf_template_rules(db)
@@ -165,7 +180,10 @@ def recognize_pending(db, limit=5, retry_id=None):
                 record = EmailPdfRecognition(sha256=attachment.sha256, attachment_id=attachment.id)
                 db.add(record)
             record.status = state
-            record.draft_json = json.dumps(draft, ensure_ascii=False, default=str) if draft else None
+            draft = draft or {'recognition_status':'failed','items':[],
+                             'warnings':['此PDF未能完成识别，请重新识别或核对原单。']}
+            draft['recognition_version'] = RECOGNITION_VERSION
+            record.draft_json = json.dumps(draft, ensure_ascii=False, default=str)
             record.error_code = error_code
             record.recognized_at = datetime.now()
             from app.services.email_intake import audit

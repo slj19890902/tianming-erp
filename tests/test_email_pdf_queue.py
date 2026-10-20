@@ -63,6 +63,34 @@ def test_classify_requires_complete_matched_integer_quantities():
         assert classify({**draft,'items':[item]})=='improve'
 
 
+def test_old_failed_cache_refresh_preserves_user_working_draft(mobile_portal_app, monkeypatch):
+    from app.models.email_intake import EmailPdfWorkingDraft
+    from app.models.user import User
+    from app.api import orders
+    app, ids, factory = mobile_portal_app
+    calls=[]
+    monkeypatch.setattr(orders, '_parse_order_pdf_preview',
+        lambda *a: calls.append(1) or {'recognition_status':'failed','items':[]})
+    with factory() as db:
+        db.add(EmailIntakeSettings(id=1,encrypted_secret='fixture',
+            sender_addresses_json=json.dumps(['sample@example.invalid'])))
+        db.commit()
+        service.store_message(db,None,'refresh-test',1,mail_bytes())
+        attachment=pending_attachments(db)[0]
+        from datetime import datetime
+        db.add(EmailPdfRecognition(sha256=attachment.sha256,attachment_id=attachment.id,
+            status='improve',draft_json='{}',recognized_at=datetime.now()))
+        actor=db.scalar(select(User.id).where(User.username=='mobile-admin'))
+        working=EmailPdfWorkingDraft(attachment_id=attachment.id,actor_id=actor,
+            content_json='{"user_edit":"keep"}',content_hash='a'*64,saved_at='2026-10-20')
+        db.add(working);db.commit()
+        assert recognize_pending(db)==0 and calls==[]
+        assert working.content_json=='{"user_edit":"keep"}'
+        db.delete(working);db.commit()
+        assert recognize_pending(db)==1
+        assert recognize_pending(db)==0 and calls==[1]
+
+
 def test_worker_ignores_mail_interval_and_preserves_sales(mobile_portal_app, monkeypatch):
     from app.services.email_pdf_queue import run_recognition_cycle
     from app.api import orders

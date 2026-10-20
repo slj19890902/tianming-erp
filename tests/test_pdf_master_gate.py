@@ -33,6 +33,7 @@ def test_assembled_parent_uses_its_bom_not_own_board(tmp_path):
     sessions = app.dependency_overrides[get_db]()
     db = next(sessions)
     db.add(ProductBomProfile(product_id=1, source='assembled'))
+    db.get(Product, 1).is_composite = True
     assert product_readiness(db.get(Product, 1))['order_save_missing_labels'] == []
     db.rollback()
     sessions.close()
@@ -44,8 +45,21 @@ def test_pdf_api_rejects_all_missing_lines_without_creating_order(tmp_path):
     from app.models.order import Order
     from tests.test_phase16_pdf_order_import import _order_import_app, _signed_pdf_preview_token, _pdf_order_payload, _database_scalar
     app = _order_import_app(tmp_path)
+    from app.api.deps import get_db
+    from app.models.product import Product
+    sessions = app.dependency_overrides[get_db]()
+    db = next(sessions)
+    for product_id in (1, 2):
+        product = db.get(Product, product_id)
+        product.material_id = None
+        product.report_length_mm = None
+        product.report_width_mm = None
+    db.commit()
+    sessions.close()
     payload = _pdf_order_payload(confirmed=True, token=_signed_pdf_preview_token(app))
     payload['items'].append({**payload['items'][0], 'product_id': 2, 'product_code': '21308002'})
+    payload['pdf_import_confirmation']['preview_safety_token'] = _signed_pdf_preview_token(
+        app, items=payload['items'])
     with TestClient(app) as client:
         assert client.post('/api/auth/login', json={'username':'sales', 'password':'RolePass123!'}).status_code == 200
         response = client.post('/api/orders', json=payload)

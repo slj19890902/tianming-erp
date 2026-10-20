@@ -103,12 +103,18 @@ def parse_pdf_bytes(
             if ocr_text and ocr_method not in {"ocr_unavailable", "ocr_failed"}:
                 ocr_text_raw = ocr_text
                 try:
+                    from app.services.pdf_native_ocr import refine_scanned_contract
+                    ocr_text = refine_scanned_contract(content, ocr_text)
+                    native_layout = bool(getattr(ocr_text, 'contract_layout_verified', False))
+                    if native_layout:
+                        ocr_method = 'mixed'
+                        ocr_text_raw = ocr_text
                     if customer_route.get("status") == "unmatched":
                         customer_route = resolve_pdf_customer_route(ocr_text, template_rules)
                     contract = parse_sat_contract(ocr_text, source_name, customer_route)
                     if contract is not None:
                         from app.services.pdf_ocr import refine_contract_columns
-                        refined_text = refine_contract_columns(content, ocr_text)
+                        refined_text = ocr_text if native_layout else refine_contract_columns(content, ocr_text)
                         contract = parse_sat_contract(refined_text, source_name, customer_route)
                         contract = _apply_quantity_review_flags(contract)
                         contract['source_text_quality'] = text_quality

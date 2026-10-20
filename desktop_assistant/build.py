@@ -278,6 +278,8 @@ def main():
     if args.runtime_platform == 'macos-arm64':
         from desktop_assistant.ocr_models import prepare_readonly_layout
         prepare_readonly_layout(runtime / 'ocr/model')
+        from desktop_assistant.pdf_vision_build import build_helper
+        build_helper(tree)
         runtime_metadata['executable_files'] = executable_files(tree)
         from desktop_assistant.mac_archive_install import ENTRY as archive_entry, MODULE as archive_module
         if any(not (tree/name).is_file() for name in (archive_entry, archive_module)):

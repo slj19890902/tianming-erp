@@ -1416,7 +1416,7 @@ def pending_incoming_production_detail(
     if not has_permission(user, "incoming.view"):
         raise HTTPException(status_code=403, detail="当前账号没有查看待收料明细的权限")
     normalized_route_id = route_id.strip()
-    if not re.fullmatch(r"(?:r|sr)?\d+", normalized_route_id):
+    if not re.fullmatch(r"(?:r|sr|so)?\d+", normalized_route_id):
         raise HTTPException(status_code=422, detail="待收料明细标识无效")
     route = next(
         (

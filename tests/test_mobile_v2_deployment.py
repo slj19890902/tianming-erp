@@ -31,3 +31,29 @@ def test_camera_is_self_only_on_spa_and_scan():
         for path in ('/frontend-v2/', '/frontend-v2/mobile/query', '/mobile/scan'):
             assert client.get(path).headers['permissions-policy'].startswith('camera=(self)')
         assert client.get('/api/mobile/erp/shell').headers['permissions-policy'].startswith('camera=()')
+
+
+def test_supplier_order_pending_detail_uses_exact_visible_source(monkeypatch):
+    from fastapi import Response, HTTPException
+    from app.api import mobile_erp
+    from app.models.user import User
+    import pytest
+    user = User(id=77, username="mobile-detail-test", role="admin", real_name="test", is_active=True)
+    row = {"item_id": "so642", "order_item_id": None, "supplier_order_item_id": 642}
+    def visible_routes(db, principal):
+        assert principal is user
+        return [row]
+    def rows(db, *, user, selected_pending_routes):
+        assert selected_pending_routes == [row]
+        return [row]
+    monkeypatch.setattr(mobile_erp, "_pending_incoming_route_rows", visible_routes)
+    monkeypatch.setattr(mobile_erp, "_incoming_rows", rows)
+    result = mobile_erp.pending_incoming_production_detail("so642", Response(), db=None, user=user)
+    assert result["incoming_item"]["supplier_order_item_id"] == 642
+    assert result["read_only"] is True
+    with pytest.raises(HTTPException) as denied:
+        mobile_erp.pending_incoming_production_detail("so643", Response(), db=None, user=user)
+    assert denied.value.status_code == 404
+    with pytest.raises(HTTPException) as invalid:
+        mobile_erp.pending_incoming_production_detail("so642/other", Response(), db=None, user=user)
+    assert invalid.value.status_code == 422

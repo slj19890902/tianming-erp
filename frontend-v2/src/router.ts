@@ -12,6 +12,7 @@ import ExcelRequisitionView from './views/ExcelRequisitionView.vue'
 import DeliveryView from './views/DeliveryView.vue'
 import StatementView from './views/StatementView.vue'
 import MobileReceiveView from './views/MobileReceiveView.vue'
+import MobileLayout from './mobile/MobileLayout.vue'
 
 export const routes: RouteRecordRaw[] = [
   {
@@ -32,12 +33,16 @@ export const routes: RouteRecordRaw[] = [
   },
   { path: '/deliveries', name: 'deliveries', component: DeliveryView, meta: { title: '出货回签' } },
   { path: '/statements', name: 'statements', component: StatementView, meta: { title: '月结对账' } },
-  {
-    path: '/mobile-receive',
-    name: 'mobile-receive',
-    component: MobileReceiveView,
-    meta: { title: '移动收料' },
-  },
+  { path: '/mobile-receive', redirect: '/mobile/receive' },
+  { path: '/mobile', component: MobileLayout, meta: { mobile: true }, children: [
+    { path: '', name: 'mobile-home', component: () => import('./mobile/MobileHome.vue'), meta: { title: '天明包装', mobile: true } },
+    { path: 'query', name: 'mobile-query', component: () => import('./mobile/MobileQuery.vue'), meta: { title: '现场查询', mobile: true } },
+    { path: 'products/:id', name: 'mobile-product', component: () => import('./mobile/MobileProduct.vue'), meta: { title: '产品详情', mobile: true } },
+    { path: 'recognize', name: 'mobile-recognize', component: () => import('./mobile/MobileRecognize.vue'), meta: { title: '认纸板', mobile: true } },
+    { path: 'warehouse', name: 'mobile-warehouse', component: () => import('./mobile/MobileWarehouse.vue'), meta: { title: '仓库地图', mobile: true } },
+    { path: 'receive', name: 'mobile-receive', component: MobileReceiveView, meta: { title: '收料', mobile: true } },
+    { path: 'more', name: 'mobile-more', component: () => import('./mobile/MobileMore.vue'), meta: { title: '更多', mobile: true } },
+  ] },
   // 演示页：二级入口，不挂主菜单
   { path: '/print-demo', name: 'print-demo', component: PrintDemo, meta: { title: '智能派工单' } },
   { path: '/scan-demo', name: 'scan-demo', component: ScanDemo, meta: { title: '扫码状态面板' } },
@@ -65,12 +70,13 @@ router.beforeEach(async (to) => {
   if (!auth.user) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
+  if (to.path === '/' && window.matchMedia('(max-width: 760px)').matches) return { path: '/mobile' }
   return true
 })
 
 /** 每次进入业务页时同步标签页（登录页不进标签） */
 router.afterEach((to) => {
-  if (to.meta.public === true) return
+  if (to.meta.public === true || to.meta.mobile === true) return
   const tabs = useTabsStore()
   tabs.openTab({
     name: String(to.name || to.path),

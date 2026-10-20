@@ -15,6 +15,7 @@ import { router } from './router'
 import { onUnauthorized } from './api/client'
 import { useAuthStore } from './stores/auth'
 import { useTabsStore } from './stores/tabs'
+import { useMobileStore } from './mobile/store'
 
 // 全站深色
 document.documentElement.classList.add('dark')
@@ -32,6 +33,7 @@ onUnauthorized(() => {
   const auth = useAuthStore()
   const tabs = useTabsStore()
   auth.handleUnauthorized()
+  useMobileStore().clear()
   tabs.reset()
   const current = router.currentRoute.value
   if (current.path !== '/login') {

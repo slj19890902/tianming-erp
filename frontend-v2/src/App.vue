@@ -14,7 +14,7 @@ const authStore = useAuthStore()
 const nowText = useDateFormat(useNow(), 'YYYY-MM-DD HH:mm:ss')
 
 const isLogin = computed(() => route.path === '/login')
-const isMobileReceive = computed(() => route.path === '/mobile-receive')
+const isMobileReceive = computed(() => route.meta.mobile === true)
 
 interface MenuItem {
   title: string

@@ -42,7 +42,7 @@ export function onUnauthorized(handler: () => void) {
   unauthorizedHandler = handler
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     // 关键：携带后端 session cookie
@@ -569,9 +569,9 @@ export const incomingApi = {
   /** 注意：后端仅返回近 24 小时已收料记录 */
   listReceived: () => request<{ items: IncomingItem[] }>('/api/incoming/received'),
   /** 整单确认收料，无 body */
-  receiveItem: (itemId: number) =>
+  receiveItem: (itemId: number | string) =>
     request<{ ok: boolean; item_id: number }>(`/api/incoming/receive/${itemId}`, { method: 'PUT' }),
-  revertItem: (itemId: number) =>
+  revertItem: (itemId: number | string) =>
     request<{ ok: boolean }>(`/api/incoming/revert/${itemId}`, { method: 'PUT' }),
 }
 

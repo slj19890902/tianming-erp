@@ -28,7 +28,7 @@ def scene(monkeypatch):
     monkeypatch.setattr(credential_store,'unprotect_backup',lambda reference:recovery.PASSWORD)
     write_json(case.manager.root/'preferences.json',{'protected_password':'synthetic-reference'})
     real_stable=native.policy.stable_file
-    monkeypatch.setattr(native.policy,'stable_file',lambda path,uid:real_stable(path,uid=501))
+    monkeypatch.setattr(native.policy,'stable_file',lambda path,uid,**kwargs:real_stable(path,uid=501,**kwargs))
     now=[datetime(2026,10,17,0,tzinfo=timezone.utc)]
     monkeypatch.setattr(native,'utc_now',lambda:now[0])
     try:yield case,native,now
@@ -202,3 +202,54 @@ def test_public_plan_remains_readable_under_launchd_umask_and_private_receipt_st
     finally:os.umask(old)
     assert stat.S_IMODE((case.root/'public-plan.json').stat().st_mode)==0o644
     assert stat.S_IMODE((case.root/'private-receipt.json').stat().st_mode)==0o600
+
+
+@pytest.mark.skipif(__import__('os').getuid()!=501,reason='Fixed Mac developer UID 501 owner boundary')
+def test_fixed_test_copy_reclaim_preserves_report_and_failed_source_pins(scene,monkeypatch):
+    import json
+    from desktop_assistant import cleanup
+    from desktop_assistant.task_retention import copy_identity
+    case,native,now=scene
+    evidence=case.root/'developer'/'evidence';evidence.mkdir(parents=True)
+    base=evidence/'completed'/'uat';base.mkdir(parents=True);(base/'retention.lock').write_bytes(b'0')
+    monkeypatch.setattr(native,'GIT',evidence.parent/'repository')
+    monkeypatch.setattr(cleanup,'assert_idle',lambda path,**kw:None)
+    def make(suffix):
+        job=base/('task-'+suffix*32);copies=job/'copies';copies.mkdir(parents=True)
+        (copies/'carton_erp.sqlite3').write_bytes(b'synthetic-disposable')
+        record=dict(schema='tianming.test-task.v1',job=str(job),copies=str(copies),
+                    status='passed',returncode=0,keep_copy=False,manual_acceptance_pending=False,
+                    source=str(evidence/'independent-source.sqlite3'),copy_identity=copy_identity(copies))
+        (job/'result.json').write_text(json.dumps(record));return job,record
+    job,record=make('a');raw=(job/'result.json').read_bytes()
+    calls=[]
+    result=native.reclaim_developer_test_copies(unchanged=lambda:calls.append(True),idle=lambda p:None,apply=True)
+    assert len(result['removed'])==1 and calls and not (job/'copies').exists()
+    assert (job/'result.json').read_bytes()==raw
+    target,record=make('b');failed,_=make('c')
+    failed_record=json.loads((failed/'result.json').read_text())
+    failed_record.update(status='failed',returncode=1,source=str(target/'copies/carton_erp.sqlite3'))
+    (failed/'result.json').write_text(json.dumps(failed_record))
+    result=native.reclaim_developer_test_copies(unchanged=lambda:None,idle=lambda p:None,apply=True)
+    assert not result['removed'] and (target/'copies').exists() and (failed/'copies').exists()
+    assert any(item['reason']=='source of another task' for item in result['retained'])
+
+
+@pytest.mark.skipif(__import__('os').getuid()!=501,reason='Fixed Mac developer UID 501 owner boundary')
+def test_test_copy_changed_seal_or_idle_failure_never_deletes(scene,monkeypatch):
+    import json
+    from desktop_assistant.task_retention import copy_identity
+    case,native,now=scene
+    evidence=case.root/'developer'/'evidence';base=evidence/'closed'/'uat';base.mkdir(parents=True)
+    (base/'retention.lock').write_bytes(b'0');job=base/('task-'+'a'*32);copies=job/'copies';copies.mkdir(parents=True)
+    data=copies/'data';data.write_bytes(b'old')
+    record=dict(schema='tianming.test-task.v1',job=str(job),copies=str(copies),status='passed',
+                returncode=0,keep_copy=False,manual_acceptance_pending=False,source=str(evidence/'source'),copy_identity=copy_identity(copies))
+    (job/'result.json').write_text(json.dumps(record));monkeypatch.setattr(native,'GIT',evidence.parent/'repository')
+    data.write_bytes(b'changed')
+    result=native.reclaim_developer_test_copies(unchanged=lambda:None,idle=lambda p:None,apply=True)
+    assert not result['removed'] and data.read_bytes()==b'changed'
+    record['copy_identity']=copy_identity(copies);(job/'result.json').write_text(json.dumps(record))
+    def active(path):raise ValueError('still referenced')
+    result=native.reclaim_developer_test_copies(unchanged=lambda:None,idle=active,apply=True)
+    assert not result['removed'] and data.exists()

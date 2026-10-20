@@ -226,3 +226,40 @@ def maintenance_exit_code(action, result):
     if action == 'cleanup' and result.get('status') == 'maintenance-busy':
         return 75
     return 1 if result.get('status') == 'failed' else 0
+
+
+def managed_copy_identity(target, *, owner_uid, device):
+    """Match the ordinary runner's seal without changing its privilege boundary."""
+    from desktop_assistant.cleanup import inspect_tree, local_path
+    target=local_path(Path(target));rows=[];size=0
+    for path in (target,*sorted(inspect_tree(target))):
+        st=path.lstat()
+        if (st.st_uid != owner_uid or st.st_dev != device
+                or not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode))
+                or (stat.S_ISREG(st.st_mode) and st.st_nlink != 1)):
+            raise ValueError('Managed test copy owner/type/device changed')
+        rows.append([str(path.relative_to(target)),st.st_dev,st.st_ino,st.st_mode,
+                     st.st_size,st.st_mtime_ns,st.st_ctime_ns])
+        if path.is_file():size+=st.st_size
+    return dict(fingerprint=hashlib.sha256(json.dumps(rows).encode()).hexdigest(),logical_bytes=size)
+
+
+def sealed_test_record(record, job):
+    job=Path(job)
+    return (isinstance(record,dict) and bool(re.fullmatch('task-[a-f0-9]{32}',job.name))
+            and record.get('schema')=='tianming.test-task.v1'
+            and record.get('job')==str(job) and record.get('copies')==str(job/'copies')
+            and record.get('status')=='passed' and record.get('returncode')==0
+            and record.get('keep_copy') is False
+            and record.get('manual_acceptance_pending') is False
+            and isinstance(record.get('copy_identity'),dict)
+            and isinstance(record['copy_identity'].get('fingerprint'),str)
+            and bool(IDENTITY.fullmatch(record['copy_identity']['fingerprint'])))
+
+
+def program_retention_sets(state, manifests, *, runtime_dependencies=(), archive_dependencies=(), point_programs=()):
+    """Historical proof hashes preserve originals, not additional runtime trees."""
+    originals=protected_programs(state,manifests,
+        additional=set(runtime_dependencies)|set(archive_dependencies),point_programs=point_programs)
+    expansions=expanded_programs(state,additional=runtime_dependencies,point_programs=point_programs)
+    return originals,expansions

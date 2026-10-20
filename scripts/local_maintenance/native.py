@@ -500,6 +500,70 @@ def user_cleanup():
     return result
 
 
+def reclaim_developer_test_copies(*, unchanged, idle, apply):
+    """Fixed root maintenance independently rechecks sealed UID 501 test copies.
+
+    Ordinary tests cannot ask this worker to run a path or command. Only the
+    known evidence tree is scanned; all data, records and locks must be UID 501.
+    The runner's immutable result, source pins, seal and fresh idle guard apply.
+    """
+    from desktop_assistant.cleanup import local_path,remove_owned_tree
+    from desktop_assistant.operation_lock import operation_lock
+    evidence=local_path(GIT.parent/'evidence')
+    if evidence.stat().st_uid != 501:
+        raise ValueError('Developer evidence owner changed')
+    device=evidence.stat().st_dev
+    records={};pins={};sources=[];unknown=set();result={'removed':[],'planned':[],'retained':[]}
+    paths=[]
+    for folder,dirs,names in os.walk(evidence,followlinks=False):
+        dirs[:]=[name for name in dirs if name not in ('.git','node_modules')
+                 and not (Path(folder)/name).is_symlink()]
+        job=Path(folder)
+        if not re.fullmatch('task-[a-f0-9]{32}',job.name):continue
+        path=job/'result.json'
+        if not (job/'copies').exists():continue
+        try:
+            path=local_path(path);st=path.lstat()
+            if st.st_uid != 501 or not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_size>1024**2:
+                raise ValueError('Unknown managed result')
+            if job.stat().st_uid != 501 or job.parent.stat().st_uid != 501:
+                raise ValueError('Managed task owner changed')
+            value=read(path)
+            if not isinstance(value,dict) or value.get('schema')!='tianming.test-task.v1' or value.get('job')!=str(job) or value.get('copies')!=str(job/'copies'):
+                raise ValueError('Unknown managed task contract')
+            records[job]=value;pins[path]=policy.digest(path);paths.append(path)
+            # Every recorded source pins its target, even when that task ended.
+            sources.append(Path(value['source']).resolve())
+        except (OSError,ValueError,KeyError,TypeError):
+            unknown.add(job.parent)
+    def records_unchanged():
+        if any(not path.is_file() or policy.digest(path)!=h for path,h in pins.items()):
+            raise ValueError('Managed task registry changed')
+    for job,value in records.items():
+        target=job/'copies';item={'path':str(target)}
+        if job.parent in unknown or not policy.sealed_test_record(value,job):
+            continue
+        if any(source==target or target in source.parents for source in sources):
+            item['reason']='source of another task';result['retained'].append(item);continue
+        try:
+            lock=local_path(job.parent/'retention.lock')
+            policy.stable_file(lock,uid=501,device=device)
+            with operation_lock(lock,existing_only=True):
+                before=policy.managed_copy_identity(target,owner_uid=501,device=device)
+                if before != value['copy_identity']:
+                    raise ValueError('Managed copy seal changed')
+                idle(target);records_unchanged();unchanged()
+                if policy.managed_copy_identity(target,owner_uid=501,device=device)!=before:
+                    raise ValueError('Managed copy changed before reclaim')
+                item['bytes']=before['logical_bytes']
+                if apply:
+                    item['deleted_bytes']=remove_owned_tree(target,job);result['removed'].append(item)
+                else:result['planned'].append(item)
+        except (OSError,ValueError,KeyError) as error:
+            item['reason']=str(error);result['retained'].append(item)
+    return result
+
+
 def close_readback_locked(manager):
     """Reuse the signed runtime's receipt-bound, restart-free owner closure."""
     if os.geteuid()!=0 or manager.state.get('current')!=_runtime_tree.parent.name:
@@ -572,15 +636,28 @@ def root_cleanup():
                 if policy.IDENTITY.fullmatch(p.name) and (p/'package.zip').is_file():
                     archive, manifest = program(p.name, manager.public_key)
                     archives[p.name], manifests[p.name] = archive, manifest
+            source_cache={}
+            def source_known(commit,*,ancestor=False):
+                key=(commit,ancestor)
+                if key not in source_cache:
+                    args=(['merge-base','--is-ancestor',commit,manifests[state['current']]['git_sha']]
+                          if ancestor else ['cat-file','-e',commit+'^{commit}'])
+                    answer=subprocess.run(['/usr/bin/git','-C',str(GIT),*args],user=501,group=20,extra_groups=[20],
+                                          cwd='/',capture_output=True,timeout=15,
+                                          env={'HOME':'/Users/kimiyf','PATH':'/usr/bin:/bin:/usr/sbin:/sbin'})
+                    source_cache[key]=answer.returncode==0
+                return source_cache[key]
             receipts = delivery_receipts(manifests, state['current'], now=now)
             processes = process_values()
             extra = set(settings.get('protected_helper_packages', []))
             extra.update(development_program_references())
+            runtime_extra=set(extra)
             for name in ('system-service.json','factory-activation.json','current-mac-publication.json'):
                 p=BASE/name
                 if p.is_file():extra.update(re.findall('[0-9a-f]{64}',p.read_text()))
             for value in processes:
-                extra.update(re.findall(r'/Library/TianmingERP/published/([0-9a-f]{64})', value))
+                runtime_extra.update(re.findall(r'/Library/TianmingERP/published/([0-9a-f]{64})', value))
+            extra.update(runtime_extra)
             unknown_backup=False
             for row in proof['backups']:
                 if not row['protected'] and row['recognized']:
@@ -598,12 +675,15 @@ def root_cleanup():
             if unknown_backup:
                 # An unclassified complete point can bind an older native program.
                 extra.update(manifests)
+                runtime_extra.update(manifests)
                 report['retained'].append({'kind':'unknown-backup-program-binding','reason':'protected-all-programs'})
             points = completed_points()
-            keep = policy.protected_programs(state, manifests, additional=extra,
-                                             point_programs=[p['program_sha256'] for p in points])
-            expanded_keep = policy.expanded_programs(state, additional=extra,
-                                             point_programs=[p['program_sha256'] for p in points])
+            keep,expanded_keep=policy.program_retention_sets(state,manifests,
+                runtime_dependencies=runtime_extra,archive_dependencies=extra,
+                point_programs=[p['program_sha256'] for p in points])
+            report['protection_sources']={'runtime_dependencies':sorted(runtime_extra),
+                'archive_only_dependencies':sorted(extra-runtime_extra)}
+            report['superseded_build_candidates']=[]
             for folder in BUILDS.iterdir():
                 if folder.is_symlink() or not folder.is_dir():
                     continue
@@ -615,13 +695,18 @@ def root_cleanup():
                     delivered=any(v.get('git_sha')==m.get('git_sha') for v in receipts.values())
                     if not delivered:
                         candidate_ids={h for h,manifest in manifests.items() if manifest==m}
-                        keep.update(candidate_ids);expanded_keep.update(candidate_ids)
+                        keep.update(candidate_ids)
+                        integrated=source_known(m.get('git_sha',''),ancestor=True)
+                        if not integrated:expanded_keep.update(candidate_ids)
+                        else:report['superseded_build_candidates'].append(dict(path=str(folder),git_sha=m['git_sha'],retained_originals=sorted(candidate_ids)))
                         for name in ('build-result.json','signing-request.json'):
                             p=folder/name
                             if p.is_file() and p.stat().st_size<1024**2:
                                 refs_in_candidate = re.findall('[0-9a-f]{64}',p.read_text())
                                 keep.update(refs_in_candidate)
-                                expanded_keep.update(refs_in_candidate)
+                                # A build's base ZIP is an archive dependency.
+                                # Runtime processes, venvs and real roles are
+                                # protected independently above.
                 except (OSError,ValueError,zipfile.BadZipFile):
                     # Unreadable candidate: no original archives are retired this run.
                     keep.update(manifests)
@@ -653,7 +738,8 @@ def root_cleanup():
                         with zipfile.ZipFile(p) as z:
                             manifest=json.loads(z.read('manifest.json'))
                         matches=[h for h,m in manifests.items() if m==manifest
-                                 and policy.receipt_valid(receipts.get(h),h,m['git_sha'])]
+                                 and (policy.receipt_valid(receipts.get(h),h,m['git_sha'])
+                                      or source_known(m['git_sha'],ancestor=True))]
                         if not matches:
                             continue
                         h=matches[0];digest=policy.digest(p)
@@ -673,6 +759,8 @@ def root_cleanup():
                   env={'HOME':'/Users/kimiyf','PATH':'/usr/bin:/bin:/usr/sbin:/sbin'})
             report['developer_cleanup']=json.loads(child.stdout) if child.returncode==0 else {'status':'failed'}
             unchanged()
+            report['developer_test_copies']=reclaim_developer_test_copies(unchanged=unchanged,idle=idle,apply=settings['apply_cleanup'])
+            record()
             # Successful isolated migrations only, and only after that program was delivered.
             for job in (ROOT/'staging').glob('migration-*'):
                 rp=job/'report.json'
@@ -710,17 +798,6 @@ def root_cleanup():
                 p=job/'report.json'
                 if not job.is_symlink() and p.is_file() and not p.is_symlink():
                     jobs.append((job,read(p),p.stat().st_mtime_ns))
-            source_cache={}
-            def source_known(commit,*,ancestor=False):
-                key=(commit,ancestor)
-                if key not in source_cache:
-                    args=(['merge-base','--is-ancestor',commit,manifests[state['current']]['git_sha']]
-                          if ancestor else ['cat-file','-e',commit+'^{commit}'])
-                    answer=subprocess.run(['/usr/bin/git','-C',str(GIT),*args],user=501,group=20,extra_groups=[20],
-                                          cwd='/',capture_output=True,timeout=15,
-                                          env={'HOME':'/Users/kimiyf','PATH':'/usr/bin:/bin:/usr/sbin:/sbin'})
-                    source_cache[key]=answer.returncode==0
-                return source_cache[key]
             for job,r,mtime in jobs:
                 h=r.get('package_sha256');receipt=receipts.get(h,{})
                 delivered=policy.receipt_valid(receipt,h,receipt.get('git_sha'))
@@ -826,7 +903,8 @@ def root_cleanup():
                             matches=[v for v,m in manifests.items() if m==candidate]
                             if not matches or not policy.unsigned_equivalent(p,candidate): continue
                             h=matches[0]
-                        if h not in manifests or not policy.receipt_valid(receipts.get(h),h,manifests[h]['git_sha']):
+                        if h not in manifests or not (policy.receipt_valid(receipts.get(h),h,manifests[h]['git_sha'])
+                                or source_known(manifests[h]['git_sha'],ancestor=True)):
                             continue
                         idle(p);unchanged()
                         if settings['apply_cleanup']: policy.unlink_verified(p,fp)

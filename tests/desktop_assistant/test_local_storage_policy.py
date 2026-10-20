@@ -182,3 +182,43 @@ def test_cleanup_contention_retries_without_changing_backup_cadence():
     assert cleanup['KeepAlive']=={'SuccessfulExit':False} and cleanup['ThrottleInterval']==300
     assert cleanup['StartInterval']==3600
     assert 'KeepAlive' not in installer.plist_for('backup')
+
+
+def test_managed_seal_matches_runner_and_rejects_links_or_modified_copies(tmp_path):
+    from desktop_assistant.task_retention import copy_identity
+    root=tmp_path/'copies';root.mkdir();(root/'data').write_bytes(b'disposable')
+    identity=p.managed_copy_identity(root,owner_uid=os.getuid(),device=root.stat().st_dev)
+    assert identity==copy_identity(root)
+    (root/'data').write_bytes(b'changed')
+    assert identity!=p.managed_copy_identity(root,owner_uid=os.getuid(),device=root.stat().st_dev)
+    with pytest.raises(ValueError):p.managed_copy_identity(root,owner_uid=os.getuid()+1,device=root.stat().st_dev)
+    (root/'link').symlink_to(tmp_path)
+    with pytest.raises(ValueError):p.managed_copy_identity(root,owner_uid=os.getuid(),device=root.stat().st_dev)
+
+
+def test_only_explicit_passed_nonmanual_sealed_test_records_are_eligible(tmp_path):
+    job=tmp_path/('task-'+'a'*32)
+    record=dict(schema='tianming.test-task.v1',job=str(job),copies=str(job/'copies'),
+                status='passed',returncode=0,keep_copy=False,manual_acceptance_pending=False,
+                copy_identity=dict(fingerprint='b'*64,logical_bytes=9))
+    assert p.sealed_test_record(record,job)
+    for key,value in [('status','failed'),('status','running'),('returncode',1),
+                      ('keep_copy',True),('manual_acceptance_pending',True),
+                      ('copies',str(tmp_path)),('copy_identity',None)]:
+        assert not p.sealed_test_record({**record,key:value},job)
+    assert not p.sealed_test_record({k:v for k,v in record.items() if k!='keep_copy'},job)
+
+
+def test_archive_history_does_not_keep_reproducible_expansions_forever():
+    current,previous,helper,backup,older,point=('a'*64,'b'*64,'c'*64,'d'*64,'e'*64,'f'*64)
+    state=dict(current=current,previous=previous)
+    manifests={current:dict(migration=dict(rollback_package_sha256=previous)),
+               backup:dict(migration=dict(rollback_package_sha256=older))}
+    originals,expansions=p.program_retention_sets(state,manifests,runtime_dependencies=[helper],
+                        archive_dependencies=[backup],point_programs=[point])
+    assert originals=={current,previous,helper,backup,older,point}
+    assert expansions=={current,previous,helper,point}
+    assert backup in originals and older in originals
+    # A genuine runtime dependency still overrides its historical classification.
+    _,expansions=p.program_retention_sets(state,manifests,runtime_dependencies=[backup],archive_dependencies=[backup])
+    assert backup in expansions

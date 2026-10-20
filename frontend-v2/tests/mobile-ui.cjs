@@ -4,6 +4,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const base = process.env.MOBILE_UI_URL || "http://127.0.0.1:18748";
+const siteOrigin = new URL(base).origin;
+const basePath = new URL(base).pathname.replace(/\/$/, "");
 const out =
   process.env.MOBILE_UI_EVIDENCE ||
   "/Users/kimiyf/ERP-Migration/evidence/issue48-mobile-ui-20261020";
@@ -143,6 +145,7 @@ async function run() {
         status = 401;
       } else if (pathname === "/api/auth/me")
         data = {
+          permissions: role === "admin" ? ["warehouse.view", "incoming.view"] : ["incoming.view"],
           user: {
             id: 1,
             username: "fixture",
@@ -163,7 +166,7 @@ async function run() {
               can_correct: role === "admin",
             },
             { id: "incoming", can_execute: role === "admin" },
-            { id: "predelivery" },
+            { id: "pre_delivery" },
             { id: "production" },
           ],
           search_categories: ["orders", "inventory"],
@@ -304,7 +307,7 @@ async function run() {
       else if (pathname === "/api/incoming/pending")
         data = { items: received ? [] : [incoming] };
       else if (pathname === "/api/incoming/received")
-        data = { items: received ? [incoming] : [] };
+        data = { items: received ? [{ ...incoming, receipt_item_id: 501, history_key: "receipt-501", received_quantity_this_time: 300, remaining_quantity: 0 }] : [] };
       else if (pathname === "/api/mobile/erp/incoming/sr17/production-detail")
         data = {
           incoming_item: incoming,
@@ -317,6 +320,10 @@ async function run() {
         };
       else if (pathname === "/api/incoming/receive/sr17") {
         receiptAttempts++;
+        const key = JSON.parse(route.request().postData()).idempotency_key;
+        assert.match(key, /^receive-/);
+        const previous = requests.filter(r => r.path === pathname && r.method === "PUT");
+        if (previous.length > 1) assert.equal(key, JSON.parse(previous[0].body).idempotency_key);
         await new Promise((r) => setTimeout(r, 180));
         if (failReceipt) {
           status = 409;
@@ -325,10 +332,10 @@ async function run() {
           received = true;
           data = { ok: true };
         }
-      } else if (pathname === "/api/incoming/revert/sr17") {
-        assert.deepEqual(JSON.parse(route.request().postData()), {
-          reason: "数量录错",
-        });
+      } else if (pathname === "/api/incoming/receipt-items/501/revert") {
+        const payload = JSON.parse(route.request().postData());
+        assert.equal(payload.reason, "数量录错");
+        assert.match(payload.idempotency_key, /^revert-/);
         received = false;
         data = { ok: true };
       } else if (pathname === "/api/auth/logout") data = { ok: true };
@@ -346,7 +353,7 @@ async function run() {
         },
       });
     }
-    if (url.origin !== base) {
+    if (url.origin !== siteOrigin) {
       networkLeaks.push(route.request().url());
       return route.abort();
     }
@@ -468,7 +475,7 @@ async function run() {
   assert.equal(await page.locator(".m-infobar").count(), 0);
   await page.goto(base + "/mobile-receive");
   await page.locator(".m-receive-card").waitFor();
-  assert.equal(new URL(page.url()).pathname, "/mobile/receive");
+  assert.equal(new URL(page.url()).pathname, basePath + "/mobile/receive");
   assert.doesNotMatch(
     await page.locator(".m-receive-head").innerText(),
     /测试供应商|测试客户甲|227/,
@@ -486,6 +493,7 @@ async function run() {
   await page.getByText("已确认收料", { exact: true }).waitFor();
   assert.equal(receiptAttempts, 2);
   await page.getByRole("button", { name: "已收料", exact: true }).click();
+  assert.match(await page.locator(".m-receive-head").innerText(), /300/);
   await page.locator(".m-receive-head").click();
   await page.getByRole("button", { name: "撤销收料", exact: true }).click();
   await page.getByLabel("撤销原因").fill("数量录错");
@@ -567,7 +575,7 @@ async function run() {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto(base + "/");
   await page.locator(".mobile-app").waitFor();
-  assert.equal(new URL(page.url()).pathname, "/mobile");
+  assert.equal(new URL(page.url()).pathname, basePath + "/mobile");
   results.push("phone-home-entry");
   unauthorized = true;
   await page.goto(base + "/mobile/query");

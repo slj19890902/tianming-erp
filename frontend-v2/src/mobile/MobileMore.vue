@@ -20,7 +20,7 @@ async function logout() {
         name="chevron" /></RouterLink
     ><a v-if="mobile.allowed('production')" :href="legacyUrl('production')"
       ><MobileIcon name="grid" />生产<MobileIcon name="chevron" /></a
-    ><a v-if="mobile.allowed('predelivery')" :href="legacyUrl('predelivery')"
+    ><a v-if="mobile.allowed('pre_delivery')" :href="legacyUrl('predelivery')"
       ><MobileIcon name="truck" />预送货<MobileIcon name="chevron" /></a
     ><RouterLink v-if="mobile.allowed('warehouse')" to="/mobile/warehouse"
       ><MobileIcon name="pin" />仓库地图<MobileIcon

@@ -118,6 +118,12 @@ export interface Incoming {
   product_name?: string;
   customer_name?: string;
   supplier_name?: string;
+  snapshot_supplier_name?: string;
+  received_quantity_this_time?: number;
+  incoming_quantity?: number;
+  receipt_item_id?: number;
+  history_key?: string;
+  can_revert_receipt?: boolean;
   supplier_delivery_time?: string;
   material_received_at?: string;
   cardboard_len?: number;
@@ -229,7 +235,7 @@ export const mobileApi = {
 };
 /** Only same-backend URLs can receive session cookies; never follow a QR-provided origin. */
 export function backendUrl(path: string): string {
-  const base = new URL(API_BASE, window.location.href);
+  const base = new URL(API_BASE || "/", window.location.origin);
   const url = new URL(path, base);
   if (
     url.origin !== base.origin ||
@@ -241,7 +247,7 @@ export function backendUrl(path: string): string {
   return url.href;
 }
 export function legacyUrl(hash: "predelivery" | "production"): string {
-  return backendUrl(`/mobile_erp.html#${hash}`);
+  return backendUrl(`/mobile/erp.html#${hash === "predelivery" ? "pre_delivery" : hash}`);
 }
 export function stocktakeUrl(
   location: number,

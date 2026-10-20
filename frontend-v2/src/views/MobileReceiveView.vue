@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { incomingApi, request } from "../api/client";
+import { request } from "../api/client";
 import {
   mobileApi,
   backendUrl,
@@ -38,6 +38,7 @@ let listController: AbortController | null = null,
 const items = computed(() =>
   tab.value === "pending" ? pending.value : received.value,
 );
+const canRevert = computed(() => mobile.shell?.user.role === "admin");
 const canExecute = computed(
   () => mobile.entry("incoming")?.can_execute === true,
 );
@@ -56,8 +57,16 @@ const summary = (item: Incoming) =>
     item.report_length_mm ?? item.cardboard_len,
     item.report_width_mm ?? item.cardboard_width,
   );
-const count = (item: Incoming) =>
-  quantity(item.remaining_quantity ?? item.requisition_qty ?? item.quantity);
+const rowKey = (item: Incoming) => item.history_key || String(item.receipt_item_id || item.item_id);
+const count = (item: Incoming) => quantity(tab.value === "received"
+  ? item.received_quantity_this_time ?? item.incoming_quantity
+  : item.remaining_quantity ?? item.incoming_quantity ?? item.requisition_qty);
+function requestKey(action: string, item: Incoming) {
+  const name = `mobile-receipt:${mobile.shell?.user.id}:${action}:${rowKey(item)}`;
+  let key = sessionStorage.getItem(name);
+  if (!key) { key = `${action}-${Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, "0")).join("")}`; sessionStorage.setItem(name, key); }
+  return { name, key };
+}
 async function load() {
   listController?.abort();
   listController = new AbortController();
@@ -84,11 +93,11 @@ async function expand(item: Incoming) {
   details.value = null;
   detailError.value = "";
   imageFailed.value = false;
-  if (expanded.value === String(item.item_id)) {
+  if (expanded.value === rowKey(item)) {
     expanded.value = null;
     return;
   }
-  expanded.value = String(item.item_id);
+  expanded.value = rowKey(item);
   if (tab.value === "received") return;
   detailController = new AbortController();
   const current = detailController;
@@ -107,11 +116,15 @@ async function expand(item: Incoming) {
 }
 async function confirm(item: Incoming) {
   if (busy.value || !canExecute.value) return;
-  busy.value = String(item.item_id);
+  busy.value = rowKey(item);
   error.value = "";
   notice.value = "";
   try {
-    await incomingApi.receiveItem(item.item_id);
+    const identity = requestKey("receive", item);
+    await request(`/api/incoming/receive/${encodeURIComponent(item.item_id)}`, {
+      method: "PUT", body: JSON.stringify({ idempotency_key: identity.key }),
+    });
+    sessionStorage.removeItem(identity.name);
     if (!alive) return;
     notice.value = "已确认收料";
     expanded.value = null;
@@ -123,17 +136,20 @@ async function confirm(item: Incoming) {
   }
 }
 async function revert() {
-  if (!undo.value || !reason.value.trim() || busy.value || !canExecute.value)
+  if (!undo.value || !reason.value.trim() || busy.value || !canRevert.value)
     return;
   const item = undo.value;
-  busy.value = String(item.item_id);
+  busy.value = rowKey(item);
   error.value = "";
   try {
-    await request(`/api/incoming/revert/${encodeURIComponent(item.item_id)}`, {
+    const identity = requestKey("revert", item);
+    const target = item.receipt_item_id ? `receipt-items/${item.receipt_item_id}/revert` : `revert/${encodeURIComponent(item.item_id)}`;
+    await request(`/api/incoming/${target}`, {
       method: "PUT",
-      body: JSON.stringify({ reason: reason.value.trim() }),
+      body: JSON.stringify({ reason: reason.value.trim(), idempotency_key: identity.key }),
     });
     if (!alive) return;
+    sessionStorage.removeItem(identity.name);
     undo.value = null;
     notice.value = "已撤销收料";
     await load();
@@ -181,6 +197,7 @@ onBeforeUnmount(() => {
         <MobileIcon name="refresh" />
       </button>
     </div>
+    <a v-if="canExecute" :href="backendUrl('/mobile/erp.html#incoming')" class="m-text-action">部分到货 / 选择入库位置</a>
     <div v-if="notice" class="m-notice" role="status">{{ notice }}</div>
     <div v-if="error" class="m-status" role="alert">
       {{ error }}<button :disabled="!!busy" @click="load">重试</button>
@@ -191,13 +208,13 @@ onBeforeUnmount(() => {
     </div>
     <article
       v-for="item in items"
-      :key="item.item_id"
+      :key="rowKey(item)"
       class="m-card m-receive-card"
-      :class="{ open: expanded === String(item.item_id) }"
+      :class="{ open: expanded === rowKey(item) }"
     >
       <button
         class="m-receive-head"
-        :aria-expanded="expanded === String(item.item_id)"
+        :aria-expanded="expanded === rowKey(item)"
         @click="expand(item)"
       >
         <span class="m-receive-spec"
@@ -205,19 +222,19 @@ onBeforeUnmount(() => {
           }}<span>{{ compactText(item.flute_type) }}</span></span
         ><span class="m-receive-qty"
           >数量 <b>{{ count(item) }}</b> 张<span class="m-expand"
-            >{{ expanded === String(item.item_id) ? "收起" : "展开"
+            >{{ expanded === rowKey(item) ? "收起" : "展开"
             }}<MobileIcon name="chevron" :size="17" /></span
         ></span>
       </button>
       <section
-        v-if="expanded === String(item.item_id)"
+        v-if="expanded === rowKey(item)"
         class="m-receive-details"
       >
         <div class="m-receive-meta">
           供应商
           <b>{{
             compactText(
-              details?.incoming_item.supplier_name || item.supplier_name,
+              details?.incoming_item.snapshot_supplier_name || details?.incoming_item.supplier_name || (item.snapshot_supplier_name || item.supplier_name),
             ) || "—"
           }}</b>
           ·
@@ -301,9 +318,9 @@ onBeforeUnmount(() => {
           :disabled="!!busy"
           @click="confirm(item)"
         >
-          {{ busy === String(item.item_id) ? "收料中…" : "确认收料" }}</button
+          {{ busy === rowKey(item) ? "收料中…" : "确认收料" }}</button
         ><button
-          v-if="tab === 'received' && canExecute"
+          v-if="tab === 'received' && canRevert && item.can_revert_receipt !== false"
           class="m-outline m-wide"
           :disabled="!!busy"
           @click="

@@ -26,7 +26,7 @@ const buttons = computed(() =>
     { id: "warehouse", title: "仓库", path: "/mobile/warehouse", icon: "box" },
     { id: "incoming", title: "收料", path: "/mobile/receive", icon: "receive" },
     {
-      id: "predelivery",
+      id: "pre_delivery",
       title: "预送货",
       path: legacyUrl("predelivery"),
       icon: "truck",
@@ -79,7 +79,7 @@ onBeforeUnmount(() => {
     <div class="m-grid2">
       <template v-for="button in buttons" :key="button.id">
         <a
-          v-if="button.id === 'predelivery'"
+          v-if="button.id === 'pre_delivery'"
           :href="button.path"
           class="m-bigbtn"
           ><span class="m-icon-tile"

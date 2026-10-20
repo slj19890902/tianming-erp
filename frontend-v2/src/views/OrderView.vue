@@ -10,6 +10,7 @@ import {
   type Product,
   ApiError,
 } from '../api/client'
+import { multiplyMoney, sumMoney } from '../utils/exactMoney'
 import { businessDate } from '../utils/businessDate'
 import { buildReadbackExpectations, verifyOrderCreateReadback } from '../utils/orderCreateReadback'
 import { useTabsStore } from '../stores/tabs'
@@ -96,11 +97,9 @@ const productOptions = computed(() => {
 })
 function selectedProduct(id: number | null) { return id ? chosenProducts.value[id] || productOptions.value.find((item) => item.id === id) : null }
 const lineAmount = (line: { quantity: string; unit_price: string }) => {
-  const quantity = Number(line.quantity)
-  const price = Number(line.unit_price)
-  return Number.isFinite(quantity) && Number.isFinite(price) ? quantity * price : 0
+  try { return multiplyMoney(line.quantity || '0', line.unit_price || '0') } catch { return '0' }
 }
-const orderAmount = computed(() => orderLines.value.reduce((sum, line) => sum + lineAmount(line), 0))
+const orderAmount = computed(() => sumMoney(orderLines.value.map(lineAmount)))
 
 watch(() => orderForm.value.customer_id, (customerId, previousId) => {
   productSearchSerial.value++
@@ -568,11 +567,11 @@ onMounted(async () => {
         <vxe-column field="quantity" title="数量" width="140">
           <template #default="{ row }"><el-input v-model="row.quantity" :disabled="entryLocked" /></template>
         </vxe-column>
-        <vxe-column field="unit_price" title="单价" width="140">
+        <vxe-column field="unit_price" title="原始单价" width="140">
           <template #default="{ row }"><el-input v-model="row.unit_price" :disabled="entryLocked" /></template>
         </vxe-column>
         <vxe-column title="单位" width="95"><template #default="{ row }">{{ selectedProduct(row.product_id)?.unit_label || selectedProduct(row.product_id)?.unit || '待完善' }}<small v-if="selectedProduct(row.product_id)?.unit_needs_review">待完善</small></template></vxe-column>
-        <vxe-column title="总价" width="110"><template #default="{ row }">{{ lineAmount(row).toFixed(2) }}</template></vxe-column>
+        <vxe-column title="总价" width="110"><template #default="{ row }">{{ lineAmount(row) }}</template></vxe-column>
         <vxe-column field="production_notes" title="生产说明（行级）" min-width="190">
           <template #default="{ row }"><el-input v-model="row.production_notes" :disabled="entryLocked" /></template>
         </vxe-column>
@@ -594,7 +593,7 @@ onMounted(async () => {
           </template>
         </vxe-column>
       </vxe-table>
-      <div class="tm-muted" style="text-align:right;margin-top:8px">界面试算合计：￥{{ orderAmount.toFixed(2) }}（保存后以后端金额为准）</div>
+      <div class="tm-muted" style="text-align:right;margin-top:8px">原报价合计：￥{{ orderAmount }}（按客户原始含税／未税报价口径）</div>
       <section v-if="inventoryPermitted" aria-label="库存与需报核对">
         <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><el-button :loading="inventory.busy.value" :disabled="entryLocked" @click="inventory.refresh()">核对库存与需报</el-button>
           <span v-if="inventory.changed.value">产品、客户或数量变化后请重新核对库存；保存前会再次校验。</span></div>

@@ -1,3 +1,4 @@
+from app.core.exact_money import excel_decimal, write_excel_decimal
 """Memory-only comparison of customer spreadsheets with a scoped ERP statement."""
 from collections import defaultdict, Counter
 from decimal import Decimal, InvalidOperation
@@ -104,8 +105,10 @@ def export_report(result):
     sheet.append(['核对状态','完整' if result['complete'] else '有无法解析的行，结果不完整'])
     headers=['结果','送货单号','客户单号','存货编码','产品名称','客户数量','ERP数量','数量差','客户金额','ERP金额','金额差','客户单价','ERP单价','客户文件行','ERP明细ID'];sheet.append(headers)
     for row in result['items']:
-        values=[row[k] for k in ('status','delivery_number','customer_po','product_code','product_name')]+[Decimal(row[k]) for k in ('customer_quantity','erp_quantity','quantity_difference','customer_amount','erp_amount','amount_difference')]+[row['customer_prices'],row['erp_prices'],','.join(map(str,row['customer_rows'])),','.join(map(str,row['statement_item_ids']))]
+        values=[row[k] for k in ('status','delivery_number','customer_po','product_code','product_name')]+[excel_decimal(row[k]) for k in ('customer_quantity','erp_quantity','quantity_difference','customer_amount','erp_amount','amount_difference')]+[row['customer_prices'],row['erp_prices'],','.join(map(str,row['customer_rows'])),','.join(map(str,row['statement_item_ids']))]
         sheet.append(values)
+        for column, key in enumerate(('customer_quantity','erp_quantity','quantity_difference','customer_amount','erp_amount','amount_difference'), 6):
+            write_excel_decimal(sheet, sheet.max_row, column, row[key])
         for cell in sheet[sheet.max_row]:
             if isinstance(cell.value,str):cell.data_type='s'
             if row['status']!='一致':cell.fill=PatternFill('solid',fgColor='FFF1E6')

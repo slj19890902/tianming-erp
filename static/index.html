@@ -31,7 +31,8 @@
     <script src="/static/ui/production-workspace.js?v=20261019labels01"></script>
     <script src="/static/ui/production-desk.js?v=round-experience-d2"></script>
     <link rel="stylesheet" href="/static/ui/production-desk.css?v=20260922-map-return">
-    <script src="/static/ui/finance-workspace.js?v=163ff7daed3b"></script>
+    <script src="/static/ui/exact-money.js?v=dd6e94acf45e"></script>
+    <script src="/static/ui/finance-workspace.js?v=73e0d81ec493"></script>
     <script src="/static/ui/desktop-delivery-margin.js?v=20260926-dashboard-cost"></script>
     <script src="/static/ui/entry-product-editor.js?v=20261020-entry-message"></script>
     <script src="/static/ui/demand-stock.js?v=20261012"></script>
@@ -3539,7 +3540,7 @@
                 <div class="toolbar"><strong>报价历史</strong><button class="btn" :disabled="loading || quotationActionBusy()" @click="loadQuotationHistory">刷新</button></div>
                 <div v-if="!quotationHistory.length" class="empty">该客户还没有报价记录</div>
                 <div v-else class="table-wrap"><table><thead><tr><th>报价单号</th><th>报价日期</th><th>状态</th><th>报价金额</th><th>报价明细</th><th>操作</th></tr></thead><tbody>
-                  <tr v-for="row in quotationHistory" :key="row.id"><td><strong>{{ row.quotation_no }}</strong></td><td>{{ row.quotation_date }}</td><td><status-tag :value="row.status"></status-tag></td><td>￥ {{ money(row.total_amount) }}</td><td><div v-for="item in row.items" :key="item.id">{{ item.product_name }}｜{{ item.box_type }}｜{{ item.material_code || '-' }}<span v-if="item.converted_product_id" class="status green">已转常用箱</span><button v-else-if="row.status==='accepted'" class="btn small" :disabled="loading || quotationActionBusy()" @click="convertQuotationItem(row,item)">转入常用箱</button></div></td><td class="toolbar-group"><button class="btn small" :disabled="loading || quotationActionBusy()" @click="editQuotation(row)">{{ ['draft','quoted'].includes(row.status) ? '查看/编辑' : '查看' }}</button><button class="btn small" @click="printQuotation(row)">打印/PDF</button><button v-if="row.status==='quoted'" class="btn small success" :disabled="loading || quotationActionBusy()" @click="acceptQuotation(row)">{{ quotationActionPending('accept',row.id) ? '接受中…' : '客户接受' }}</button><button v-if="!['voided','converted'].includes(row.status)" class="btn small danger" :disabled="loading || quotationActionBusy()" @click="voidQuotation(row)">{{ quotationActionPending('void',row.id) ? '作废中…' : '作废' }}</button></td></tr>
+                  <tr v-for="row in quotationHistory" :key="row.id"><td><strong>{{ row.quotation_no }}</strong></td><td>{{ row.quotation_date }}</td><td><status-tag :value="row.status"></status-tag></td><td>￥ {{ salesMoney(row.total_amount) }}</td><td><div v-for="item in row.items" :key="item.id">{{ item.product_name }}｜{{ item.box_type }}｜{{ item.material_code || '-' }}<span v-if="item.converted_product_id" class="status green">已转常用箱</span><button v-else-if="row.status==='accepted'" class="btn small" :disabled="loading || quotationActionBusy()" @click="convertQuotationItem(row,item)">转入常用箱</button></div></td><td class="toolbar-group"><button class="btn small" :disabled="loading || quotationActionBusy()" @click="editQuotation(row)">{{ ['draft','quoted'].includes(row.status) ? '查看/编辑' : '查看' }}</button><button class="btn small" @click="printQuotation(row)">打印/PDF</button><button v-if="row.status==='quoted'" class="btn small success" :disabled="loading || quotationActionBusy()" @click="acceptQuotation(row)">{{ quotationActionPending('accept',row.id) ? '接受中…' : '客户接受' }}</button><button v-if="!['voided','converted'].includes(row.status)" class="btn small danger" :disabled="loading || quotationActionBusy()" @click="voidQuotation(row)">{{ quotationActionPending('void',row.id) ? '作废中…' : '作废' }}</button></td></tr>
                 </tbody></table></div>
               </div>
             </template>
@@ -3607,7 +3608,7 @@
                   <tr v-for="row in contractHistory" :key="row.id">
                     <td><strong>{{ row.contract_no }}</strong></td><td>{{ row.contract_date || '-' }}</td><td>{{ row.customer_po || '-' }}</td><td>{{ row.delivery_date || '-' }}</td>
                     <td><span :class="['status','contract-status',contractStatusTone(row.status)]">{{ contractStatusText(row.status) }}</span></td>
-                    <td><div v-for="item in row.items || []" :key="item.id || item.product_id">{{ item.product_code || '-' }}｜{{ item.product_name || '-' }} × {{ item.quantity || 0 }}</div></td><td>￥ {{ money(row.total_amount) }}</td>
+                    <td><div v-for="item in row.items || []" :key="item.id || item.product_id">{{ item.product_code || '-' }}｜{{ item.product_name || '-' }} × {{ item.quantity || 0 }}</div></td><td>￥ {{ salesMoney(row.total_amount) }}</td>
                     <td class="toolbar-group"><button class="btn small" :disabled="loading || contractActionBusy()" @click="editContract(row)">{{ row.status === 'draft' ? '查看/编辑' : '查看' }}</button><button class="btn small primary" :disabled="contractPdfExportBusy()" @click="exportContractPdf(row)">{{ contractPdfExportBusy(row.id) ? '正在导出…' : '导出 PDF（未盖章）' }}</button><button v-if="user.role==='admin'" class="btn small" :disabled="contractPdfExportBusy()" @click="exportContractPdf(row,true)">导出盖章 PDF</button><button class="btn small" @click="printContract(row)">网页预览/自助打印</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="confirmContract(row)">{{ contractActionPending('confirm',row.id) ? '确认中…' : '客户确认' }}</button><button v-if="row.status === 'confirmed' && canConvertContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="convertContract(row)">{{ contractActionPending('convert',row.id) ? '转单中…' : '转订单' }}</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small danger" :disabled="loading || contractActionBusy()" @click="deleteContract(row)">{{ contractActionPending('delete',row.id) ? '删除中…' : '删除' }}</button></td>
                   </tr>
                 </tbody></table></div>
@@ -4164,7 +4165,7 @@
                       <div v-if="customerHeatOrders[customer.customer_id]?.error" class="notice warning">{{ customerHeatOrders[customer.customer_id].error }} <button class="btn small" @click="loadCustomerHeatOrders(customer,{page:customerHeatOrders[customer.customer_id]?.page || 1,force:true})">重试</button></div>
                       <div v-if="customerHeatOrders[customer.customer_id]?.loading && !customerHeatOrders[customer.customer_id]?.items?.length" class="empty">正在加载该客户订单…</div>
                       <div v-else-if="!customerHeatOrders[customer.customer_id]?.items?.length" class="empty">当前筛选没有可展开订单</div>
-                      <table v-else><thead><tr><th>客户订单号</th><th class="erp-order-no">ERP订单号</th><th>下单日期</th><th>交期</th><th>款数 / 数量</th><th v-if="canViewSalesAmounts" class="sensitive-price">金额</th><th>流程状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in customerHeatOrders[customer.customer_id].items" :key="row.id"><td><order-reference :row="row" :secondary="false"></order-reference></td><td class="erp-order-no">{{ row.order_number }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || '-' }}</td><td>{{ row.item_count || 0 }} 款 / {{ row.total_quantity || 0 }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ row.total_amount === undefined ? '-' : `¥ ${money(row.total_amount)}` }}</td><td><status-tag :value="row.business_status || row.status"></status-tag></td><td><button class="btn small" @click="openOrderDetail(row)">查看详情</button></td></tr></tbody></table>
+                      <table v-else><thead><tr><th>客户订单号</th><th class="erp-order-no">ERP订单号</th><th>下单日期</th><th>交期</th><th>款数 / 数量</th><th v-if="canViewSalesAmounts" class="sensitive-price">金额</th><th>流程状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in customerHeatOrders[customer.customer_id].items" :key="row.id"><td><order-reference :row="row" :secondary="false"></order-reference></td><td class="erp-order-no">{{ row.order_number }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || '-' }}</td><td>{{ row.item_count || 0 }} 款 / {{ row.total_quantity || 0 }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ row.total_amount === undefined ? '-' : `¥ ${salesMoney(row.total_amount)}` }}</td><td><status-tag :value="row.business_status || row.status"></status-tag></td><td><button class="btn small" @click="openOrderDetail(row)">查看详情</button></td></tr></tbody></table>
                       <pager v-if="customerHeatOrders[customer.customer_id]" :page="customerHeatOrders[customer.customer_id].page || 1" :total="customerHeatOrders[customer.customer_id].total || 0" :page-size="customerHeatOrders[customer.customer_id].page_size || pageSize" :compact="true" @change="loadCustomerHeatOrders(customer,{page:$event})"></pager>
                     </div>
                   </article>
@@ -4245,7 +4246,7 @@
                                     <td style="white-space:normal;word-break:break-all;max-width:140px;font-size:12px"><span v-for="(part,index) in orderSearchHighlightParts(orderItemMaterialText(item, false))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></span></td>
                                     <td class="cell-right"><strong>订单 {{ item.quantity }}</strong><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div><span class="workflow-remaining">未交 {{ Math.max(0,Number(item.quantity || 0)-Number(item.business_delivered_quantity || 0)) }}</span></td>
                                     <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ unitPrice(item.unit_price) }}</td>
-                                    <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ money(item.subtotal) }}</td>
+                                    <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ salesMoney(item.subtotal) }}</td>
                                     <td v-if="canViewCosts" class="cost-sensitive cell-right"><div>成本 {{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</div><div class="muted" style="font-size:11px">毛利 {{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</div></td>
                                     <td>
                                       <status-tag :value="itemBusinessStatusKey(item)"></status-tag>
@@ -4290,7 +4291,7 @@
               <data-panel :empty="!orders.length">
                 <table><thead><tr><th>主操作</th><th></th><th>客户订单号</th><th class="erp-order-no">ERP订单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
-                  <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><order-reference :row="row" :secondary="false"></order-reference></td><td class="erp-order-no">{{ row.order_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ row.business_delivery_progress?.delivered_quantity || 0 }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><status-tag :value="orderDisplayStatusKey(row)"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
+                  <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><order-reference :row="row" :secondary="false"></order-reference></td><td class="erp-order-no">{{ row.order_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ row.business_delivery_progress?.delivered_quantity || 0 }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><status-tag :value="orderDisplayStatusKey(row)"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">¥ {{ salesMoney(row.total_amount) }}</td></tr>
                   <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="canViewSalesAmounts ? 14 : 13"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格mm</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">客户销售单价</th><th v-if="canViewCosts" class="cost-sensitive">预计成本</th><th v-if="canViewCosts" class="cost-sensitive">预计利润</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div v-if="orderBomDemandSaveState.outcomeUncertain && Number(orderBomDemandSaveState.itemId)===Number(item.id)" class="notice warning" style="margin:6px 0">上次组件数量保存结果暂不确定，请点击上方“刷新”核对后再操作。</div><div class="bom-preview-list"><div v-for="component in visibleBomComponents(item)" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" @click="saveOrderBomComponentDemand(item,component)">{{ orderBomDemandSaveState.saving && Number(orderBomDemandSaveState.itemId)===Number(item.id) && Number(orderBomDemandSaveState.componentId)===Number(component.id) ? "保存中…" : "保存本订单需求" }}</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ orderSpecificationText(item.snapshot_spec) }}</td><td>{{ item.quantity }}<details v-if="item.replenishment_supply && item.replenishment_supply.sources && item.replenishment_supply.sources.length" class="order-replenishment-supply" style="margin-top:4px;white-space:normal;font-size:12px" @click.stop><summary>{{ orderReplenishmentSupplyText(item) }}</summary><div v-if="item.replenishment_supply.total_coverable_finished_quantity != null" class="muted">含补库可覆盖合计 {{ item.replenishment_supply.total_coverable_finished_quantity }}{{ item.replenishment_supply.unit_label }}</div><div v-for="(source,supplyIndex) in item.replenishment_supply.sources" :key="supplyIndex" class="muted">{{ source.product_name || source.product_code }}：覆盖用料 {{ source.covered_piece_quantity }}片 · {{ orderReplenishmentSupplyStage(source.stage) }}<div>{{ source.order_number }}</div></div></details><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="orderReplenishmentWaitingStatus(item)"></status-tag></td><td><status-tag :value="item.requisition_display_status || item.requisition_status" :title="item.requisition_display_hint"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(item.unit_price) }}</td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong><div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin-top:3px">{{ item.estimated_cost_health_label }}</div></td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit !== null && item.total_estimated_gross_profit !== undefined ? money(item.total_estimated_gross_profit) : "-" }}</strong><div v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined" class="muted">{{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</div></td><td class="toolbar-group"><template v-if="canWarehouseReserve" v-for="target in manualSheetTargetsForItem(item)" :key="target.key"><div class="muted">{{ target.label }}</div><manual-sheet-deduction :actor-id="Number(user?.id || 0)" :disabled="manualSheetDeductionDisabled()" :order-item-id="target.order_item_id" :snapshot-id="target.bom_snapshot_id || 0" :component-type="target.component_type" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualSheetOrder(item,$event,row.id)"></manual-sheet-deduction></template><button v-if="hasBomComponents(item) && hasPermission('warehouse.view')" class="btn small" @click="openOrderBomStockReview(item)">BOM库存核对</button><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
@@ -4320,7 +4321,7 @@
                               <td>{{ row.order_date }}</td>
                               <td>{{ row.items.map(item => plainProductText(item.snapshot_product_name)).join(' / ') }}</td>
                               <td>{{ sum(row.items,'quantity') }}</td>
-                              <td v-if="canViewSalesAmounts" class="sensitive-price">¥ {{ money(row.total_amount) }}</td>
+                              <td v-if="canViewSalesAmounts" class="sensitive-price">¥ {{ salesMoney(row.total_amount) }}</td>
                               <td><status-tag :value="orderDisplayStatusKey(row)"></status-tag></td>
                               <td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td>
                             </tr>
@@ -5113,7 +5114,7 @@
                     <td>{{ row.customer_name }}</td>
                     <td>{{ row.delivery_date }}<div v-if="row.is_historical_backfill" class="status blue" style="margin-top:4px">历史补录</div><div v-if="row.created_at" class="muted">ERP录入 {{ formatDateTime(row.created_at) }}</div></td>
                     <td>{{ deliveryDisplayQuantity(row) }}</td>
-                    <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ row.total_amount == null ? "待核对" : money(row.total_amount) }}</td>
+                    <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ row.total_amount == null ? "待核对" : salesMoney(row.total_amount) }}</td>
                     <td><button class="btn small delivery-list-detail-toggle" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${row.item_count ?? (row.items || []).length}）` }}</button></td>
                     <td><span v-if="row.status==='voided'" class="status gray">已删除（留痕）</span><status-tag v-else :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag><span v-if="deliveryLocationCountdown(row)" class="delivery-location-countdown">{{ deliveryLocationCountdown(row) }}</span></td>
@@ -8185,7 +8186,7 @@
 	                    <td v-if="hasPermission('warehouse.view')" class="order-entry-stock">{{ demandStockFigure(rows,index,'available_customer',busy,error) }}</td>
                     <td v-if="hasPermission('warehouse.view')" class="order-entry-stock">{{ demandStockFigure(rows,index,'batch_remaining',busy,error) }}</td>
                     <td v-if="canViewSalesAmounts" class="order-entry-price sensitive-price" :data-order-entry-focus="'price-'+index"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" data-order-entry-enter-next :data-order-entry-next="orderForm.items[index+1] ? 'product-'+(index+1) : 'add-line'" v-model="item.unit_price" @input="item.manual_size_entry && markManualSizeUnitPrice(item)" /><div v-if="item.manual_size_entry" class="manual-size-quote">{{ manualSizeQuoteText(item) }}</div></td>
-	                    <td v-if="canViewSalesAmounts" class="order-entry-total sensitive-price"><span class="order-entry-total-value">¥ {{ money(orderItemSaleAmount(item)) }}</span></td>
+	                    <td v-if="canViewSalesAmounts" class="order-entry-total sensitive-price"><span class="order-entry-total-value">¥ {{ salesMoney(orderItemSaleAmount(item)) }}</span></td>
 	                    <td class="order-entry-actions-col">
 	                      <div class="order-entry-drawing-actions">
 	                        <a v-if="item.temp_drawing_token || item.drawing_file || (item._product_drawings && item._product_drawings.length)"
@@ -8385,8 +8386,8 @@
               <div class="order-item-edit-actions"><span>{{ orderItemForm.specification || '按产品类型及配方处理' }}</span><button v-if="canEditProducts && orderItemForm.product_id" class="btn small" type="button" @click="openOrderItemCommonBoxEditor">编辑常用箱</button></div>
               <div class="product-form-row order-item-size-row">
                 <div class="field"><label>订单数量</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.quantity" @input="syncOrderBomDemandsForQuantity(orderItemForm)" /></div>
-                <div v-if="canViewSalesAmounts" class="field sensitive-price"><label>客户单价</label><input class="input" type="number" min="0" step="0.01" v-model.number="orderItemForm.unit_price" /></div>
-                <div v-if="canViewSalesAmounts" class="field sensitive-price"><label>销售金额</label><strong>¥ {{ money(orderItemSaleAmount(orderItemForm)) }}</strong></div>
+                <div v-if="canViewSalesAmounts" class="field sensitive-price"><label>{{ orderItemForm.price_label || "原始单价" }}</label><input class="input" type="number" min="0" step="0.000001" v-model="orderItemForm.unit_price" /></div>
+                <div v-if="canViewSalesAmounts" class="field sensitive-price"><label>{{ orderItemForm.amount_label || "原报价金额" }}</label><strong>¥ {{ salesMoney(orderItemSaleAmount(orderItemForm)) }}</strong><details v-if="orderItemForm.tax_reference"><summary>税价参考</summary>{{ orderItemForm.tax_reference.label }}：{{ orderItemForm.tax_reference.approximate ? "≈ " : "" }}{{ orderItemForm.tax_reference.value }}</details></div>
               </div>
               <div v-if="orderItemNeedsPaperFields()" class="product-form-row order-item-material-row">
                 <div class="field"><label>材质供应商</label>
@@ -8665,7 +8666,7 @@
                     <td style="font-size:12px;white-space:nowrap">{{ formatReportDims(item) }}</td>
                     <td style="font-size:12px">{{ formatCrease(item) }}</td>
                     <td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(item.unit_price) }}</td>
-                    <td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.subtotal) }}</td>
+                    <td v-if="canViewSalesAmounts" class="sensitive-price">{{ salesMoney(item.subtotal) }}</td>
                     <td><status-tag :value="itemBusinessStatusKey(item)"></status-tag></td>
                     <td>
                       <a v-if="item.drawing_file || item.product_drawing_file"
@@ -8840,7 +8841,7 @@
                 <div class="field"><label>下单日期</label><div>{{ orderDetail.order_date }}</div></div>
                 <div class="field"><label>交货日期</label><div>{{ orderDetail.delivery_date || "-" }}</div></div>
                 <div class="field"><label>状态</label><status-tag :value="orderDisplayStatusKey(orderDetail)"></status-tag></div>
-              <div v-if="canViewSalesAmounts" class="field sensitive-price"><label>订单金额</label><div>¥ {{ money(orderDetail.total_amount) }}</div></div>
+              <div v-if="canViewSalesAmounts" class="field sensitive-price"><label>订单金额</label><div>¥ {{ salesMoney(orderDetail.total_amount) }}</div></div>
                 <div class="field wide"><label>备注</label><div>{{ orderDetail.remark || "-" }}</div></div>
               </div>
               <div v-if="orderDetail.early_pick_available" class="toolbar-group" style="margin-bottom:10px"><button type="button" class="btn primary" @click="openEarlyPickPrint(orderDetail.id)">打印提前备货单</button></div>
@@ -8870,7 +8871,7 @@
                 <td style="font-size:12px;white-space:nowrap">{{ formatReportDims(item) }}</td>
                 <td style="font-size:12px">{{ formatCrease(item) }}</td>
                 <td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(item.unit_price) }}</td>
-                <td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.subtotal) }}</td>
+                <td v-if="canViewSalesAmounts" class="sensitive-price">{{ salesMoney(item.subtotal) }}</td>
                 <td style="font-size:12px">
                   <template v-if="item.drawing_file || item.product_drawing_file">
                     <a href="#" class="btn small"
@@ -9745,12 +9746,12 @@
                     <td>{{ item.product_code || '-' }}</td>
                     <td>{{ item.product_name || '-' }}</td>
                     <td>{{ financeNumber(item.source_type==='customer_charge' ? item.charge_quantity : item.actual_received_quantity) }}</td>
-                    <td class="sensitive-price">¥ {{ financeNumber(item.unit_price_snapshot) }}</td>
+                    <td class="sensitive-price">¥ {{ financeNumber(item.unit_price_snapshot) }}<small v-if="item.price_tax_mode_snapshot" class="muted">（{{ item.price_tax_mode_snapshot === "tax_exclusive" ? "未税" : "含税" }}）</small></td>
                     <td class="sensitive-price">¥ {{ financeNumber(item.receivable_amount) }}</td>
                   </tr>
                 </tbody>
               </table>
-              <details v-if="statementDetail.voided_versions?.length" style="margin-top:12px"><summary>已作废的对账版本</summary><details v-for="old in statementDetail.voided_versions" :key="old.version"><summary>版本 {{old.version}} · {{old.created_at}} · {{old.reason}} · ¥ {{financeNumber(old.snapshot.total_receivable)}}</summary><table><thead><tr><th>送货单</th><th>产品</th><th>数量</th><th>单价</th><th>金额</th></tr></thead><tbody><tr v-for="item in old.snapshot.items" :key="item.statement_item_id"><td>{{item.delivery_number}}</td><td>{{item.product_name}}</td><td>{{ financeNumber(item.actual_received_quantity ?? item.charge_quantity) }}</td><td>{{financeNumber(item.unit_price_snapshot)}}</td><td>{{financeNumber(item.receivable_amount)}}</td></tr></tbody></table></details></details>
+              <details v-if="statementDetail.voided_versions?.length" style="margin-top:12px"><summary>已作废的对账版本</summary><details v-for="old in statementDetail.voided_versions" :key="old.version"><summary>版本 {{old.version}} · {{old.created_at}} · {{old.reason}} · ¥ {{financeNumber(old.snapshot.total_receivable)}}</summary><table><thead><tr><th>送货单</th><th>产品</th><th>数量</th><th>原报价单价</th><th>含税应收金额</th></tr></thead><tbody><tr v-for="item in old.snapshot.items" :key="item.statement_item_id"><td>{{item.delivery_number}}</td><td>{{item.product_name}}</td><td>{{ financeNumber(item.actual_received_quantity ?? item.charge_quantity) }}</td><td>{{financeNumber(item.unit_price_snapshot)}}</td><td>{{financeNumber(item.receivable_amount)}}</td></tr></tbody></table></details></details>
               <details style="margin-top:12px" open><summary>开票与收款追溯</summary>
                 <div class="muted" style="margin:8px 0">发票登记和收款分别记录；合并开票显示分配到本账单的金额。</div>
                 <table><thead><tr><th>发票号</th><th>开票日期</th><th>本账单开票金额</th><th>状态</th></tr></thead><tbody><tr v-for="invoice in statementDetail.invoices || []" :key="invoice.id"><td>{{ invoice.invoice_number }}</td><td>{{ invoice.invoice_date }}</td><td class="sensitive-price">¥ {{ financeNumber(invoice.invoice_amount) }}</td><td>{{ invoice.invoice_status==='voided' ? '已作废' : '已开票' }}</td></tr><tr v-if="!statementDetail.invoices?.length"><td colspan="4" class="muted">暂无实际开票登记</td></tr></tbody></table>
@@ -13050,7 +13051,8 @@
             return icons[key] || '';
           },
           money(value) { return Number(value || 0).toLocaleString("en-US", {useGrouping:false,minimumFractionDigits:2,maximumFractionDigits:2}); },
-          unitPrice(value) { return Number(value || 0).toLocaleString("en-US", {useGrouping:false,minimumFractionDigits:3,maximumFractionDigits:3}); },
+          unitPrice(value) { return TmExactMoney.format(value); },
+          salesMoney(value) { return TmExactMoney.format(value); },
           percent(value) { return `${(Number(value || 0) * 100).toFixed(1)}%`; },
           squarePrice(value) {
             if (value === null || value === undefined || value === "") return "-";
@@ -33950,7 +33952,7 @@
             return `¥ ${this.money(Number(item.unit_price) - Number(item.estimated_cost))}`;
           },
           orderItemSaleAmount(item) {
-            return Number(item?.quantity || 0) * Number(item?.unit_price || 0);
+            try { return TmExactMoney.multiply(item?.quantity || 0, item?.unit_price || 0); } catch { return "0"; }
           },
           orderItemIsExternalPurchase(item) {
             return String(item?.supply_mode || item?._inventory_product?.supply_mode || "") === "external_purchase";
@@ -34854,7 +34856,7 @@
               material: product.material_code || this.materialName(product.material_id, product.legacy_material_text),
               specification: this.orderSpecificationText(this.customerProductSpecification(product), ""), production_notes: product.production_notes || "",
               _layer_filter: product.layer_count || null, _flute_filter: product.flute_type || null,
-              _material_supplier: "", quantity: sets * perSet, unit_price: this.unitPrice(product.sale_unit_price),
+              _material_supplier: "", quantity: sets * perSet, unit_price: String(product.sale_unit_price ?? ""),
               cost_status: "pending", estimated_cost: null, _from_product: true,
               _manual_modified: !!product.manual_modified, flute_type: product.flute_type || null,
               layer_count: product.layer_count || null, _material_code: product.material_code || "",
@@ -35053,7 +35055,7 @@
             item.material = data.material_code || this.materialName(data.material_id, data.legacy_material_text);
             item.specification = this.orderSpecificationText(this.customerProductSpecification(data), "");
             item.production_notes = data.production_notes || "";
-            item.unit_price = this.unitPrice(data.sale_unit_price);
+            item.unit_price = String(data.sale_unit_price ?? "");
             // v0.19.2-B: 常用箱自动带出层数/楞型/材质快照，锁定不允许直接修改
             item._from_product = true;
             item._manual_modified = !!data.manual_modified;
@@ -35458,7 +35460,7 @@
               display_name:form.display_name,
               quantity:Number(form.quantity),
               unit:form.unit || "项",
-              unit_price:Number(form.unit_price),
+              unit_price:String(form.unit_price),
               amount:Number(form.amount),
               price_tax_mode:form.price_tax_mode || null,
               tax_rate:form.tax_rate === "" || form.tax_rate === null ? null : Number(form.tax_rate),
@@ -35951,7 +35953,8 @@
                 customer_name:orderSnapshot.customer_name || "", product_code:itemSnapshot.snapshot_product_code || "",
                 product_name:itemSnapshot.snapshot_product_name || "", material:itemSnapshot.snapshot_material || "",
                 specification:this.orderSpecificationText(itemSnapshot.snapshot_spec, ""), production_notes:itemSnapshot.snapshot_production_notes || "",
-                quantity:itemSnapshot.quantity, unit_price:this.unitPrice(itemSnapshot.unit_price),
+                quantity:itemSnapshot.quantity, unit_price:String(itemSnapshot.unit_price ?? ""),
+                price_label:itemSnapshot.price_label, amount_label:itemSnapshot.amount_label, tax_reference:itemSnapshot.tax_reference,
                 bom_production_expected_revision:Number(itemSnapshot.bom_production_revision || 0),
                 requisition_status:itemSnapshot.requisition_status || "未报料",
                 supply_mode_snapshot:itemSnapshot.supply_mode_snapshot,
@@ -39854,7 +39857,7 @@
           normalizeStatementDelivery(row) {
             const items = Array.isArray(row.items) ? row.items : [];
             const totalReceived = items.reduce((total, item) => total + Number(item.actual_received_quantity || 0), 0);
-            const totalReceivable = items.reduce((total, item) => total + Number(item.receivable_amount || 0), 0);
+            const totalReceivable = TmExactMoney.sum(items.map(item => item.receivable_amount || 0));
             return {
               ...row,
               delivery_id: row.delivery_id ?? row.id,

@@ -11,11 +11,11 @@ from tests.test_p1_130_statement_invoice_finance import p1_130_app, _login
 
 
 @pytest.mark.parametrize('value,expected', [
-    ('222.525', '222.525'), ('222.5', '222.500'), ('222.000', '222'),
-    ('0', '0'), ('-0.0004', '0'), ('-2.5', '-2.500'),
-    ('1.2345', '1.235'), ('-1.2345', '-1.235'), ('222.9996', '223'),
+    ('222.525', '222.525'), ('222.5', '222.5'), ('222.000', '222'),
+    ('0', '0'), ('-0.0004', '-0.0004'), ('-2.5', '-2.5'),
+    ('1.2345', '1.2345'), ('-1.2345', '-1.2345'), ('222.9996', '222.9996'),
 ])
-def test_display_rule_fractional_three_places_integer_plain(value, expected):
+def test_display_rule_all_significant_places_integer_plain(value, expected):
     from app.services.reconciliation_number_display import format_reconciliation_number
     assert format_reconciliation_number(Decimal(value)) == expected
 
@@ -88,7 +88,7 @@ def test_comparison_report_formats_numeric_values_without_changing_matching():
         customer_amount='222.525', erp_amount='222.525', amount_difference='0',
         customer_prices='222.500', erp_prices='222.500', customer_rows=[5], statement_item_ids=[1])])
     sheet = load_workbook(export_report(report), data_only=False)['对账差异']
-    assert sheet['F5'].value == 222.5 and sheet['F5'].number_format == '0.000'
+    assert sheet['F5'].value == 222.5 and sheet['F5'].number_format == '0.0'
     assert sheet['I5'].value == 222.525 and sheet['I5'].number_format == '0.000'
     assert sheet['H5'].value == 0 and sheet['H5'].number_format == '0'
     assert sheet['D5'].value == '=CODE' and sheet['D5'].data_type == 's'

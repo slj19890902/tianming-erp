@@ -1,11 +1,6 @@
 (function(global){
  'use strict';
- function formatNumber(value){
-  const number=Number(value || 0);
-  if(!Number.isFinite(number))return '—';
-  const rounded=Number(number.toLocaleString('en-US',{useGrouping:false,minimumFractionDigits:3,maximumFractionDigits:3}));
-  return rounded===0?'0':rounded.toLocaleString('en-US',{useGrouping:false,minimumFractionDigits:Number.isInteger(rounded)?0:3,maximumFractionDigits:3});
- }
+ function formatNumber(value){return global.TmExactMoney.format(value);}
  function install(app){
   app.mixin({
    data(){return this.$parent?{}:{financeExpensePane:'list',financeProcessingPane:0,financeOverviewChartPane:0,financeReportPane:'year',financeOverviewPane:'todo',workspaceLocalPages:{},workspaceLocalSizes:{}};},

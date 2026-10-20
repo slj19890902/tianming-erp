@@ -1,4 +1,6 @@
 from __future__ import annotations
+from app.core.exact_money import ExactDecimalText, read_exact, set_exact, exact_expression
+from sqlalchemy.ext.hybrid import hybrid_property
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -234,7 +236,20 @@ class Statement(Base):
         Integer, nullable=True
     )
     statement_month: Mapped[str] = mapped_column(String(7), nullable=False)
-    total_receivable: Mapped[Decimal] = mapped_column(
+    total_receivable_exact: Mapped[Decimal | None] = mapped_column(ExactDecimalText(), nullable=True)
+    @hybrid_property
+    def total_receivable(self):
+        return read_exact(self, "_total_receivable_legacy", "total_receivable_exact")
+
+    @total_receivable.setter
+    def total_receivable(self, value):
+        set_exact(self, value, "_total_receivable_legacy", "total_receivable_exact")
+
+    @total_receivable.expression
+    def total_receivable(cls):
+        return exact_expression(cls, "_total_receivable_legacy", "total_receivable_exact")
+
+    _total_receivable_legacy: Mapped[Decimal] = mapped_column("total_receivable",
         Numeric(14, 3),
         default=Decimal("0"),
         nullable=False,
@@ -430,7 +445,20 @@ class StatementItem(Base):
     source_label_snapshot: Mapped[str | None] = mapped_column(
         String(200), nullable=True
     )
-    unit_price_snapshot: Mapped[Decimal] = mapped_column(
+    unit_price_snapshot_exact: Mapped[Decimal | None] = mapped_column(ExactDecimalText(), nullable=True)
+    @hybrid_property
+    def unit_price_snapshot(self):
+        return read_exact(self, "_unit_price_snapshot_legacy", "unit_price_snapshot_exact")
+
+    @unit_price_snapshot.setter
+    def unit_price_snapshot(self, value):
+        set_exact(self, value, "_unit_price_snapshot_legacy", "unit_price_snapshot_exact", price=True)
+
+    @unit_price_snapshot.expression
+    def unit_price_snapshot(cls):
+        return exact_expression(cls, "_unit_price_snapshot_legacy", "unit_price_snapshot_exact")
+
+    _unit_price_snapshot_legacy: Mapped[Decimal] = mapped_column("unit_price_snapshot",
         Numeric(18, 6),
         nullable=False,
     )
@@ -438,7 +466,20 @@ class StatementItem(Base):
         Numeric(12, 4),
         nullable=False,
     )
-    receivable_amount: Mapped[Decimal] = mapped_column(
+    receivable_amount_exact: Mapped[Decimal | None] = mapped_column(ExactDecimalText(), nullable=True)
+    @hybrid_property
+    def receivable_amount(self):
+        return read_exact(self, "_receivable_amount_legacy", "receivable_amount_exact")
+
+    @receivable_amount.setter
+    def receivable_amount(self, value):
+        set_exact(self, value, "_receivable_amount_legacy", "receivable_amount_exact")
+
+    @receivable_amount.expression
+    def receivable_amount(cls):
+        return exact_expression(cls, "_receivable_amount_legacy", "receivable_amount_exact")
+
+    _receivable_amount_legacy: Mapped[Decimal] = mapped_column("receivable_amount",
         Numeric(24, 10),
         nullable=False,
     )

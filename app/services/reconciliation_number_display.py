@@ -1,23 +1,15 @@
-"""Display precision only; keep the stored reconciliation values untouched."""
-from decimal import Decimal, ROUND_HALF_UP
-
-THREE_PLACES = Decimal('0.001')
+"""Display every significant decimal without changing frozen sale facts."""
+from decimal import Decimal
+from app.core.exact_money import decimal_value, money_text, ExcelExactText
 
 
 def rounded_display_value(value: object) -> Decimal:
-    number = Decimal(str(value or 0))
-    if not number.is_finite():
-        raise ValueError('对账数值必须是有限数值')
-    return number.quantize(THREE_PLACES, rounding=ROUND_HALF_UP)
+    # Compatibility name retained for older callers; this no longer rounds.
+    return decimal_value(value or 0)
 
 
 def format_reconciliation_number(value: object) -> str:
-    rounded = rounded_display_value(value)
-    if not rounded:
-        return '0'
-    if rounded == rounded.to_integral_value():
-        return format(rounded.to_integral_value(), 'f')
-    return format(rounded, '.3f')
+    return money_text(value or 0)
 
 
 def apply_reconciliation_number_formats(workbook) -> None:
@@ -25,6 +17,11 @@ def apply_reconciliation_number_formats(workbook) -> None:
     for sheet in workbook:
         for row in sheet:
             for cell in row:
+                if isinstance(cell.value, ExcelExactText):
+                    from openpyxl.comments import Comment
+                    cell.number_format = '@'
+                    cell.comment = Comment('超过Excel可精确计算的15位有效数字，按文本保留完整原值，未舍入。', '天明ERP')
                 if isinstance(cell.value, (int, float, Decimal)) and not isinstance(cell.value, bool):
-                    rounded = rounded_display_value(cell.value)
-                    cell.number_format = '0' if rounded == rounded.to_integral_value() else '0.000'
+                    text = money_text(cell.value)
+                    places = len(text.split('.')[1]) if '.' in text else 0
+                    cell.number_format = '0' + ('.' + '0' * places if places else '')

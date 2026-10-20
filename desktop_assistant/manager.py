@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -149,6 +150,16 @@ class Manager:
                 db.execute('PRAGMA query_only=ON')
                 if has_mold_label_text_facts(db) and not self._shared_finished_reader(release, MOLD_LABEL_TEXT_READER):
                     return False
+                from desktop_assistant.exact_sales_reader import has_facts, CAPABILITY
+                if has_facts(db) and not self._shared_finished_reader(release, CAPABILITY):
+                    return False
+        activation = self.state.get('exact_sales_activation')
+        if activation:
+            from desktop_assistant.exact_sales_reader import CAPABILITY
+            if (not isinstance(activation, dict) or activation.get('reader_capability') != CAPABILITY
+                    or type(activation.get('version')) is not int or activation['version'] != 1
+                    or not self._shared_finished_reader(release, CAPABILITY)):
+                return False
         # Additive JSON business facts can change semantics without an Alembic
         # revision change. Check the signed reader contract before that shortcut.
         activation = self.state.get('order_inventory_activation')
@@ -1122,6 +1133,17 @@ class Manager:
             if not self._order_inventory_reader(old['current']):
                 new['previous'] = None
         self._activate_dispatch_reader(candidate['id'], old, new, backup)
+        from desktop_assistant.exact_sales_reader import CAPABILITY as EXACT_SALES_READER
+        exact_activation_started = (self._shared_finished_reader(candidate['id'], EXACT_SALES_READER)
+                                    and not self._shared_finished_reader(old['current'], EXACT_SALES_READER))
+        if exact_activation_started:
+            # The installed supervisor also rejects the old revision once its
+            # schema-authority exception is removed. No supervisor reinstall is
+            # needed, and the old packages/backups remain available for recovery.
+            new['exact_sales_activation'] = dict(reader_capability=EXACT_SALES_READER, version=1,
+                activated_package=candidate['id'], pre_activation_package=old['current'],
+                pre_activation_backup=str(backup), activated_at=datetime.now(CN).isoformat())
+            new.update(previous=None, schema_authority=None)
         # Commit the reader gate and removal of unsafe one-click rollback before
         # starting the new process; failure here never opens new write requests.
         write_json(self.root / 'state.json', new)
@@ -1129,6 +1151,17 @@ class Manager:
             self.start()
         except Exception as startup_error:
             self.stop()
+            if exact_activation_started:
+                # Maintenance is still held and the candidate has stopped. Only
+                # an empty set of new sale facts permits the original revision
+                # exception to be restored for the proven old program.
+                from desktop_assistant.exact_sales_reader import has_facts
+                with closing(sqlite3.connect((self.root / 'shared/data/carton_erp.sqlite3').resolve().as_uri() + '?mode=ro', uri=True)) as db:
+                    empty_exact_facts = not has_facts(db)
+                if empty_exact_facts:
+                    new.pop('exact_sales_activation', None)
+                    new['schema_authority'] = candidate['id'] if migrate else old.get('schema_authority')
+                    write_json(self.root / 'state.json', new)
             if not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']):
                 new.update(operation='update_failed_reader_contract', previous=None)
                 write_json(self.root / 'state.json', new)

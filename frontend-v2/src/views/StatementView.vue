@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ApiError, financeApi, masterApi, type Customer, type PendingStatementItem, type Statement } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 import { businessDate, businessMonth } from '../utils/businessDate'
+import { sumMoney } from '../utils/exactMoney'
 import { reconciliationNumber, reconciliationNumberCell } from '../utils/reconciliationNumber'
 
 const authStore = useAuthStore()
@@ -93,9 +94,9 @@ function togglePendingSelect(id: number) {
 }
 
 const pendingTotal = computed(() =>
-  pendingItems.value
+  sumMoney(pendingItems.value
     .filter((item) => selectedPendingIds.value.includes(item.return_receipt_item_id))
-    .reduce((sum, item) => sum + (Number(item.receivable_amount) || 0), 0),
+    .map((item) => item.receivable_amount || '0')),
 )
 
 /** 第二步：生成对账单（statement_month 须为 YYYY-MM） */
@@ -286,8 +287,8 @@ onMounted(async () => {
         <vxe-column field="product_name" title="产品" min-width="190" />
         <vxe-column field="specification" title="规格" width="150" />
         <vxe-column field="actual_received_quantity" title="实收数" width="100" :formatter="reconciliationNumberCell" />
-        <vxe-column field="unit_price" title="单价" width="110" :formatter="reconciliationNumberCell" />
-        <vxe-column field="receivable_amount" title="应收金额" width="130" :formatter="reconciliationNumberCell" />
+        <vxe-column field="unit_price" title="原报价单价" width="110" :formatter="reconciliationNumberCell" />
+        <vxe-column field="receivable_amount" title="含税应收金额" width="130" :formatter="reconciliationNumberCell" />
         <vxe-column field="actual_received_date" title="签收日期" width="130" />
       </vxe-table>
 

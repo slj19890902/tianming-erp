@@ -251,3 +251,7 @@ er1016pa→es1019ra 仅新增 incoming_receipt_actual_specs，不回填历史。
 ## 2026-10-19 已入库成品标签 et1019fl
 
 es1019ra→et1019fl只新增独立finished_product_label_print_jobs空表及冻结内容/生命周期保护，不改写原业务事实。空表允许隔离升降升；存在任何作业在DDL前拒绝有损降级。正式采用Manager最新时点备份、完整恢复验证、签名包隔离演练、所有旧表事实/附件保留核对，管理员人工验收标签机出纸。技术结果见FINISHED_PRODUCT_LABELS_20261019独立回执。
+
+## 2026-10-20 精确销售金额 ew1020em（开发候选，尚未发布）
+
+ev1020hr→ew1020em只增加六个可空十进制文本字段，不回填旧订单/对账金额，不重建原表及其保护。新金额事实阻止有损降级，读取能力exact_sales_decimal_v1与旧程序回退资格绑定；无新事实的启动失败仍可恢复旧程序。留存源升降升和原事实/761个索引触发器校验通过，最新正式副本及切换尚待唯一发布窗口释放。见docs/release_reports/ORDER_PRICE_EXACT_20261020.md。

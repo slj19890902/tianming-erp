@@ -12,6 +12,7 @@ import mimetypes
 import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from app.core.exact_money import money_text, multiply_money, sum_money
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -172,6 +173,7 @@ from app.services.order_customer_heat import (
 )
 from app.services.customer_search import customer_identity_search_clause
 from app.services.customer_price_tax import resolve_customer_price_tax_terms
+from app.services.sales_money import price_terms, order_totals
 from app.services import material_pricing
 from app.services.box_type_rules import (
     BoxTypeRuleError,
@@ -582,7 +584,7 @@ class OrderItemCreate(BaseModel):
     )
     product_id: int | None = None
     quantity: int | float
-    unit_price: Decimal
+    unit_price: Decimal = Field(lt=Decimal("1000000000000"), max_digits=18, decimal_places=6)
     external_packaging_order_quantity_basis: Decimal | None = Field(
         default=None, gt=0, max_digits=18, decimal_places=6
     )
@@ -683,7 +685,7 @@ class OrderItemUpdate(BaseModel):
     bom_production_expected_revision: int | None = Field(default=None, ge=0)
     mold_repair_confirmation_token: str | None = Field(default=None, max_length=4000)
     quantity: int
-    unit_price: Decimal
+    unit_price: Decimal = Field(lt=Decimal("1000000000000"), max_digits=18, decimal_places=6)
     product_code: str
     product_name: str
     material: str | None = None
@@ -1959,7 +1961,7 @@ def _order_item_cost_totals(
         "unit_estimated_gross_profit": str(
             unit_gross_profit.quantize(Decimal("0.0001"))
         ),
-        "sale_amount": str(subtotal.quantize(MONEY_QUANTUM)),
+        "sale_amount": money_text(subtotal),
         "total_estimated_cost": str(total_cost.quantize(MONEY_QUANTUM)),
         "total_estimated_gross_profit": str(
             total_gross_profit.quantize(MONEY_QUANTUM)
@@ -1978,7 +1980,7 @@ def _order_item_material_margin(
     gross = subtotal - total
     margin = gross / subtotal if subtotal > 0 else None
     return {
-        "material_sales_amount": str(subtotal.quantize(MONEY_QUANTUM)),
+        "material_sales_amount": money_text(subtotal),
         "material_gross_profit": str(gross.quantize(MONEY_QUANTUM)),
         "material_gross_margin": (
             str(margin.quantize(Decimal("0.0001"))) if margin is not None else None
@@ -2522,7 +2524,7 @@ def _order_response(
             "business_item_status_counts", {}
         ),
         "payment_status": order.payment_status,
-        "total_amount": order.total_amount,
+        "total_amount": money_text(order.total_amount),
         "remark": order.remark,
         "external_packaging_purchase_summary": external_purchase_summary,
         "items": [],
@@ -2683,8 +2685,8 @@ def _order_response(
                     else None
                 ),
                 "is_force_closed": item.is_force_closed,
-                "unit_price": item.unit_price,
-                "subtotal": item.subtotal,
+                "unit_price": money_text(item.unit_price),
+                "subtotal": money_text(item.subtotal),
                 "price_tax_mode_snapshot": item.price_tax_mode_snapshot,
                 "unit_label": order_unit_label(item, item.product),
                 "sales_unit_snapshot": item.sales_unit_snapshot,
@@ -2827,15 +2829,15 @@ def _order_response(
                 {
                     "unit_estimated_cost": None,
                     "unit_estimated_gross_profit": None,
-                    "sale_amount": str(Decimal(str(item.subtotal)).quantize(MONEY_QUANTUM)),
+                    "sale_amount": money_text(item.subtotal),
                     "total_estimated_cost": None,
                     "total_estimated_gross_profit": None,
                 }
             )
         else:
-            item_data["sale_amount"] = str(
-                Decimal(str(item.subtotal)).quantize(MONEY_QUANTUM)
-            )
+            item_data["sale_amount"] = money_text(item.subtotal)
+        if _can_view_order_sales_amount(user):
+            item_data.update(price_terms(item.unit_price, item.price_tax_mode_snapshot, item.tax_rate_snapshot))
         data["items"].append(item_data)
     if not _can_view_order_sales_amount(user):
         data.pop("total_amount", None)
@@ -2844,6 +2846,8 @@ def _order_response(
             item.pop("unit_price", None)
             item.pop("subtotal", None)
             item.pop("sale_amount", None)
+    if _can_view_order_sales_amount(user):
+        data["sales_totals"] = order_totals(order.items)
     return data
 
 
@@ -2888,7 +2892,7 @@ def _order_list_summary_response(
         "business_delivery_progress": business_projection.get(
             "business_delivery_progress"
         ),
-        "total_amount": order.total_amount,
+        "total_amount": money_text(order.total_amount),
         "item_count": len(order.items),
         "total_quantity": total_quantity,
         "all_material_received": all(
@@ -2907,10 +2911,7 @@ def _refresh_total(db: Session, order: Order) -> None:
             OrderItem.order_id == order.id
         )
     )
-    order.total_amount = Decimal(str(total or 0)).quantize(
-        MONEY_QUANTUM,
-        rounding=ROUND_HALF_UP,
-    )
+    order.total_amount = total or Decimal(0)
 
 
 @router.get("")
@@ -8077,10 +8078,8 @@ def _create_order_impl(
                 external_purchase_ratio,
             ) = validated_external_purchase_ratios[index]
 
-            subtotal = (
-                Decimal(quantity) * unit_price
-            ).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
-            total += subtotal
+            subtotal = multiply_money(quantity, unit_price)
+            total = sum_money((total, subtotal))
             item_sequence = reserve_next_item_sequence(db, order.id)
             # This is a second loop: do not reuse the last validated line's
             # PDF flag (assembled/virtual lines may skip that assignment).
@@ -8291,10 +8290,7 @@ def _create_order_impl(
             db.add(item)
             created_items.append(item)
 
-        order.total_amount = total.quantize(
-            MONEY_QUANTUM,
-            rounding=ROUND_HALF_UP,
-        )
+        order.total_amount = total
         db.flush()
         import_source = attach_import_source(
             db,
@@ -9141,8 +9137,7 @@ def amend_order_quantity(item_id: int, payload: OrderQuantityAmendment,
             remaining=payload.quantity-item.delivered_quantity,
             actor_id=user.id, key=payload.idempotency_key)
         item.quantity = payload.quantity
-        item.subtotal = (Decimal(str(item.unit_price)) * item.quantity).quantize(
-            MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+        item.subtotal = multiply_money(item.unit_price, item.quantity)
         db.flush()
         _refresh_total(db, order)
         # Completed production tasks and their frozen costs are deliberately retained.
@@ -9711,10 +9706,7 @@ def update_order_item(
         request=request,
     )
     item.unit_price = unit_price
-    item.subtotal = (Decimal(payload.quantity) * unit_price).quantize(
-        MONEY_QUANTUM,
-        rounding=ROUND_HALF_UP,
-    )
+    item.subtotal = multiply_money(payload.quantity, unit_price)
     item.snapshot_product_code = payload.product_code.strip()
     item.snapshot_product_name = payload.product_name.strip()
     item.snapshot_material = (
@@ -9986,8 +9978,8 @@ def update_order_item(
         "item_order_number": item.item_order_number,
         "item_sequence": item.item_sequence,
         "quantity": item.quantity,
-        "unit_price": item.unit_price,
-        "subtotal": item.subtotal,
+        "unit_price": money_text(item.unit_price),
+        "subtotal": money_text(item.subtotal),
         "snapshot_product_code": item.snapshot_product_code,
         "unit_label": order_unit_label(item, item.product),
         "sales_unit_snapshot": item.sales_unit_snapshot,

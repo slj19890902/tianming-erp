@@ -22,6 +22,8 @@ def render_customer_statement_pdf(
     rows: list[dict],
     quantity_total: object,
     amount_total: object,
+    total_label: str = "合计",
+    tax_totals: list[dict] | None = None,
 ) -> bytes:
     font_name, _font_hash = _registered_font()
     output = BytesIO()
@@ -52,11 +54,12 @@ def render_customer_statement_pdf(
                 Paragraph(escape(str(row.get("product_code") or "")), normal),
                 Paragraph(escape(str(row.get("product_name") or "")), normal),
                 format_reconciliation_number(row.get("quantity") or 0),
-                format_reconciliation_number(row.get("unit_price", 0)),
+                Paragraph(format_reconciliation_number(row.get("unit_price", 0)) +
+                    (("<br/>未税" if row.get("price_tax_mode") == "tax_exclusive" else "<br/>含税") if tax_totals else ""), normal),
                 format_reconciliation_number(row.get("amount", 0)),
             ]
         )
-    data.append(["", "", "", "", "合计", format_reconciliation_number(quantity_total), "", format_reconciliation_number(amount_total)])
+    data.append(["", "", "", "", total_label, format_reconciliation_number(quantity_total), "", format_reconciliation_number(amount_total)])
     table = Table(
         data,
         repeatRows=1,
@@ -82,5 +85,7 @@ def render_customer_statement_pdf(
         )
     )
     story.append(table)
+    if tax_totals:
+        story.append(Paragraph("；".join(escape(group["label"]) + "：" + format_reconciliation_number(group["amount"]) for group in tax_totals), normal))
     document.build(story)
     return output.getvalue()

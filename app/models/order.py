@@ -1,5 +1,7 @@
 from __future__ import annotations
 from app.models.dimension_type import SheetDimensionColumn
+from app.core.exact_money import ExactDecimalText, read_exact, set_exact, exact_expression
+from sqlalchemy.ext.hybrid import hybrid_property
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -92,7 +94,20 @@ class Order(Base):
     requisition_strategy: Mapped[str] = mapped_column(
         String(30), default="normal", server_default="normal", nullable=False
     )
-    total_amount: Mapped[Decimal] = mapped_column(
+    total_amount_exact: Mapped[Decimal | None] = mapped_column(ExactDecimalText(), nullable=True)
+    @hybrid_property
+    def total_amount(self):
+        return read_exact(self, "_total_amount_legacy", "total_amount_exact")
+
+    @total_amount.setter
+    def total_amount(self, value):
+        set_exact(self, value, "_total_amount_legacy", "total_amount_exact")
+
+    @total_amount.expression
+    def total_amount(cls):
+        return exact_expression(cls, "_total_amount_legacy", "total_amount_exact")
+
+    _total_amount_legacy: Mapped[Decimal] = mapped_column("total_amount",
         Numeric(14, 2),
         default=Decimal("0"),
         nullable=False,
@@ -271,9 +286,35 @@ class OrderItem(Base):
         default=False,
         nullable=False,
     )
-    unit_price: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    unit_price_exact: Mapped[Decimal | None] = mapped_column(ExactDecimalText(), nullable=True)
+    @hybrid_property
+    def unit_price(self):
+        return read_exact(self, "_unit_price_legacy", "unit_price_exact")
+
+    @unit_price.setter
+    def unit_price(self, value):
+        set_exact(self, value, "_unit_price_legacy", "unit_price_exact", price=True)
+
+    @unit_price.expression
+    def unit_price(cls):
+        return exact_expression(cls, "_unit_price_legacy", "unit_price_exact")
+
+    _unit_price_legacy: Mapped[Decimal] = mapped_column("unit_price", Numeric(18, 6), nullable=False)
     customer_document_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    subtotal: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    subtotal_exact: Mapped[Decimal | None] = mapped_column(ExactDecimalText(), nullable=True)
+    @hybrid_property
+    def subtotal(self):
+        return read_exact(self, "_subtotal_legacy", "subtotal_exact")
+
+    @subtotal.setter
+    def subtotal(self, value):
+        set_exact(self, value, "_subtotal_legacy", "subtotal_exact")
+
+    @subtotal.expression
+    def subtotal(cls):
+        return exact_expression(cls, "_subtotal_legacy", "subtotal_exact")
+
+    _subtotal_legacy: Mapped[Decimal] = mapped_column("subtotal", Numeric(14, 2), nullable=False)
     sales_unit_snapshot: Mapped[str | None] = mapped_column(String(20), nullable=True)
     price_tax_mode_snapshot: Mapped[str | None] = mapped_column(
         String(30), nullable=True

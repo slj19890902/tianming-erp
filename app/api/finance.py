@@ -7,6 +7,8 @@ import json
 import re
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+from app.core.exact_money import money_text, multiply_money, sum_money, excel_decimal, exact_json, ExactDecimalText, write_excel_decimal
+from sqlalchemy import type_coerce
 from io import BytesIO
 from urllib.parse import quote
 
@@ -211,7 +213,7 @@ def _statement_cycle_day(db: Session, statement: Statement) -> int:
 
 def _redact_statement_costs(payload: dict, user: User) -> dict:
     if has_permission(user, "cost.view"):
-        return payload
+        return exact_json(payload)
     redacted = {
         key: value
         for key, value in payload.items()
@@ -226,7 +228,7 @@ def _redact_statement_costs(payload: dict, user: User) -> dict:
             }
             for item in redacted["items"]
         ]
-    return redacted
+    return exact_json(redacted)
 
 
 def _statement_for_user(
@@ -1714,6 +1716,7 @@ def _statement_detail_response(
             DeliveryItem.over_delivery_quantity,
             StatementItem.actual_received_quantity,
             StatementItem.unit_price_snapshot,
+            StatementItem.price_tax_mode_snapshot,
             StatementItem.unit_cost_snapshot,
             StatementItem.receivable_amount,
             StatementItem.gross_profit_amount,
@@ -1787,6 +1790,7 @@ def _statement_detail_response(
             StatementItem.charge_quantity_snapshot,
             StatementItem.unit_snapshot,
             StatementItem.unit_price_snapshot,
+            StatementItem.price_tax_mode_snapshot,
             StatementItem.unit_cost_snapshot,
             StatementItem.receivable_amount,
             StatementItem.gross_profit_amount,
@@ -2057,8 +2061,8 @@ def export_statement_excel(
         "实际送货数量", # 10
         "超订单数量",  # 11
         "实际签收数量", # 12
-        "单价",        # 13
-        "金额",        # 14
+        "原报价单价",  # 13
+        "含税应收金额", # 14
         "备注",        # 15
         "开票状态",    # 16
         "对账状态",    # 17
@@ -2090,14 +2094,16 @@ def export_statement_excel(
                 line.actual_delivery_quantity,
                 line.over_delivery_quantity,
                 line.actual_received_quantity,
-                float(line.unit_price_snapshot),
-                float(line.receivable_amount),
+                excel_decimal(line.unit_price_snapshot),
+                excel_decimal(line.receivable_amount),
                 line.difference_reason,
                 invoice_status,
                 "已对账",
                 settlement_status,
             ]
         )
+        write_excel_decimal(sheet, sheet.max_row, 13, line.unit_price_snapshot)
+        write_excel_decimal(sheet, sheet.max_row, 14, line.receivable_amount)
     for line in charge_lines:
         from app.services.historical_delivery_receivables import historical_fields
         history = historical_fields(line.historical_delivery_snapshot_json)
@@ -2115,17 +2121,19 @@ def export_statement_excel(
                 history.get("actual_received_quantity", ""),
                 "",
                 history.get("actual_received_quantity", ""),
-                float(line.unit_price_snapshot),
-                float(line.receivable_amount),
+                excel_decimal(line.unit_price_snapshot),
+                excel_decimal(line.receivable_amount),
                 line.note,
                 invoice_status,
                 "已对账",
                 settlement_status,
             ]
         )
+        write_excel_decimal(sheet, sheet.max_row, 13, line.unit_price_snapshot)
+        write_excel_decimal(sheet, sheet.max_row, 14, line.receivable_amount)
     total_row = sheet.max_row + 2
     sheet.cell(total_row, 13, "合计")
-    sheet.cell(total_row, 14, float(statement.total_receivable))
+    write_excel_decimal(sheet, total_row, 14, statement.total_receivable)
     sheet.cell(total_row, 13).font = Font(bold=True)
     sheet.cell(total_row, 14).font = Font(bold=True)
     widths = [
@@ -2168,8 +2176,8 @@ def export_statement_excel(
                 + Decimal(str(line.receivable_amount))
             )
         for source_name, amount in sorted(amounts_by_source.items()):
-            summary.append([source_name, float(amount), "明细见“月结对账单”"])
-        summary.append(["合计", float(statement.total_receivable), ""])
+            summary.append([source_name, excel_decimal(amount), "明细见“月结对账单”"])
+        summary.append(["合计", excel_decimal(statement.total_receivable), ""])
         summary.column_dimensions["A"].width = 32
         summary.column_dimensions["B"].width = 16
         summary.column_dimensions["C"].width = 28
@@ -2293,7 +2301,7 @@ def _customer_statement_export_data(
         quantity = Decimal(str(row.quantity or 0))
         unit_price = Decimal(str(row.unit_price or 0))
         amount = (
-            (quantity * unit_price)
+            multiply_money(quantity, unit_price)
             if mode == "tax_exclusive"
             else Decimal(str(row.receivable_amount))
         )
@@ -2309,6 +2317,7 @@ def _customer_statement_export_data(
                 "quantity": quantity,
                 "unit_price": unit_price,
                 "amount": amount,
+                "receivable_amount": Decimal(str(row.receivable_amount)),
                 "price_tax_mode": mode,
             }
         )
@@ -2339,7 +2348,7 @@ def _customer_statement_export_data(
         modes.add(mode)
         quantity = Decimal(str(row.charge_quantity_snapshot or 0))
         unit_price = Decimal(str(row.unit_price_snapshot or 0))
-        amount = Decimal(str(row.receivable_amount))
+        amount = multiply_money(quantity, unit_price) if mode == "tax_exclusive" else Decimal(str(row.receivable_amount))
         rows.append(
             {
                 "statement_item_id": row.statement_item_id,
@@ -2352,6 +2361,7 @@ def _customer_statement_export_data(
                 "quantity": quantity,
                 "unit_price": unit_price,
                 "amount": amount,
+                "receivable_amount": Decimal(str(row.receivable_amount)),
                 "price_tax_mode": mode,
             }
         )
@@ -2378,12 +2388,20 @@ def _customer_statement_export_data(
         if only_mode == "tax_inclusive"
         else "按客户口径"
     )
+    groups = {}
+    for item in rows:
+        key = item["price_tax_mode"]
+        groups[key] = sum_money((groups.get(key, 0), item["amount"]))
+    mixed = len(groups) > 1
     return {
         "rows": rows,
+        "mixed_tax_modes": mixed,
+        "tax_totals": [{"label": ("未税" if key == "tax_exclusive" else "含税") + "小计", "amount": value} for key, value in groups.items()],
+        "total_label": "含税应收合计" if mixed else "合计",
         "quantity_total": sum((item["quantity"] for item in rows), Decimal("0")),
-        "amount_total": sum((item["amount"] for item in rows), Decimal("0")),
-        "price_label": f"{label_prefix}单价",
-        "amount_label": f"{label_prefix}金额",
+        "amount_total": sum_money(item["receivable_amount"] if mixed else item["amount"] for item in rows),
+        "price_label": "原报价单价" if mixed else f"{label_prefix}单价",
+        "amount_label": "原报价金额" if mixed else f"{label_prefix}金额",
         "customer_name": display_name,
         "customer_short_name": short_name,
     }
@@ -2479,6 +2497,9 @@ def export_customer_statement_excel(
         "送货日期", "送货单号", "客户单号", "存货编码", "产品名称", "数量",
         data["price_label"], data["amount_label"],
     ]
+    if data["mixed_tax_modes"]:
+        headers.append("报价口径")
+        sheet.column_dimensions["I"].width = 12
     sheet.append([])
     sheet.append(headers)
     for cell in sheet[4]:
@@ -2489,14 +2510,23 @@ def export_customer_statement_excel(
         sheet.append(
             [
                 item["delivery_date"], item["delivery_number"], item["customer_po"],
-                item["product_code"], item["product_name"], float(item["quantity"]),
-                float(item["unit_price"]), float(item["amount"]),
+                item["product_code"], item["product_name"], excel_decimal(item["quantity"]),
+                excel_decimal(item["unit_price"]), excel_decimal(item["amount"]),
             ]
         )
+        if data["mixed_tax_modes"]:
+            sheet.cell(sheet.max_row, 9, "未税" if item["price_tax_mode"] == "tax_exclusive" else "含税")
+        write_excel_decimal(sheet, sheet.max_row, 7, item["unit_price"])
+        write_excel_decimal(sheet, sheet.max_row, 8, item["amount"])
+    if data["mixed_tax_modes"]:
+        for group in data["tax_totals"]:
+            row = sheet.max_row + 1
+            sheet.cell(row, 5, group["label"])
+            write_excel_decimal(sheet, row, 8, group["amount"])
     total_row = sheet.max_row + 1
-    sheet.cell(total_row, 5, "合计")
-    sheet.cell(total_row, 6, float(data["quantity_total"]))
-    sheet.cell(total_row, 8, float(data["amount_total"]))
+    sheet.cell(total_row, 5, data["total_label"])
+    sheet.cell(total_row, 6, excel_decimal(data["quantity_total"]))
+    write_excel_decimal(sheet, total_row, 8, data["amount_total"])
     for cell in sheet[total_row]:
         cell.font = Font(bold=True)
         cell.fill = PatternFill("solid", fgColor="F5F8F8")
@@ -2556,6 +2586,8 @@ def export_customer_statement_pdf(
         rows=data["rows"],
         quantity_total=data["quantity_total"],
         amount_total=data["amount_total"],
+        total_label=data["total_label"],
+        tax_totals=data["tax_totals"] if data["mixed_tax_modes"] else None,
     )
     filename = _safe_filename(
         f"{data['customer_short_name']}{statement.statement_month}对账单.pdf"
@@ -2797,7 +2829,7 @@ def _record_finance_manual_response(
     mutation: FinanceManualMutation,
     response: dict,
 ) -> dict:
-    encoded = jsonable_encoder(response)
+    encoded = jsonable_encoder(exact_json(response))
     mutation.response_json = json.dumps(
         encoded,
         ensure_ascii=False,
@@ -4102,11 +4134,11 @@ def supplement_missing_delivery_price(
 
 
 def _pending_line_amount(unit_price):
-    # Excel convention: retain detail precision; round only a final summary.
-    base = ReturnReceiptItem.actual_received_quantity * unit_price
+    # Exact original price and original receipt quantity, never REAL arithmetic.
+    base = type_coerce(unit_price, ExactDecimalText()) * ReturnReceiptItem.actual_received_quantity
     mode = func.coalesce(func.json_extract(DeliveryItem.sales_contract_json, "$.tax_mode"), OrderItem.price_tax_mode_snapshot)
-    rate = func.coalesce(func.json_extract(DeliveryItem.sales_contract_json, "$.tax_rate"), OrderItem.tax_rate_snapshot)
-    return cast(case((mode == "tax_exclusive", base + base * rate), else_=base), Numeric(24, 10))
+    rate = type_coerce(func.coalesce(func.json_extract(DeliveryItem.sales_contract_json, "$.tax_rate"), OrderItem.tax_rate_snapshot), ExactDecimalText())
+    return type_coerce(case((mode == "tax_exclusive", base + base * rate), else_=base), ExactDecimalText())
 
 
 def _pending_statement_query(
@@ -4116,10 +4148,10 @@ def _pending_statement_query(
     period_start: date | None = None,
     period_end: date | None = None,
 ):
-    effective_unit_price = func.coalesce(
-        cast(func.json_extract(DeliveryItem.sales_contract_json, "$.unit_price"), Numeric(18, 6)),
+    effective_unit_price = type_coerce(func.coalesce(
+        func.json_extract(DeliveryItem.sales_contract_json, "$.unit_price"),
         case((DeliveryItem.source_type == "unordered_finished", DeliveryItem.unit_price_snapshot), else_=OrderItem.unit_price),
-    )
+    ), ExactDecimalText())
     query = (
         select(
             ReturnReceiptItem.id.label("return_receipt_item_id"),
@@ -4417,10 +4449,10 @@ def pending_statement_customer_summaries(
 
     broad_start = min(period[0] for period in customer_periods.values())
     broad_end = max(period[1] for period in customer_periods.values())
-    effective_unit_price = func.coalesce(
-        cast(func.json_extract(DeliveryItem.sales_contract_json, "$.unit_price"), Numeric(18, 6)),
+    effective_unit_price = type_coerce(func.coalesce(
+        func.json_extract(DeliveryItem.sales_contract_json, "$.unit_price"),
         case((DeliveryItem.source_type == "unordered_finished", DeliveryItem.unit_price_snapshot), else_=OrderItem.unit_price),
-    )
+    ), ExactDecimalText())
     pending_item_count = func.sum(
         case((StatementItem.id.is_(None), 1), else_=0)
     )
@@ -6318,7 +6350,7 @@ def pending_statements(
             CustomerCharge.reconciliation_month == statement_month
         )
     charges = db.scalars(charge_query).all()
-    return {
+    return exact_json({
         "items": rows,
         "deliveries": deliveries,
         "customer_charges": [
@@ -6336,7 +6368,7 @@ def pending_statements(
             else customer.name
         ),
         "customer_ids": sorted(allowed_customer_ids),
-    }
+    })
 
 
 @router.post("/statements", status_code=status.HTTP_201_CREATED)
@@ -6623,10 +6655,10 @@ def create_statement(
             )
             from app.services.delivery_snapshots import statement_sales_terms
             unit_price,price_tax_mode,tax_rate=statement_sales_terms(delivery_item,unit_price,price_tax_mode,tax_rate)
-            line_price_amount = (quantity * unit_price)
+            line_price_amount = multiply_money(quantity, unit_price)
             if price_tax_mode == "tax_exclusive":
-                line_tax_amount = (line_price_amount * tax_rate)
-                receivable = line_price_amount + line_tax_amount
+                line_tax_amount = multiply_money(line_price_amount, tax_rate)
+                receivable = sum_money((line_price_amount, line_tax_amount))
             else:
                 receivable = line_price_amount
             profit = (quantity * (unit_price - unit_cost)).quantize(
@@ -6648,7 +6680,7 @@ def create_statement(
                     tax_rate_snapshot=tax_rate,
                 )
             )
-            total_receivable += receivable
+            total_receivable = sum_money((total_receivable, receivable))
             total_profit += profit
         for charge, _existing_id in selected_charge_rows:
             db.add(
@@ -6671,7 +6703,7 @@ def create_statement(
             total_receivable += Decimal(str(charge.amount))
             if charge.price_tax_mode in VALID_PRICE_TAX_MODES:
                 statement_price_tax_modes.add(charge.price_tax_mode)
-        statement.total_receivable = total_receivable.quantize(MONEY, rounding=ROUND_HALF_UP)
+        statement.total_receivable = total_receivable
         statement.total_gross_profit = total_profit.quantize(MONEY, rounding=ROUND_HALF_UP)
         _audit(
             db,
@@ -7180,7 +7212,7 @@ def _recalculate_statement_totals(db: Session, statement: Statement) -> None:
             func.coalesce(func.sum(StatementItem.gross_profit_amount), 0),
         ).where(StatementItem.statement_id == statement.id)
     ).one()
-    statement.total_receivable = Decimal(str(totals[0])).quantize(MONEY, rounding=ROUND_HALF_UP)
+    statement.total_receivable = totals[0] or Decimal(0)
     statement.total_gross_profit = Decimal(str(totals[1])).quantize(MONEY, rounding=ROUND_HALF_UP)
 
 
@@ -7400,10 +7432,10 @@ def _new_statement_item_from_receipt(
     from app.services.delivery_snapshots import statement_sales_terms
     unit_price,price_tax_mode,tax_rate=statement_sales_terms(delivery_item,unit_price,price_tax_mode,tax_rate)
     quantity = Decimal(receipt_item.actual_received_quantity)
-    line_price = (quantity * unit_price)
+    line_price = multiply_money(quantity, unit_price)
     receivable = (
         line_price
-        + (line_price * tax_rate)
+        + multiply_money(line_price, tax_rate)
         if price_tax_mode == "tax_exclusive"
         else line_price
     )

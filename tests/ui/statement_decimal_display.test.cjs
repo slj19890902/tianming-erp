@@ -6,12 +6,13 @@ const vm=require('node:vm');
 const root=path.resolve(__dirname,'../..');
 function moduleFixture(){
  const context={};vm.createContext(context);
+ vm.runInContext(fs.readFileSync(path.join(root,'static/ui/exact-money.js'),'utf8'),context);
  vm.runInContext(fs.readFileSync(path.join(root,'static/ui/finance-workspace.js'),'utf8'),context);
  return context.ERPFinanceWorkspace;
 }
-test('financial display uses three places only for fractional values and normalizes zero',()=>{
+test('financial display keeps all significant decimal places and normalizes zero',()=>{
  const mod=moduleFixture();
- for(const [value,expected] of [['222.525','222.525'],['222.5','222.500'],['222.000','222'],[0,'0'],[-0.0004,'0'],[-2.5,'-2.500'],[1.2345,'1.235'],[-1.2345,'-1.235'],[222.9996,'223']])assert.equal(mod.formatNumber(value),expected,String(value));
+ for(const [value,expected] of [['222.525','222.525'],['222.5','222.5'],['222.000','222'],[0,'0'],[-0.0004,'-0.0004'],[-2.5,'-2.5'],[1.2345,'1.2345'],[-1.2345,'-1.2345'],[222.9996,'222.9996']])assert.equal(mod.formatNumber(value),expected,String(value));
  let mixin;mod.install({mixin(value){mixin=value;},component(){}});
  assert.equal(mixin.methods.financeNumber('222.525'),'222.525');
 });

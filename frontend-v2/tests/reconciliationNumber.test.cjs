@@ -6,9 +6,12 @@ const ts = require('typescript')
 const source = fs.readFileSync(path.join(__dirname, '../src/utils/reconciliationNumber.ts'), 'utf8')
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
 const exported = {}
-new Function('exports', compiled)(exported)
-test('new statement view shares the integer and three decimal display contract', () => {
-  for (const [value, expected] of [['222.525', '222.525'], ['222.5', '222.500'], ['222.000', '222'], [0, '0'], [-0.0004, '0'], [-2.5, '-2.500'], [1.2345, '1.235'], [-1.2345, '-1.235'], [222.9996, '223']]) {
+new Function('exports', 'require', compiled)(exported, name => {
+  assert.equal(name, './exactMoney')
+  return { exactMoney: require('../../static/ui/exact-money.js').format }
+})
+test('new statement view shares the exact decimal display contract', () => {
+  for (const [value, expected] of [['222.525', '222.525'], ['222.5', '222.5'], ['222.000', '222'], [0, '0'], [-0.0004, '-0.0004'], [-2.5, '-2.5'], [1.2345, '1.2345'], [-1.2345, '-1.2345'], [222.9996, '222.9996']]) {
     assert.equal(exported.reconciliationNumber(value), expected)
     assert.equal(exported.reconciliationNumberCell({ cellValue: value }), expected)
   }

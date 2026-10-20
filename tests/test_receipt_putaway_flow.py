@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from app.models.receipt_putaway import ReceiptStagingArea
@@ -8,7 +9,8 @@ from tests.test_p1_81_receipt_purpose_flow import (
     _freeze_receipt_fact, _receive, _assert_allocation, _business_counts)
 
 
-def test_receipt_exceeds_single_staging_slot_preserves_conversion_cost_and_replay(requisition_app,monkeypatch):
+@pytest.mark.parametrize("preference", ["location", "missing", "cleared"])
+def test_receipt_exceeds_single_staging_slot_preserves_conversion_cost_and_replay(requisition_app,monkeypatch,preference):
     app,factory=requisition_app
     _use_p181_published_map_identity(monkeypatch)
     _seed_material_and_staging(factory,finished_slot_count=1)
@@ -27,7 +29,10 @@ def test_receipt_exceeds_single_staging_slot_preserves_conversion_cost_and_repla
         from app.models.customer_finished_storage_preference import CustomerFinishedStoragePreference
         with factory() as db:
             area=db.scalar(select(WarehouseArea).where(WarehouseArea.area_code=='FIN-001'))
-            db.add(ProductStoragePreference(product_id=1,area_id=area.id,location_id=location_id,version=1))
+            if preference == "location":
+                db.add(ProductStoragePreference(product_id=1,area_id=area.id,location_id=location_id,version=1))
+            elif preference == "cleared":
+                db.add(ProductStoragePreference(product_id=1,area_id=None,location_id=None,version=2))
             for preference in db.scalars(select(CustomerFinishedStoragePreference)):
                 db.delete(preference)
             db.commit()

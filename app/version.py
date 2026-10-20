@@ -12,7 +12,7 @@ from typing import Any
 
 
 APP_VERSION = "v0.22.695"
-APP_VERSION_NAME = "位置清单订单导入与提前备货单"
+APP_VERSION_NAME = "订单提前备货与收料默认库位"
 APP_BUILD_DATE = "2026-10-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6793,3 +6793,8 @@ APP_CHANGELOG = [*(f"v0.22.694：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["研光、光洋位置清单支持按存货编码和完整需求导入订单，保留原行位置与来源参考量", "订单保存后即可打印提前备货单，按指定位置显示当前可拿与待补，缺货及未生产行仍保留", "提前备货单不依赖送货单，打印不扣库存；保留客户范围、产品匹配和相同文件防重复保护"]
 APP_VERIFICATION_STEPS = ["订单导入选择客户和要求交期，上传位置清单，核对需求、单价和原表位置后保存", "点击打印提前备货单，核对位置、可拿与待补；关闭打印页返回原订单", "订单详情再次打印；重复上传同一文件应提示原订单，不新增第二张"]
 APP_CHANGELOG = [*(f"v0.22.695：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# 同批纳入用户另行明确批准的收料默认库位修复。
+APP_CHANGES += ["收料默认位置按常用箱库位或区域、客户区域、一楼待送区的顺序选择；未配置默认位置不再阻止收料", "客户可选择整个楼层当前可用区域，明确失效或冲突的位置仍提示核对"]
+APP_VERIFICATION_STEPS = APP_VERIFICATION_STEPS[:2] + ["正常收料核对常用箱位置优先、客户区域其次；两者未设置时进入一楼待送区，重复提交不重复入库"]
+APP_CHANGELOG = [*(f"v0.22.695：本次更新｜{item}" for item in APP_CHANGES[-2:]), *APP_CHANGELOG]

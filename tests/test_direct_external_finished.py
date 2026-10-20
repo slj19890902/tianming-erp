@@ -39,13 +39,27 @@ def receive(client, pid, line, qty, key='direct-receipt'):
 
 
 @pytest.mark.parametrize('physical_ratio', [1, 2])
-def test_direct_receipt_posts_real_finished_and_idempotent(routing_app, physical_ratio):
+@pytest.mark.parametrize('preference', ['customer', 'missing', 'cleared'])
+def test_direct_receipt_posts_real_finished_and_idempotent(routing_app, physical_ratio, preference):
     from app.models.order import OrderItem
-    from app.models.warehouse_inventory import InventoryLot, InventoryReservation
+    from app.models.warehouse_inventory import InventoryLot, InventoryReservation, WarehouseLocation
     from app.models.production import ProductionTask
     from app.api.deliveries import _delivery_remaining_quantity
     with TestClient(routing_app) as client:
         oid, pid, line = prepare(routing_app, client, ratio=str(physical_ratio))
+        if preference != 'customer':
+            from app.models.customer_finished_storage_preference import CustomerFinishedStoragePreference
+            from app.models.receipt_putaway import ProductStoragePreference, ReceiptStagingArea
+            from app.models.warehouse_inventory import WarehouseArea
+            with routing_app.state.factory() as db:
+                for row in db.scalars(select(CustomerFinishedStoragePreference)):
+                    db.delete(row)
+                area = db.scalar(select(WarehouseArea).where(WarehouseArea.area_code == 'FIN-001'))
+                db.add(ReceiptStagingArea(area_id=area.id))
+                item = db.scalar(select(OrderItem).where(OrderItem.order_id == oid))
+                if preference == 'cleared':
+                    db.add(ProductStoragePreference(product_id=item.product_id, area_id=None, location_id=None, version=2))
+                db.commit()
         r = receive(client, pid, line, 1000 * physical_ratio)
         assert r.status_code == 200, r.text
         assert r.json()['receipt']['items'][0]['converted_finished_quantity'] == 1000
@@ -55,6 +69,9 @@ def test_direct_receipt_posts_real_finished_and_idempotent(routing_app, physical
     with routing_app.state.factory() as db:
         item = db.scalar(select(OrderItem).where(OrderItem.order_id == oid))
         lot = db.scalar(select(InventoryLot).where(InventoryLot.source_ref_type == 'direct_external_receipt'))
+        if preference != 'customer':
+            assert db.get(WarehouseLocation, lot.warehouse_location_id).warehouse_floor == 1
+            assert db.get(WarehouseLocation, lot.warehouse_location_id).area_code == 'FIN-001'
         assert lot.finished_detail.product_id == item.product_id
         assert lot.quantity_reserved == 1000 * physical_ratio and lot.quantity_available == 0
         reservation = db.scalar(select(InventoryReservation).where(InventoryReservation.inventory_lot_id == lot.id))

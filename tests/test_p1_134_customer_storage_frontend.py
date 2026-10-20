@@ -145,3 +145,30 @@ def test_direct_completion_copy_is_generic_and_routing_has_no_customer_hardcode(
         assert "新振" not in source
         assert "customer_name" not in source
         assert "customer_id" not in source
+
+
+def test_floor_selection_adds_only_its_current_areas_and_preserves_explicit_selection(tmp_path):
+    import subprocess
+    source = _block('customerFinishedStorageAreasForFloor(floorId) {', 'async loadCustomerFinishedStorage(')
+    source += _block('addCustomerFinishedStorageArea() {', 'moveCustomerFinishedStorageArea(')
+    script = "const assert=require('node:assert/strict');const methods={" + source + "};\n"
+    script += """
+const ctx={...methods,customerFinishedStorageDraft:{floor_id:3,area_id:null},
+ customerFinishedStorageState:{floors:[{floor_id:1,areas:[{area_id:11}]},{floor_id:3,areas:[{area_id:31},{area_id:32}]}],preferences:[]},
+ showToast:()=>{ctx.warned=true}};
+ctx.addCustomerFinishedStorageArea();
+assert.deepEqual(ctx.customerFinishedStorageState.preferences.map(x=>x.area_id),[31,32]);
+assert.deepEqual(ctx.customerFinishedStorageState.preferences.map(x=>x.priority),[1,2]);
+ctx.addCustomerFinishedStorageArea();
+assert.equal(ctx.customerFinishedStorageState.preferences.length,2);
+ctx.customerFinishedStorageState.preferences=[];ctx.customerFinishedStorageDraft.area_id=32;
+ctx.addCustomerFinishedStorageArea();
+assert.deepEqual(ctx.customerFinishedStorageState.preferences.map(x=>x.area_id),[32]);
+ctx.customerFinishedStorageDraft={floor_id:1,area_id:32};ctx.addCustomerFinishedStorageArea();
+assert.deepEqual(ctx.customerFinishedStorageState.preferences.map(x=>x.area_id),[32]);
+ctx.customerFinishedStorageState.preferences=Array.from({length:19},(_,i)=>({area_id:100+i}));
+ctx.customerFinishedStorageDraft={floor_id:3,area_id:null};ctx.addCustomerFinishedStorageArea();
+assert.equal(ctx.customerFinishedStorageState.preferences.length,19);assert.equal(ctx.warned,true);
+"""
+    result = subprocess.run(['node'], input=script, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr

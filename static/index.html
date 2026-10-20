@@ -6613,10 +6613,11 @@
                 <template v-else-if="customerFinishedStorageState.loadedCustomerId===Number(customerForm.id)">
                   <div v-if="canEditCustomers" class="toolbar-group" style="margin-top:7px;display:grid;grid-template-columns:minmax(120px,.8fr) minmax(190px,1.4fr) auto;gap:6px">
                     <select class="select" v-model.number="customerFinishedStorageDraft.floor_id" :disabled="customerFinishedStorageState.saving" @change="customerFinishedStorageDraft.area_id=null"><option :value="null">选择楼层</option><option v-for="floor in customerFinishedStorageState.floors" :key="floor.floor_id" :value="floor.floor_id">{{ floor.floor_name || `${floor.floor_number}F` }}</option></select>
-                    <select class="select" v-model.number="customerFinishedStorageDraft.area_id" :disabled="customerFinishedStorageState.saving || !customerFinishedStorageDraft.floor_id"><option :value="null">选择区域</option><option v-for="area in customerFinishedStorageAreasForFloor(customerFinishedStorageDraft.floor_id)" :key="area.area_id" :value="area.area_id" :disabled="customerFinishedStorageAreaSelected(area.area_id)">{{ area.area_name }}（空位 {{ area.available_location_count || 0 }}）</option></select>
-                    <button class="btn small" type="button" :disabled="!customerFinishedStorageDraft.area_id || customerFinishedStorageState.saving" @click="addCustomerFinishedStorageArea">添加</button>
+                    <select class="select" v-model.number="customerFinishedStorageDraft.area_id" :disabled="customerFinishedStorageState.saving || !customerFinishedStorageDraft.floor_id"><option :value="null">整个楼层的可用区域</option><option v-for="area in customerFinishedStorageAreasForFloor(customerFinishedStorageDraft.floor_id)" :key="area.area_id" :value="area.area_id" :disabled="customerFinishedStorageAreaSelected(area.area_id)">{{ area.area_name }}（空位 {{ area.available_location_count || 0 }}）</option></select>
+                    <button class="btn small" type="button" :disabled="!customerFinishedStorageDraft.floor_id || customerFinishedStorageState.saving" @click="addCustomerFinishedStorageArea">添加</button>
                   </div>
-                  <div v-if="!customerFinishedStorageState.preferences.length" class="muted" style="margin-top:7px">未指定；仍按现有成品入库规则选择位置。</div>
+                  <div class="muted" style="margin-top:7px">选择楼层可添加该楼层当前全部可用区域，也可只添加指定区域；添加后点击“保存区域”。常用箱指定的位置优先。</div>
+                  <div v-if="!customerFinishedStorageState.preferences.length" class="muted" style="margin-top:7px">未指定时，收料优先使用常用箱设置；常用箱也未设置则进入一楼待送区。</div>
                   <div v-for="(area,index) in customerFinishedStorageState.preferences" :key="area.area_id" class="toolbar" style="margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;gap:7px">
                     <span><strong>{{ index + 1 }}. {{ area.floor_name || `${area.floor_number || '-'}F` }} / {{ area.area_name || area.area_code || `区域 ${area.area_id}` }}</strong><span v-if="area.is_valid===false" class="status red" style="margin-left:6px">不可用</span><span v-else class="muted" style="margin-left:6px">空位 {{ area.available_location_count || 0 }}</span><span v-if="area.is_valid===false && area.blockers?.length" class="danger-text" style="margin-left:6px">{{ area.blockers.join('；') }}</span></span>
                     <div v-if="canEditCustomers" class="toolbar-group" style="margin-left:auto;flex-wrap:nowrap"><button class="btn small" type="button" :disabled="index===0 || customerFinishedStorageState.saving" title="提高优先级" @click="moveCustomerFinishedStorageArea(index,-1)">↑</button><button class="btn small" type="button" :disabled="index===customerFinishedStorageState.preferences.length-1 || customerFinishedStorageState.saving" title="降低优先级" @click="moveCustomerFinishedStorageArea(index,1)">↓</button><button class="btn small danger" type="button" :disabled="customerFinishedStorageState.saving" @click="removeCustomerFinishedStorageArea(index)">移除</button></div>
@@ -27043,10 +27044,16 @@
           },
           addCustomerFinishedStorageArea() {
             const areaId = Number(this.customerFinishedStorageDraft.area_id || 0);
-            if (!areaId || this.customerFinishedStorageAreaSelected(areaId)) return;
-            const area = (this.customerFinishedStorageState.floors || []).flatMap(floor => floor.areas || []).find(row => Number(row.area_id) === areaId);
-            if (!area) return;
-            this.customerFinishedStorageState.preferences.push({...area,priority:this.customerFinishedStorageState.preferences.length + 1});
+            const floorAreas = this.customerFinishedStorageAreasForFloor(this.customerFinishedStorageDraft.floor_id);
+            const additions = floorAreas.filter(area => (!areaId || Number(area.area_id) === areaId) && !this.customerFinishedStorageAreaSelected(area.area_id));
+            if (!additions.length) return;
+            if (this.customerFinishedStorageState.preferences.length + additions.length > 20) {
+              this.showToast("最多设置20个区域，请选择具体区域后添加", true);
+              return;
+            }
+            for (const area of additions) {
+              this.customerFinishedStorageState.preferences.push({...area,priority:this.customerFinishedStorageState.preferences.length + 1});
+            }
             this.customerFinishedStorageDraft.area_id = null;
           },
           moveCustomerFinishedStorageArea(index,direction) {

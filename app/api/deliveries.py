@@ -2175,6 +2175,42 @@ class ForceCloseRequest(BaseModel):
         return value.strip() or None
 
 
+def _direct_external_pending_quantities(
+    db: Session, items,
+) -> dict[int, int]:
+    """Use the dispatch ledger for pure external goods, including adopted stock.
+
+    A direct-product component freezes the purchased product itself. It does not
+    require a new purchase receipt when this order adopts existing finished stock.
+    Additional required components continue through the normal receipt/BOM gate.
+    """
+    from app.services.direct_external_finished import eligible, managed
+
+    external = [item for item in items if item.supply_mode_snapshot == "external_purchase"]
+    if not external:
+        return {}
+    additional_required = set(db.scalars(
+        select(SalesOrderItemExternalComponent.sales_order_item_id).where(
+            SalesOrderItemExternalComponent.sales_order_item_id.in_([item.id for item in external]),
+            SalesOrderItemExternalComponent.is_required.is_(True),
+            current_external_component_predicate(),
+            SalesOrderItemExternalComponent.source_kind != "direct_product",
+        )
+    ))
+    managed_items = [
+        item for item in external
+        if item.id not in additional_required and eligible(db, item) and managed(db, item)
+    ]
+    credits = remaining_finished_order_credit_by_item_ids(db, [item.id for item in managed_items])
+    return {
+        item.id: min(
+            max(int(item.quantity or 0) - int(item.delivered_quantity or 0), 0),
+            credits.get(item.id, 0),
+        )
+        for item in managed_items
+    }
+
+
 def _pending_query(
     *,
     db: Session | None = None,
@@ -2357,6 +2393,24 @@ def _pending_query(
         required_external_components == 0,
         external_packaging_received,
     )
+    normal_readiness = and_(
+        external_packaging_gate,
+        or_(
+            production_task_ready,
+            OrderItem.id.in_(direct_liner_item_ids(db) if db is not None else []),
+            receipt_auto_delivery_ready,
+            and_(
+                ~production_task_exists,
+                or_(
+                    OrderItem.material_status == "received",
+                    active_finished_reserved >= OrderItem.quantity,
+                    semi_fully_covered,
+                    received_telescoping_components > 0,
+                    external_packaging_received,
+                ),
+            ),
+        ),
+    )
     query = (
         select(
             OrderItem.id.label("item_id"),
@@ -2388,22 +2442,6 @@ def _pending_query(
         .join(Customer, Customer.id == Order.customer_id)
         .join(Product, Product.id == OrderItem.product_id)
         .where(
-            external_packaging_gate,
-            or_(
-                production_task_ready,
-                OrderItem.id.in_(direct_liner_item_ids(db) if db is not None else []),
-                receipt_auto_delivery_ready,
-                and_(
-                    ~production_task_exists,
-                    or_(
-                        OrderItem.material_status == "received",
-                        active_finished_reserved >= OrderItem.quantity,
-                        semi_fully_covered,
-                        received_telescoping_components > 0,
-                        external_packaging_received,
-                    ),
-                ),
-            ),
             OrderItem.is_force_closed.is_(False),
             OrderItem.delivered_quantity < OrderItem.quantity,
             Order.status.in_(DELIVERY_CANDIDATE_ORDER_STATUSES),
@@ -2495,7 +2533,21 @@ def _pending_query(
             )
         )
 
-    query = query.order_by(
+    # Apply customer, search, closed-order and outstanding-demand restrictions
+    # before checking physical identities. Do not use raw credit numerators as
+    # customer quantities (e.g. 1,200 physical pieces can mean 600 sales units).
+    direct_ids = []
+    if db is not None:
+        external_items = db.scalars(query.with_only_columns(OrderItem).where(
+            OrderItem.supply_mode_snapshot == "external_purchase",
+            receipt_auto_finished_reserved > 0,
+        )).all()
+        direct_ids = [
+            item_id for item_id, quantity
+            in _direct_external_pending_quantities(db, external_items).items()
+            if quantity > 0
+        ]
+    query = query.where(or_(normal_readiness, OrderItem.id.in_(direct_ids))).order_by(
         *rank_ordering,
         Order.created_at.desc(),
         Order.id.desc(),
@@ -7843,6 +7895,9 @@ class _PendingDeliveryReadContext:
         self.order_items = {
             item.id: item for item, _box_style, _box_category in order_item_rows
         }
+        self.direct_external_quantities = _direct_external_pending_quantities(
+            db, self.order_items.values()
+        )
         product_profile_by_item_id = {
             int(item.id): (str(box_style or ""), str(box_category or ""))
             for item, box_style, box_category in order_item_rows
@@ -7970,6 +8025,7 @@ class _PendingDeliveryReadContext:
             | reservation_item_ids
             | semi_requirement_item_ids
             | telescoping_item_ids
+            | set(self.direct_external_quantities)
         )
         required_external_item_ids = {
             int(value)
@@ -8208,6 +8264,8 @@ class _PendingDeliveryReadContext:
         return bool(order_item and order_item.id in self.fast_item_ids)
 
     def remaining_quantity(self, db: Session, order_item: OrderItem) -> int:
+        if order_item.id in self.direct_external_quantities:
+            return self.direct_external_quantities[order_item.id]
         if (
             order_item.id in self.direct_liner_candidate_ids
             and liner_direct_coverage(db, order_item)

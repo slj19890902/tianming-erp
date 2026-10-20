@@ -7,7 +7,7 @@ functions too, so grouped totals cannot quietly fall back to SQLite REAL SUM.
 from decimal import Decimal, InvalidOperation, localcontext
 import sqlite3
 
-from sqlalchemy import Text, Numeric, cast, event, func, literal, type_coerce
+from sqlalchemy import Text, event, func, literal, type_coerce
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import operators
@@ -118,9 +118,11 @@ def set_exact(instance, number, legacy_name, exact_name, *, price=False):
 
 
 def exact_expression(cls, legacy_name, exact_name):
+    legacy = getattr(cls, legacy_name)
+    scale = legacy.property.columns[0].type.scale
     return type_coerce(func.coalesce(getattr(cls, exact_name),
-        cast(getattr(cls, legacy_name), Text)).collate('TM_DECIMAL'), ExactDecimalText()).label(
-            getattr(cls, legacy_name).property.columns[0].name)
+        func.tm_decimal_legacy(legacy, scale)).collate('TM_DECIMAL'), ExactDecimalText()).label(
+            legacy.property.columns[0].name)
 
 
 class _DecimalSum:
@@ -140,6 +142,12 @@ def _register_decimal_sql(connection, _record):
     if not isinstance(connection, sqlite3.Connection):
         return
     connection.create_aggregate('tm_decimal_sum', 1, _DecimalSum)
+    # Match the existing SQLAlchemy Numeric result processor for untouched
+    # history. Reading a raw REAL via CAST(TEXT) could disagree with the old
+    # two/three/six-place ORM read, changing a total when another line is edited.
+    connection.create_function('tm_decimal_legacy', 2,
+        lambda value, scale: None if value is None else
+            money_text(Decimal(('%%.%df' % int(scale)) % value)), deterministic=True)
     connection.create_collation('TM_DECIMAL', lambda a, b:
         (decimal_value(a) > decimal_value(b)) - (decimal_value(a) < decimal_value(b)))
     def binary(operation, left, right):

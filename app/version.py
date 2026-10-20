@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.698"
-APP_VERSION_NAME = "订单库存与补库覆盖核对"
+APP_VERSION = "v0.22.699"
+APP_VERSION_NAME = "订单原价与金额精度"
 APP_BUILD_DATE = "2026-10-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6813,3 +6813,15 @@ APP_CHANGELOG = [*(f"v0.22.697：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["无尺寸模切产品按已冻结模具与工艺核对补库覆盖，避免把客户型号显示文字当规格冲突而重复报料。", "订单导入显示旧库存身份待核对的原单位、数量、位置和原因；未确认的单件库存不自动换算成BOM套件。"]
 APP_VERIFICATION_STEPS = ["核对80010335订单450：成品预占120、已报料补库覆盖330、仍需报料0；80012415仍覆盖100。", "导入82021154时查看库存身份待核对及原位置数量；实际整套/子件身份由现场确认。"]
 APP_CHANGELOG = [*(f"v0.22.698：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.699：原报价口径与精确销售金额。
+APP_CHANGES = [
+    "订单原始单价保留有效小数，数量乘单价及整单求和不提前舍入；保存、刷新和编辑保持一致。",
+    "修正常用箱导入和编辑回填把原价缩短为三位的问题；订单页面、普通Excel及PDF显示完整有效金额。",
+    "明确含税/未税原始报价及另一口径参考，混合税价分别列小计；保留历史冻结金额与库存事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "新建或编辑数量3、单价2.225，确认金额6.675，保存刷新后不变。",
+    "核对含税/未税原始报价标识和参考值，导出Excel/PDF查看行金额与合计。",
+]
+APP_CHANGELOG = [*(f"v0.22.699：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

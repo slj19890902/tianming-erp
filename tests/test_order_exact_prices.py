@@ -106,6 +106,10 @@ def test_exact_sql_outstanding_comparisons_and_legacy_read(p1_130_app):
         db.execute(text('UPDATE sales_order_items SET subtotal=6.68, subtotal_exact=NULL WHERE id=1'))
         db.commit(); db.expire_all()
         assert db.get(OrderItem, 1).subtotal == Decimal('6.68')
+        db.execute(text('UPDATE sales_order_items SET subtotal=6.675, subtotal_exact=NULL WHERE id=1'))
+        db.commit(); db.expire_all()
+        frozen = db.get(OrderItem, 1).subtotal
+        assert db.scalar(select(OrderItem.subtotal).where(OrderItem.id == 1)) == frozen
 
 
 def test_reader_refuses_older_program_after_exact_fact(p1_130_app):

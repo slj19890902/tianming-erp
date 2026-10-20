@@ -1,5 +1,7 @@
 # Issue48 手机版后端关联与正式发布
 
+当前状态：v0.22.691 技术发布及原生维护收尾完成，等待管理员真实手机验收。
+
 用户授权将新手机界面关联后端并部署生产，供真实验收。基线为实际正式v690/ded38695，移动界面来源frontend-v2/02ac528d；两条Git历史不合并，只整合所需移动模块，保留最新桌面工作区和v690修复。
 
 改动：手机六屏及原生入口；新默认/mobile/跳到同源/frontend-v2/mobile，带旧任务参数的入口继续走原执行器；既有摄像头self策略适配新SPA。修正pre_delivery权限标识及旧页锚点、API基址解析、真实本次实收量、实收记录撤销ID、管理员撤销资格及重试原幂等键。部分/异常收料和位置选择可进入现有完整收料流程。财务无权金额继续按用户确认显示“—”，不扩大后端权限。
@@ -21,3 +23,16 @@
 收尾脚本 /Users/kimiyf/ERP-Migration/evidence/mobile-production-20261020/finish-v691.py，启动授权会话9949，系统脚本 /Users/kimiyf/ERP-Migration/evidence/mobile-production-20261020/finish-authorize.applescript。授权后将生成 /Library/TianmingERP-Release-20261020-v691b/final-result.json；然后运行同证据目录 record-completion.py 更新正式回执。失败首包及日志保留。
 
 手机入口 http://192.168.3.80:8000/mobile/；原ERP地址追加/mobile/。管理员按真实业务查看产品与图纸、仓库位置数量、收料及预送货入口后反馈。真实手机人工验收未代填。远端frontend-v2同步提交2965038b，两个工作区均干净。生产源码delta bundle b5ca03e7已在NAS挂载写入读回验证，本地原件保留。
+
+## v0.22.691 正式技术发布完成
+
+- 正式源码 `b5ca03e75ecdf22fdc605033ff9c4a03b8675d98`；签名包 `8e2d3edf74595d0a15e9f0e116975e644910183c80173c552ebf41c260e28c57`；manifest `d895657d93a5219cbfce59176d179935829d94efed9c359718ba5bfbec9f06a1`；原包 `1b093718d10550f44436340c65c600d0e0b4e1e4c5291fe4b807a15f365a14be`。唯一revision `et1019fl`，无DDL。
+- 前端远端同步提交 `2965038b702f30905dbd59869778fdf4b6fbb9c0`；生产整合分支与该分支历史保持独立。
+- 10项后端/入口/二维码定向检查、18项手机交互检查、23项短码/旧二维码契约及两个分支构建通过；没有运行全量测试。
+- 新鲜正式快照真实API检查通过，326张业务表及schema保持，真实待收详情2项、三楼实测区域41个、所选区域货位12个；全部查询只读，没有提交正式收料、撤销或库存测试操作。
+- 完整备份 `/Library/TianmingERP/instance/backups/20261020-134511-0ad225fe.tmbackup`，SHA256 `0bbe132da239636b59a83e19af4b45b02491c84d8b222ea0db819e77087ba1d0`；独立完整恢复、3,066附件校验及原生收尾通过。backup_work_retained=false、manual_stop=false。
+- 正式HTTP健康、两条本机/局域网手机入口及全部签名前端资源字节核对通过；5项匿名受保护接口返回401。
+- 停服 `2026-10-20T05:44:49.393800+00:00` 至 `2026-10-20T05:50:56.396574+00:00`，367.00秒。正式业务数据未代改，手机人工验收仍待管理员反馈。
+- 原维护进程直接装载正式app被专用服务入口门禁拒绝；保留失败记录，未改写或绕过该门禁。经实际服务HTTP/静态核对、只读完整性/FK核对和原生备份恢复收尾确认更新成功。
+- 验收入口 `http://192.168.3.80:8000/mobile/`；原手机ERP地址可追加 `/mobile/`。现场检查产品查询与图纸、仓库真实位置数量、收料/预送货入口，正式动作仅按实际业务操作。
+- 证据 `/Users/kimiyf/ERP-Migration/evidence/mobile-production-20261020`；源码delta bundle `/Users/kimiyf/ERP-Migration/evidence/mobile-production-20261020/mobile-production-b5ca03e7.bundle`（前置ded38695），本地保留，NAS挂载写入读回已校验。

@@ -6305,3 +6305,7 @@ v0.22.686 / 281eed29c8551324d388fffffabe5e2249aa25aa / d407b603602330a78993637ca
 ## 2026-10-20 v0.22.691 手机版六屏已切换（维护收尾待授权）
 
 正式源b5ca03e75ecdf22fdc605033ff9c4a03b8675d98/包8e2d3edf74595d0a15e9f0e116975e644910183c80173c552ebf41c260e28c57，et1019fl无DDL；基于v690保留桌面与库存修复。手机入口/mobile/已切换，实际健康和43资源通过，未代改业务事实。原生维护收尾等待系统授权，完整说明见docs/release_reports/ISSUE48_MOBILE_PRODUCTION_20261020.md。
+
+## 2026-10-20 v0.22.691 手机版六屏正式关联
+
+正式源 `b5ca03e75ecdf22fdc605033ff9c4a03b8675d98` / 包 `8e2d3edf74595d0a15e9f0e116975e644910183c80173c552ebf41c260e28c57`，revision et1019fl无DDL；基于v690保留桌面与库存修复，集成Issue48手机六屏及同源入口，修正供应商采购so路线详情、预送货权限与实收记录身份。备份恢复、真实快照API及线上只读核验通过，待管理员手机人工验收。详见 `docs/release_reports/ISSUE48_MOBILE_PRODUCTION_20261020.md`。

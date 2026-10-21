@@ -332,3 +332,4 @@ from app.models.shared_finished_stock import (SharedFinishedGroup, SharedFinishe
 from app.models.finished_product_label import FinishedProductLabelPrintJob  # noqa: E402,F401
 from app.models.incoming_actual_spec import IncomingActualSpec  # noqa: E402,F401
 from app.models.customer_sharing import CustomerSharingGroup, CustomerSharingMember  # noqa: E402,F401
+from app.models.scrap_production import ScrapProductionJob  # noqa: E402,F401

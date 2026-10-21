@@ -603,6 +603,8 @@ def create_product_processing_profile(
             description="新增产品加工例外",
             details=response,
         )
+        from app.services.shared_product_master import sync_processing_profile
+        sync_processing_profile(db, product, row, user)
         _record_idempotency(
             db,
             idempotency_key=payload.idempotency_key,
@@ -722,6 +724,8 @@ def upsert_product_processing_profile(
             description="保存产品加工例外",
             details={"before": before, "after": response},
         )
+        from app.services.shared_product_master import sync_processing_profile
+        sync_processing_profile(db, product, row, user)
         _record_idempotency(
             db,
             idempotency_key=payload.idempotency_key,
@@ -840,6 +844,8 @@ def delete_product_processing_profile(
             description="恢复产品自动加工规则",
             details={"before": before, "after": response},
         )
+        from app.services.shared_product_master import sync_processing_profile
+        sync_processing_profile(db, product, row, user)
         _record_idempotency(
             db,
             idempotency_key=payload.idempotency_key,

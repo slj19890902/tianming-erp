@@ -278,6 +278,7 @@ class Product(Base):
         nullable=False,
     )
     sheet_cutting_settings: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    production_variants: Mapped[list | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     production_label_enabled: Mapped[bool] = mapped_column(
         Boolean,
         default=False,

@@ -21,6 +21,11 @@ SHARED_PRODUCT_MASTER_READER = 'shared_product_master_v1'
 
 def has_shared_product_master_facts(db):
     tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'scrap_production_jobs' in tables and db.execute('SELECT 1 FROM scrap_production_jobs LIMIT 1').fetchone():
+        return True
+    columns={r[1] for r in db.execute('PRAGMA table_info(products)')}
+    if 'production_variants' in columns and db.execute('SELECT 1 FROM products WHERE production_variants IS NOT NULL LIMIT 1').fetchone():
+        return True
     if 'customer_sharing_members' in tables and db.execute('SELECT 1 FROM customer_sharing_members LIMIT 1').fetchone():
         return True
     return bool('shared_finished_mutations' in tables and db.execute(

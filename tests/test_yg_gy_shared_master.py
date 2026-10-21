@@ -51,16 +51,18 @@ def test_explicit_reconcile_old_drift_and_frozen_reservation_keeps_original_iden
 def test_bidirectional_report_sync_has_cas_history_and_keeps_prices(reservation_db):
     db,data=reservation_db;target,item,lot,gid=pair(db,data);source=data['product']
     before=lot.finished_detail.physical_basis_json;price=target.sale_unit_price
+    initial=(source.version,target.version)
     edit(db,data,source,{'report_length_mm':802});db.commit()
     assert source.report_length_mm==target.report_length_mm==802
-    assert source.version==target.version==2
+    assert (source.version,target.version)==tuple(v+1 for v in initial)
     assert target.sale_unit_price==price and lot.quantity_available==50
     assert shared.match(db,lot,product_id=target.id,customer_id=target.customer_id)
     edit(db,data,target,{'report_length_mm':804});db.commit()
     assert source.report_length_mm==target.report_length_mm==804
-    assert source.version==target.version==3
+    assert (source.version,target.version)==tuple(v+2 for v in initial)
     assert lot.finished_detail.physical_basis_json==before
-    assert len(db.scalars(select(MasterDataObjectVersion).where(MasterDataObjectVersion.version==3)).all())==2
+    assert all(db.scalar(select(MasterDataObjectVersion.id).where(MasterDataObjectVersion.object_type=='product',
+        MasterDataObjectVersion.object_id==p.id,MasterDataObjectVersion.version==p.version)) for p in (source,target))
 
 
 def test_material_change_syncs_but_does_not_relabel_old_lot(reservation_db):
@@ -78,13 +80,14 @@ def test_material_change_syncs_but_does_not_relabel_old_lot(reservation_db):
 
 def test_failure_rolls_back_both_product_versions_and_policy(reservation_db,monkeypatch):
     db,data=reservation_db;target,item,lot,gid=pair(db,data);source=data['product'];before=source.report_length_mm
+    initial=(source.version,target.version)
     original=policy.finish_sync
     def fail(*args):
         original(*args);raise RuntimeError('audit failed')
     monkeypatch.setattr(policy,'finish_sync',fail)
     with pytest.raises(RuntimeError): edit(db,data,source,{'report_length_mm':802})
     db.rollback()
-    assert source.version==target.version==1 and source.report_length_mm==target.report_length_mm==before
+    assert (source.version,target.version)==initial and source.report_length_mm==target.report_length_mm==before
     assert len(list(db.scalars(select(SharedFinishedMutation))))==1
 
 

@@ -30,6 +30,22 @@ def default_product_drawing(drawings) -> ProductDrawing | None:
     return next((drawing for drawing in drawings if drawing_purpose(drawing) == "engineering"), None)
 
 
+def shared_product_drawings(product):
+    """One version list over existing original-file references; no file copies."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import object_session
+    from app.services.shared_product_master import catalog_products
+    db = object_session(product)
+    if db is None:
+        return product.drawings
+    products = catalog_products(db, product)
+    if len(products) == 1:
+        return product.drawings
+    return list(db.scalars(select(ProductDrawing).where(
+        ProductDrawing.product_id.in_([p.id for p in products]))
+        .order_by(ProductDrawing.uploaded_at.desc(), ProductDrawing.id.desc())))
+
+
 class DrawingValidationError(ValueError):
     pass
 

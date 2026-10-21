@@ -24,7 +24,7 @@ def require_reader(db, manifest):
         raise ValueError('当前数据库已有精确销售金额，目标程序不能保留原始单价与金额；禁止启动或回退')
 
 
-def recover_empty_migration(manager, candidate, previous, manifest, state, environment=None):
+def recover_empty_migration(manager, candidate, previous, manifest, state, environment=None, *, _shared_catalog=False):
     """Undo only this six-NULL-column migration after failed first startup.
 
     The installed previous supervisor cannot recognize a future revision. Return
@@ -42,61 +42,74 @@ def recover_empty_migration(manager, candidate, previous, manifest, state, envir
     from desktop_assistant import migration
     from desktop_assistant.runtime_platform import process_options
 
+    source_revision, target_revision = ('ew1020em','ex1021cp') if _shared_catalog else ('ev1020hr','ew1020em')
+    capability = 'shared_product_master_v1' if _shared_catalog else CAPABILITY
     root = manager.root
     shared = root / 'shared'
     database = shared / 'data/carton_erp.sqlite3'
     def require(ok):
         if not ok:
-            raise ValueError('精确金额首次启动恢复依据不完整，保留数据库及现场')
+            raise ValueError(('客户共用' if _shared_catalog else '精确金额')+'首次启动恢复依据不完整，保留数据库及现场')
     require(manager._process() is None and state.get('operation') == 'update'
             and state.get('current') == candidate)
     packages = [root / 'packages' / (identity + '.zip') for identity in (previous, candidate)]
     require(all(path.is_file() and sha(path) == identity
                 for path, identity in zip(packages, (previous, candidate))))
     old, new = [signed_release_manifest(path, manager.public_key) for path in packages]
-    require(new == manifest and old['revision'] == 'ev1020hr' and new['revision'] == 'ew1020em'
+    require(new == manifest and old['revision'] == source_revision and new['revision'] == target_revision
             and new.get('migration') == dict(policy='preserve_existing_facts_v1',
-                from_revision='ev1020hr', rollback_package_sha256=previous)
-            and new.get('reader_capabilities', {}).get(CAPABILITY) == 1)
+                from_revision=source_revision, rollback_package_sha256=previous)
+            and new.get('reader_capabilities', {}).get(capability) == 1)
     report_path = Path(state.get('migration_report', ''))
     require(report_path.name == 'report.json' and report_path.parent.parent == root/'staging'
             and report_path.parent.name.startswith('migration-')
             and report_path.is_file() and sha(report_path) == state.get('migration_report_sha256'))
     report = read_json(report_path)
     require(report.get('status') == 'passed' and report.get('package_sha256') == candidate
-            and report.get('source_revision') == 'ev1020hr'
-            and report.get('target_revision') == 'ew1020em'
+            and report.get('source_revision') == source_revision
+            and report.get('target_revision') == target_revision
             and isinstance(report.get('source_schema'), str)
             and report.get('schema_fingerprint_version') == 2)
     backup = Path(state.get('update_backup', ''))
     require(backup.is_file() and sha(backup) == state.get('migration_backup_sha256'))
-    require(database_info(database)['revision'] == 'ew1020em'
+    require(database_info(database)['revision'] == target_revision
             and migration.schema(database) == report['result_schema']
             and migration.facts(database, report['source_facts']['columns']) == report['source_facts']
             and migration.files(shared) == state.get('migration_files'))
     with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro', uri=True)) as db:
         db.execute('PRAGMA query_only=ON')
-        require(not has_facts(db))
-        for table, columns in COLUMNS.items():
-            info = {r[1]: r for r in db.execute('PRAGMA table_info("'+table+'")')}
-            require(all(name in info and info[name][2].upper() == 'TEXT'
-                        and info[name][3] == 0 and info[name][4] is None for name in columns))
+        if _shared_catalog:
+            from desktop_assistant.reader_contract import has_shared_product_master_facts
+            require(not has_shared_product_master_facts(db))
+            for table in ('customer_sharing_groups','customer_sharing_members','scrap_production_jobs'):
+                require(db.execute('SELECT COUNT(*) FROM '+table).fetchone()==(0,))
+            info={r[1]:r for r in db.execute('PRAGMA table_info(products)')}
+            column=info.get('production_variants')
+            require(column and column[2].upper()=='JSON' and column[3]==0 and column[4] is None)
+        else:
+            require(not has_facts(db))
+            for table, columns in COLUMNS.items():
+                info = {r[1]: r for r in db.execute('PRAGMA table_info("'+table+'")')}
+                require(all(name in info and info[name][2].upper() == 'TEXT'
+                            and info[name][3] == 0 and info[name][4] is None for name in columns))
         require(db.execute('PRAGMA integrity_check').fetchone() == ('ok',)
                 and not db.execute('PRAGMA foreign_key_check').fetchall())
     release = manager._execution_release(candidate, kind='migration')
     arguments, env, system_service = migration.prepare_migration(
-        release, shared, 'ew1020em', environment=environment, release_manifest=manifest)
+        release, shared, target_revision, environment=environment, release_manifest=manifest)
     # The guarded entry and environment are authenticated normally above. Only
     # the fixed direction/revision change; no arbitrary migration is accepted.
-    require(arguments[-2:] == ['upgrade', 'ew1020em'])
-    arguments[-2:] = ['downgrade', 'ev1020hr']
-    log = root/'control'/('empty-exact-recovery-'+uuid.uuid4().hex+'.log')
+    require(arguments[-2:] == ['upgrade', target_revision])
+    arguments[-2:] = ['downgrade', source_revision]
+    log = root/'control'/(('empty-shared-recovery-' if _shared_catalog else 'empty-exact-recovery-')+uuid.uuid4().hex+'.log')
     audit = dict(status='running', candidate=candidate, previous=previous,
-        from_revision='ew1020em', to_revision='ev1020hr',
+        from_revision=target_revision, to_revision=source_revision,
         source_report_sha256=state['migration_report_sha256'],
-        backup_sha256=state['migration_backup_sha256'], new_exact_facts=0,
+        backup_sha256=state['migration_backup_sha256'],
         database_replaced=False, started_at=datetime.now(timezone.utc).isoformat(), log=str(log))
-    state.update(operation='migration_running', empty_exact_schema_recovery=audit)
+    audit['new_shared_facts' if _shared_catalog else 'new_exact_facts']=0
+    state.update(operation='migration_running')
+    state['empty_shared_schema_recovery' if _shared_catalog else 'empty_exact_schema_recovery']=audit
     write_json(root/'state.json', state)
     try:
         with log.open('xb') as output:
@@ -115,7 +128,7 @@ def recover_empty_migration(manager, candidate, previous, manifest, state, envir
             else:
                 code = process.wait(timeout=180)
             require(code == 0)
-        require(database_info(database)['revision'] == 'ev1020hr'
+        require(database_info(database)['revision'] == source_revision
                 and migration.schema(database) == report['source_schema']
                 and migration.facts(database) == report['source_facts']
                 and migration.files(shared) == state['migration_files'])

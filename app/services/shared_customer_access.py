@@ -19,7 +19,7 @@ from app.services.bom_transactions import atomic_bom
 from app.services.audit_log import append_audit_event
 
 PHYSICAL_FIELDS = sorted(set(FIELDS + shared.EXTRA_FIELDS + (
-    'unit','length_mm','width_mm','height_mm','material_id','legacy_material_text','flute_type','mold_tool_id','die_cut_path')))
+    'unit','length_mm','width_mm','height_mm','material_id','legacy_material_text','flute_type','mold_tool_id','die_cut_path','production_variants')))
 
 
 def canonical(value):

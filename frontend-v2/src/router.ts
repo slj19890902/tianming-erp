@@ -76,6 +76,9 @@ router.beforeEach(async (to) => {
   if (!auth.user) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
+  if (to.path === '/shared-stock' && to.query.embedded !== '1') {
+    return { path: '/master-data', query: { shared_stock: '1' } }
+  }
   if (to.path === '/' && window.matchMedia('(max-width: 760px)').matches) return { path: '/mobile' }
   const permission = typeof to.meta.permission === 'string' ? to.meta.permission : ''
   if (permission && !auth.hasPermission(permission)) return '/'

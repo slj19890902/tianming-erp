@@ -1178,6 +1178,17 @@ class Manager:
                         new['operation'] = 'update_failed_reader_contract'
                     write_json(self.root / 'state.json', new)
                     raise ValueError('首次金额升级启动失败，受控结构恢复未通过；保持停止并保留当前数据库，未覆盖旧库') from None
+            if migrate and candidate['revision']=='ex1021cp':
+                # Return the original installed supervisor to its exact schema
+                # only after authenticated evidence proves all new facts empty.
+                from desktop_assistant.exact_sales_reader import recover_empty_migration
+                try:
+                    recover_empty_migration(self,candidate['id'],old['current'],
+                        migration_manifest,new,environment=migration_environment,_shared_catalog=True)
+                except BaseException:
+                    if new.get('operation')!='migration_failed':new['operation']='update_failed_reader_contract'
+                    write_json(self.root/'state.json',new)
+                    raise ValueError('共用资料首次启动恢复校验未通过，保留现库与现场；未覆盖旧数据') from None
             if not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']):
                 new.update(operation='update_failed_reader_contract', previous=None)
                 write_json(self.root / 'state.json', new)

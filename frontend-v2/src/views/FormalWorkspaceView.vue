@@ -15,7 +15,7 @@ const auth = useAuthStore()
 const page = props.workspacePage
 const routePath = props.workspacePath
 const active = computed(() => route.path === routePath)
-const source = '/frontend-v2/formal-workspace?embedded=1&frontend_shell=1&unified_navigation=1&page=' + encodeURIComponent(page) + (page === 'deliveries' && typeof route.query.return_key === 'string' ? '&return_key=' + encodeURIComponent(route.query.return_key) : '')
+const source = '/frontend-v2/formal-workspace?embedded=1&frontend_shell=1&unified_navigation=1&page=' + encodeURIComponent(page) + (page === 'deliveries' && typeof route.query.return_key === 'string' ? '&return_key=' + encodeURIComponent(route.query.return_key) : '') + (page === 'customers' && route.query.shared_stock === '1' ? '&shared_stock=1' : '')
 const entryMessage = ref('')
 const connectionError = ref('')
 const connected = ref(false)

@@ -35,7 +35,15 @@ def settings(db,cid,actor):
         delivery_heading_customer_id=None,delivery_address_customer_id=None)
     group=db.get(CustomerSharingGroup,member.group_id)
     members=list(db.scalars(select(CustomerSharingMember).where(CustomerSharingMember.group_id==group.id)))
+    linked_groups=select(SharedFinishedMember.group_id).join(SharedFinishedGroup,
+        SharedFinishedGroup.id==SharedFinishedMember.group_id).where(
+        SharedFinishedMember.customer_id==cid,SharedFinishedGroup.enabled.is_(True))
+    selected={str(m.customer_id):[] for m in members}
+    for row in db.scalars(select(SharedFinishedMember).where(SharedFinishedMember.group_id.in_(linked_groups),
+            SharedFinishedMember.customer_id.in_([m.customer_id for m in members]))):
+        selected[str(row.customer_id)].append(row.product_id)
     return dict(group_id=group.id,version=group.version,name=group.name,new_products_shared=group.new_products_shared,
+        shared_source_product_ids=selected,
         members=[dict(id=m.customer_id,name=_customer(db,m.customer_id,actor).name) for m in members],
         delivery_heading_customer_id=member.delivery_heading_customer_id,
         delivery_address_customer_id=member.delivery_address_customer_id)
@@ -64,6 +72,19 @@ def _sku_plan_base(db,p,customer_ids):
         if len(matches)>1:raise shared._error('同客户同编码同角色有多份资料，请在常用箱明确保留的产品')
         if matches:current.append(matches[0])
         else:missing.append(cid)
+    # Full-catalog setup must expose real quote conflicts, rather than pick a
+    # customer's most recent edit. Blank target fields can inherit the source.
+    for peer in current:
+        if peer.id == p.id:
+            continue
+        for field in master.COMMERCIAL:
+            source_value, target_value = getattr(p, field), getattr(peer, field)
+            if target_value is not None and target_value != source_value:
+                raise shared._error(f'{p.product_code} 的{field}不同：来源{source_value}，目标{target_value}；请先核对当前报价')
+    from app.models.processing_cost import ProductProcessingProfile
+    profiles=list(db.scalars(select(ProductProcessingProfile).where(ProductProcessingProfile.product_id.in_([q.id for q in current]))))
+    if len({(r.printer_mode,r.die_cut_mode,r.assembly_worker_days_per_1000) for r in profiles})>1:
+        raise shared._error(f'{p.product_code} 的加工成本例外参数不同，请先在加工成本维护中核对')
     ids=sorted(q.id for q in current)
     group=db.get(SharedFinishedGroup,gid) if gid else None
     from app.services.shared_catalog_bom import edges
@@ -156,18 +177,47 @@ def preview(db,*,customer_id,source_customer_id,product_ids=None,new_products_sh
     return result
 
 
-def activate_master(db,gid,actor):
+def activate_master(db,gid,actor,source_product_id=None):
     """Enable one canonical manufacturing version, without approving old drift."""
     products=[db.get(Product,pid) for pid in management.member_ids(db,gid)]
+    source = next((p for p in products if p.id == source_product_id), products[0])
+    from app.services.master_data_versioning import preview_versioned_update, _apply_versioned_update
+    for p in products:
+        updates={field:getattr(source,field) for field in master.COMMERCIAL
+                 if getattr(p,field) is None and getattr(source,field) is not None}
+        if updates:
+            preview=preview_versioned_update(db,object_type='product',entity=p,updates=updates,
+                expected_version=p.version,user=actor)
+            _apply_versioned_update(db,object_type='product',entity=p,updates=updates,
+                expected_version=p.version,user=actor,reason='管理员确认整套产品共用，补齐当前报价',
+                source='customer_sharing',confirmation_token=preview['confirmation_token'])
     for p in products:
         _customer(db,p.customer_id,actor)
         member=master.effective_member(db,db.get(SharedFinishedMember,p.id))
         if member.identity_json!=shared.member_identity(p):raise shared._error('共用成员资料已变化，请核对历史实物')
+    old_bases={str(p.id):shared.product_basis(p) for p in products}
+    # The reviewed source is the current master. Keep old lot identities and
+    # historical order snapshots; unify only the current customer references.
+    fields=set(access.PHYSICAL_FIELDS)|set(master.MATERIAL)|set(master.REPORT)|set(master.PRINTING)
+    from copy import deepcopy
+    for p in products:
+        if p.id==source.id:continue
+        updates={key:deepcopy(getattr(source,key)) for key in fields
+                 if getattr(p,key)!=getattr(source,key)}
+        if updates:
+            check=preview_versioned_update(db,object_type='product',entity=p,updates=updates,
+                expected_version=p.version,user=actor)
+            _apply_versioned_update(db,object_type='product',entity=p,updates=updates,
+                expected_version=p.version,user=actor,reason='管理员确认同一产品共用，以已选来源统一当前生产资料',
+                source='customer_sharing',confirmation_token=check['confirmation_token'])
     prior=master.receipt(db,gid) or dict(lots={},legacy_lot_ids=[])
     new_members={str(p.id):dict(identity_json=shared.member_identity(p),product_basis_json=shared.product_basis(p)) for p in products}
     # A newly added sales reference may use only old stock already approved
     # for an equivalent current member; a material-changed batch stays blocked.
     for frozen in prior['lots'].values():
+        for pid,basis in list(frozen['bases'].items()):
+            if basis==old_bases.get(pid):
+                frozen['bases'][pid]=new_members[pid]['product_basis_json']
         for pid,value in new_members.items():
             if pid in frozen['bases']:continue
             for old_pid,basis in list(frozen['bases'].items()):
@@ -176,13 +226,19 @@ def activate_master(db,gid,actor):
                         shared._interchangeability_key(existing['identity_json'])==shared._interchangeability_key(value['identity_json'])):
                     frozen['bases'][pid]=value['product_basis_json'];break
     prior['members']=new_members
-    prior['source_product_id']=products[0].id
-    prior['manufacturing_fields']=json.loads(access.canonical({key:getattr(products[0],key)
+    prior['full_catalog']=True
+    prior['source_product_id']=source.id
+    prior['manufacturing_fields']=json.loads(access.canonical({key:getattr(source,key)
         for key in set(access.PHYSICAL_FIELDS)|set(master.MATERIAL)|set(master.REPORT)}))
     db.add(SharedFinishedMutation(group_id=gid,operation_key='catalog-master-'+uuid4().hex,
         request_json=access.canonical(dict(actor_id=actor.id,action='enable_shared_master')),
         result_json=access.canonical({master.CAPABILITY:prior})))
     db.flush()
+    from app.models.processing_cost import ProductProcessingProfile
+    profiles=list(db.scalars(select(ProductProcessingProfile).where(ProductProcessingProfile.product_id.in_([p.id for p in products]))))
+    if profiles:
+        profile=next((r for r in profiles if r.product_id==source.id),profiles[0])
+        master.sync_processing_profile(db,db.get(Product,profile.product_id),profile,actor)
 
 
 def _apply_sku(db,action,actor):
@@ -211,7 +267,7 @@ def _apply_sku(db,action,actor):
     policy=db.get(SharedFinishedPolicy,gid)
     if policy:policy.auto_enroll=True
     else:db.add(SharedFinishedPolicy(group_id=gid,auto_enroll=True))
-    activate_master(db,gid,actor)
+    activate_master(db,gid,actor,action['source_id'])
     _attach_stock(db,gid,action,actor)
     return gid
 

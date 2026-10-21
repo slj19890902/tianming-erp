@@ -19656,6 +19656,7 @@ def _next_printing_plate_code(db: Session) -> str:
 def list_printing_plates(
     q: str | None = None,
     customer_id: int | None = Query(default=None, gt=0),
+    product_id: int | None = Query(default=None, gt=0),
     include_inactive: bool = False,
     limit: int = Query(default=200, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -19664,12 +19665,21 @@ def list_printing_plates(
     allowed_customer_ids = _mold_customer_scope(user, db)
     if allowed_customer_ids == set():
         return {"items": []}
+    shared_plate_ids = []
+    if product_id is not None:
+        product = db.get(Product, product_id)
+        if not product or product.deleted_at or (customer_id and product.customer_id != customer_id):
+            raise HTTPException(404, '当前产品不存在')
+        require_customer_access(product.customer_id, current_user=user, db=db)
+        from app.services.shared_product_master import catalog_products
+        shared_plate_ids = sorted({pid for peer in catalog_products(db, product)
+            for pid in (peer.printing_plate_1_id, peer.printing_plate_2_id, peer.printing_plate_3_id) if pid})
     query = select(PrintingPlate).options(selectinload(PrintingPlate.customer))
     if allowed_customer_ids is not None:
-        query = query.where(PrintingPlate.customer_id.in_(allowed_customer_ids))
+        query = query.where(or_(PrintingPlate.customer_id.in_(allowed_customer_ids), PrintingPlate.id.in_(shared_plate_ids)))
     if customer_id is not None:
         require_customer_access(customer_id, current_user=user, db=db)
-        query = query.where(PrintingPlate.customer_id == customer_id)
+        query = query.where(or_(PrintingPlate.customer_id == customer_id, PrintingPlate.id.in_(shared_plate_ids)))
     if not include_inactive:
         query = query.where(PrintingPlate.status == "active")
     keyword = (q or "").strip()
@@ -19739,7 +19749,7 @@ def list_printing_plates(
     )
     return {
         "items": [
-            _printing_plate_dict(
+            dict(_printing_plate_dict(
                 db,
                 row,
                 allowed_customer_ids,
@@ -19748,7 +19758,7 @@ def list_printing_plates(
                 binding_count=binding_counts.get(row.id, 0),
                 reuse_count=reuse_counts.get(row.id, 0),
                 latest_reuse=latest_reuses.get(row.id),
-            )
+            ), shared_for_product_id=product_id if row.id in shared_plate_ids else None)
             for row in rows
         ]
     }

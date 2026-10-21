@@ -61,7 +61,7 @@ from app.services.production_workflow import (
     list_production_station_task_ids,
 )
 from app.services.box_type_rules import box_type_code
-from app.services.product_drawings import default_product_drawing, engineering_drawing_condition
+from app.services.product_drawings import default_product_drawing, engineering_drawing_condition, shared_product_drawings
 from app.services.order_status_policy import ORDER_ITEM_ACTIVE_ORDER_STATUSES
 from app.services.printing_colors import parse_printing_colors
 from app.services.product_specification import (
@@ -1981,7 +1981,7 @@ def product_production_overview(
     printing_location_allowed = has_permission(
         user, "warehouse.view"
     ) or has_permission(user, "production.printing.view")
-    latest_drawing = default_product_drawing(product.drawings)
+    latest_drawing = default_product_drawing(shared_product_drawings(product))
     material_code = (
         product.default_material_code
         or (product.material.code if product.material is not None else None)
@@ -2097,7 +2097,7 @@ def product_production_drawing(
         product_id=product_id,
         visible_customer_ids=_visible_customer_ids(user, db),
     )
-    latest_drawing = default_product_drawing(product.drawings)
+    latest_drawing = default_product_drawing(shared_product_drawings(product))
     reference = latest_drawing.image_path if latest_drawing else product.die_cut_path
     if not reference:
         raise HTTPException(status_code=404, detail="当前产品没有可查看的图纸")

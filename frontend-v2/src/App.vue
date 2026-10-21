@@ -21,6 +21,7 @@ watch(() => route.path, () => { mobileMenuOpen.value = false })
 
 const isLogin = computed(() => ['/login','/connection'].includes(route.path))
 const isMobileReceive = computed(() => route.meta.mobile === true)
+const isEmbeddedSharedStock = computed(() => route.path === '/shared-stock' && route.query.embedded === '1')
 const isFormalWorkspace = computed(() => route.meta.formalCompatibility === true)
 const formalWorkspaces = computed(() => tabsStore.tabs.flatMap(tab => {
   const target = router.resolve(tab.path)
@@ -218,7 +219,7 @@ onMounted(() => {
 
 <template>
   <el-config-provider>
-    <RouterView v-if="isLogin || isMobileReceive" />
+    <RouterView v-if="isLogin || isMobileReceive || isEmbeddedSharedStock" />
     <div v-else class="erp-shell" :class="{ 'shell-large': shellUi?.uiMode === 'large' }" @keydown.esc="mobileMenuOpen = false">
       <header class="erp-header">
         <button v-if="menuGroups.length" class="mobile-menu-toggle" type="button"

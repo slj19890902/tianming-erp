@@ -139,6 +139,7 @@ _PRODUCT_FIELDS = (
     "pieces_per_box",
     "default_cutting_mode",
     "sheet_cutting_settings",
+    "production_variants",
     "production_label_enabled",
     "production_label_units_per_label",
     "flap_mm",
@@ -148,7 +149,7 @@ _PRODUCT_FIELDS = (
     "is_active",
 ) + tuple(
     field
-    for field in ("is_composite",)
+    for field in ("is_composite", "is_internal_component")
     if hasattr(Product, field)
 )
 _MATERIAL_FIELDS = (

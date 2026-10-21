@@ -260,7 +260,9 @@ ev1020hr→ew1020em只增加六个可空十进制文本字段，不回填旧订�
 
 ## 2026-10-21 ex1021cp 客户共用设置（开发候选，尚未正式发布）
 
-- 唯一迁移链 ew1020em → ex1021cp。仅新增 customer_sharing_groups、customer_sharing_members 和索引；不回填历史产品、库存或单据，不变更原表及保护触发器。
+- 唯一迁移链 ew1020em → ex1021cp。新增 customer_sharing_groups、customer_sharing_members、scrap_production_jobs 三个空表及索引；products 仅增加 nullable JSON production_variants。不随结构迁移回填历史产品、库存或单据，原索引和保护触发器保留。
 - 制造版本沿用现有共用组追加式审计事实，签名读取能力为 shared_product_master_v1。新事实启用后，不兼容旧程序禁止接管。
-- 仅两个新表均空时允许原迁移降级；有设置时拒绝有损降级。恢复仍须核对所有实际业务事实，不得只凭 revision。
+- 仅三个新表均空且全部 production_variants 为 NULL 时允许签名降级；有新事实时拒绝有损降级。恢复仍须核对所有实际业务事实，不得只凭 revision。
 - 合成隔离库升→降→再升、原表事实和索引/触发器保持、完整性/外键及有事实拒绝降级已通过；最新正式完整副本与真实 Mac 管理入口演练尚未完成。范围和历史修正见 docs/tasks/CUSTOMER_SHARED_PRODUCT_MODEL_20261021.md。
+
+- 2026-10-21 本轮补齐首次启动失败的空结构恢复：绑定签名候选/上版摘要、精确迁移回执与恢复点，核对原表事实、原件、完整性/外键与结构后才执行原签名 downgrade；不覆盖数据库。真实 Mac 受保护通道演练仍为发布前必需门禁。

@@ -254,6 +254,7 @@ from app.services.supplier_master import SupplierLookupError, resolve_supplier
 from app.services.product_drawings import (
     DrawingValidationError,
     default_product_drawing,
+    shared_product_drawings,
     engineering_drawing_condition,
     remove_drawing_files,
     save_product_drawing_files,
@@ -2745,10 +2746,10 @@ def _order_response(
                 "snapshot_flap_mm": item.snapshot_flap_mm,
                 # v0.19.2-B: 常用箱图纸（展开明细/详情图纸 fallback 用）
                 "product_drawing_file": (
-                    _product_drawing_url(default_product_drawing(item.product.drawings))
+                    _product_drawing_url(default_product_drawing(shared_product_drawings(item.product)))
                     if item.product_id
                     and item.product is not None
-                    and item.product.drawings
+                    and shared_product_drawings(item.product)
                     else None
                 ),
                 "mold_tool_id": mold_tool.id if mold_tool else None,

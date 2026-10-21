@@ -51,6 +51,7 @@ from app.models.mold_tool import MoldTool, MoldToolCustomer
 from app.models.printing_plate import PrintingPlate
 from app.models.product import Product
 from app.models.product_drawing import ProductDrawing
+from app.services.product_drawings import shared_product_drawings
 from app.models.supplier import ExternalPackagingProduct, Supplier
 from app.models.user import User
 from app.services.flute_mapping import (
@@ -354,7 +355,7 @@ def _normalize_product_printing_configuration_for_api(
         ) from error
 
 
-def _validate_product_printing_plates(db: Session, payload: ProductPayload) -> None:
+def _validate_product_printing_plates(db: Session, payload: ProductPayload, product: Product | None = None) -> None:
     for plate_id in (
         payload.printing_plate_1_id,
         payload.printing_plate_2_id,
@@ -368,7 +369,9 @@ def _validate_product_printing_plates(db: Session, payload: ProductPayload) -> N
         if plate.status != "active":
             raise HTTPException(status_code=400, detail=f"挂板 {plate.plate_code} 不是启用状态")
         if plate.customer_id != payload.customer_id:
-            raise HTTPException(status_code=400, detail=f"挂板 {plate.plate_code} 不属于当前客户")
+            from app.services.shared_product_master import plate_allowed
+            if product is None or product.customer_id != payload.customer_id or not plate_allowed(db, product, plate):
+                raise HTTPException(status_code=400, detail=f"挂板 {plate.plate_code} 未获当前产品共用资格")
 
 
 def _crease_width_error(
@@ -484,7 +487,14 @@ class ProductExternalSupplyPayload(BaseModel):
 
 class ProductPayload(BaseModel):
     share_with_customer_group: bool | None = None
+    production_variants: list[dict] | None = None
     sheet_cutting_settings: dict | None = None
+
+    @field_validator('production_variants')
+    @classmethod
+    def validate_production_variants(cls, value):
+        from app.services.production_variants import normalize_variants
+        return normalize_variants(value)
 
     @field_validator("sheet_cutting_settings")
     @classmethod
@@ -1335,6 +1345,8 @@ def _product_write_data(payload: ProductPayload, user: User) -> dict:
     data = payload.model_dump(include=set(ProductPayload.model_fields))
     data.pop("external_supply", None)
     data.pop("share_with_customer_group", None)
+    if 'production_variants' not in payload.model_fields_set:
+        data.pop('production_variants', None)
     if "sheet_cutting_settings" not in payload.model_fields_set:
         data.pop("sheet_cutting_settings", None)
     from app.services.customer_document_fields import FIELDS
@@ -1362,6 +1374,8 @@ def _validated_product_versioned_updates(
     payload: ProductPayload,
     user: User,
 ) -> dict:
+    from app.services.production_variants import validate_references as validate_variants
+    validate_variants(db, payload.customer_id, payload.production_variants)
     if product.sheet_cutting_settings and "sheet_cutting_settings" not in payload.model_fields_set:
         payload.sheet_cutting_settings = product.sheet_cutting_settings
     if product.sheet_cutting_settings and payload.sheet_cutting_settings is None and not (payload.is_virtual_composite_parent or payload.box_style == "BOM组合" or payload.supply_mode == "external_purchase"):
@@ -1418,7 +1432,7 @@ def _validated_product_versioned_updates(
     )
     _validate_product_material_flute(db, payload)
     if not printing_configuration_unchanged:
-        _validate_product_printing_plates(db, payload)
+        _validate_product_printing_plates(db, payload, product)
     _validate_changed_product_crease_widths(payload, product)
     updates = _product_write_data(payload, user)
     if not virtual_marker_was_submitted:
@@ -1529,7 +1543,7 @@ def _response(product: Product, user: User, *, bom_profiles: dict | None = None)
         ),
         "drawings": [
             _drawing_response(drawing)
-            for drawing in product.drawings
+            for drawing in shared_product_drawings(product)
         ],
     }
     # v0.19.2-B: 注入材质快照，供订单自动带出用
@@ -1546,6 +1560,7 @@ def _response(product: Product, user: User, *, bom_profiles: dict | None = None)
         data["material_weight"] = None
         data["material_flute_type"] = None
     data["readiness"] = product_readiness(product, bom_profiles=bom_profiles)
+    data['production_variants'] = product.production_variants
     if product.mold_tool is not None:
         data["mold_tool"] = {
             "id": product.mold_tool.id,
@@ -2566,7 +2581,21 @@ def download_product_drawing(
     if drawing is None:
         raise HTTPException(status_code=404, detail="图纸版本不存在")
     product = _product_or_404(db, drawing.product_id)
-    require_customer_access(product.customer_id, current_user=user, db=db)
+    try:
+        require_customer_access(product.customer_id, current_user=user, db=db)
+    except HTTPException as denied:
+        if denied.status_code != 403:
+            raise
+        from app.services.shared_product_master import catalog_products
+        for peer in catalog_products(db, product):
+            try:
+                require_customer_access(peer.customer_id, current_user=user, db=db)
+                break
+            except HTTPException as peer_denied:
+                if peer_denied.status_code != 403:
+                    raise
+        else:
+            raise denied
     # The requested variant is encoded in the final path component generated by
     # the server.  It never becomes a filesystem path.
     requested_name = str(display_name or "")
@@ -2666,6 +2695,8 @@ def create_product(
 
 
 def _create_product(payload, db, user, *, commit=True) -> dict:
+    from app.services.production_variants import validate_references as validate_variants
+    validate_variants(db, payload.customer_id, payload.production_variants)
     from app.services.partner_product_defaults import product_defaults
     customer = db.get(Customer, payload.customer_id)
     defaults = product_defaults(customer_name=customer.name if customer else '',

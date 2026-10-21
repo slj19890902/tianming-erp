@@ -1096,5 +1096,7 @@ def revert_production_completion(
 
 from app.api.stock_preparation import router as stock_preparation_router
 router.include_router(stock_preparation_router)
+from app.api.scrap_production import router as scrap_production_router
+router.include_router(scrap_production_router)
 from app.api.bom_assembly_confirmation import router as bom_assembly_router
 router.include_router(bom_assembly_router)

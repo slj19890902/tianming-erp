@@ -2613,6 +2613,9 @@ class _PendingRequisitionReadContext:
         from app.services.order_replenishment_supply import allocations
         self._replenishment_supply = allocations(db, order_item_ids=item_ids)
         self._ordinary_item_ids -= {key[0] for key in self._replenishment_supply}
+        from app.models.scrap_production import ScrapProductionJob
+        self._ordinary_item_ids -= set(db.scalars(select(ScrapProductionJob.order_item_id).where(
+            ScrapProductionJob.order_item_id.in_(item_ids),ScrapProductionJob.status=='pending')))
 
     def is_ordinary(self, item: OrderItem) -> bool:
         return item.id in self._ordinary_item_ids
@@ -3787,6 +3790,10 @@ def _current_requisition_requirements(
     remaining_required_piece_qty = max(
         required_piece_qty - semi_finished_reserved_piece_qty, 0
     )
+    from app.services.scrap_production import pending_quantity as scrap_pending_quantity
+    scrap_covered_piece_qty = min(remaining_required_piece_qty,
+        scrap_pending_quantity(db,item.id)*resolved_pieces_per_box) if normalized_component=='whole' else 0
+    remaining_required_piece_qty -= scrap_covered_piece_qty
     from app.services.order_replenishment_supply import coverage, reading_supply
     planned = {"replenishment_covered_piece_qty": 0, "replenishment_sources": []}
     if not reading_supply():
@@ -3795,6 +3802,7 @@ def _current_requisition_requirements(
         remaining_required_piece_qty -= planned["replenishment_covered_piece_qty"]
     return {
         **planned,
+        'scrap_covered_piece_qty':scrap_covered_piece_qty,
         "cutting_mode": resolved_cutting_mode,
         "cutting_factor": _cutting_factor(resolved_cutting_mode),
         "pieces_per_box": resolved_pieces_per_box,

@@ -19,7 +19,68 @@ MATERIAL = ('material_id', 'legacy_material_text', 'flute_type', 'layer_count', 
 REPORT = ('report_length_mm', 'report_width_mm', 'base_report_length_mm', 'base_report_width_mm',
           'crease_type', 'crease_left_mm', 'crease_middle_mm', 'crease_right_mm',
           'base_crease_type', 'base_crease_left_mm', 'base_crease_middle_mm', 'base_crease_right_mm',
-          'default_cutting_mode', 'sheet_cutting_settings')
+          'default_cutting_mode', 'sheet_cutting_settings', 'production_variants')
+COMMERCIAL = ('sale_unit_price', 'sale_unit_price_no_tax', 'cost_unit_price', 'board_price', 'suggested_price')
+PRINTING = ('printing_plate_mode', 'printing_plate_1_id', 'printing_plate_2_id', 'printing_plate_3_id',
+            'print_content', 'printing_colors', 'plate_alignment_value_mm', 'plate_mount_value_mm',
+            'machine_set_length_mm', 'machine_set_width_mm', 'machine_set_height_mm')
+
+
+def catalog_products(db, product):
+    """Only explicitly enabled full-catalog memberships grant shared assets."""
+    pair = _pair(db, product)
+    if not pair:
+        return [product]
+    gid, products = pair
+    policy = receipt(db, gid)
+    group = db.get(SharedFinishedGroup, gid)
+    if not policy or not policy.get('full_catalog') or not group.enabled:
+        return [product]
+    from app.services.shared_member_policy import states
+    enabled = states(db, gid)
+    if enabled.get(str(product.id), enabled.get(product.id, True)) is False:
+        return [product]
+    return [p for p in products if p.is_active and not p.deleted_at and not p.purged_at
+            and enabled.get(str(p.id), enabled.get(p.id, True)) is not False]
+
+
+def plate_allowed(db, product, plate):
+    if plate.customer_id == product.customer_id:
+        return True
+    # A foreign plate must already be assigned to this exact shared SKU.
+    return any(p.customer_id == plate.customer_id and plate.id in
+               (p.printing_plate_1_id, p.printing_plate_2_id, p.printing_plate_3_id)
+               for p in catalog_products(db, product))
+
+
+def sync_processing_profile(db, product, profile, actor):
+    """Current labour exceptions share one update transaction and original CAS."""
+    from app.models.processing_cost import ProductProcessingProfile
+    from app.api.deps import require_customer_access
+    from app.services.audit_log import append_audit_event
+    from app.services.shared_customer_access import canonical
+    fields = ('printer_mode', 'die_cut_mode', 'assembly_worker_days_per_1000')
+    values = {k: getattr(profile, k) for k in fields}
+    for peer in catalog_products(db, product):
+        if peer.id == product.id:
+            continue
+        require_customer_access(peer.customer_id, current_user=actor, db=db)
+        old = db.scalar(select(ProductProcessingProfile).where(ProductProcessingProfile.product_id == peer.id))
+        before = {k: getattr(old, k) for k in fields} if old else None
+        if old:
+            claimed = db.execute(update(ProductProcessingProfile).where(
+                ProductProcessingProfile.id == old.id, ProductProcessingProfile.version == old.version)
+                .values(**values, version=ProductProcessingProfile.version + 1, updated_by=actor.id))
+            if claimed.rowcount != 1:
+                raise HTTPException(409, '共用产品加工参数已变化，全部未保存')
+        else:
+            db.add(ProductProcessingProfile(product_id=peer.id, **values, version=1,
+                created_by=actor.id, updated_by=actor.id))
+        append_audit_event(db,event_category='business',result='success',source='web',module_code='finance',
+            action_code='sync_shared_processing_profile',resource='products',actor=actor,
+            entity_type='product',entity_id=peer.id,details={'source_product_id':product.id,
+                'before':json.loads(canonical(before)), 'after':json.loads(canonical(values))})
+    db.flush()
 
 
 def receipt(db, group_id):
@@ -211,6 +272,8 @@ def prepare_sync(db, product, updates, user):
         raise HTTPException(409, '共用产品的客户、编码和BOM角色不能单边变更，请先调整共用范围')
     from app.services.shared_customer_access import PHYSICAL_FIELDS
     fields = set(PHYSICAL_FIELDS) | set(MATERIAL) | set(REPORT)
+    if receipt(db, gid).get('full_catalog'):
+        fields |= set(COMMERCIAL) | set(PRINTING)
     changed = {key for key in fields if key in updates and
                (getattr(product,key) != updates[key] if key == 'sheet_cutting_settings' else
                 shared._value(getattr(product,key)) != shared._value(updates[key]))}
@@ -235,6 +298,13 @@ def prepare_sync(db, product, updates, user):
         _validate_references(db, customer_id=peer.customer_id,
             material_id=peer_updates.get('material_id',peer.material_id),
             mold_tool_id=peer_updates.get('mold_tool_id',peer.mold_tool_id))
+        from app.models.printing_plate import PrintingPlate
+        for field in ('printing_plate_1_id', 'printing_plate_2_id', 'printing_plate_3_id'):
+            plate_id = peer_updates.get(field)
+            if plate_id:
+                plate = db.get(PrintingPlate, plate_id)
+                if plate is None or plate.status != 'active' or not plate_allowed(db, product, plate):
+                    raise HTTPException(409, '挂板不适用于本共用产品，未保存任何一方资料')
         preview = preview_versioned_update(db, object_type='product',entity=peer,updates=peer_updates,
                                           expected_version=peer.version,user=user)
         peers.append(dict(product=peer,version=peer.version,token=preview['confirmation_token']))

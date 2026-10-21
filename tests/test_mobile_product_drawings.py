@@ -27,8 +27,9 @@ def drawing_app(mobile_portal_app, tmp_path, monkeypatch):
     app.include_router(router, prefix="/api/mobile/erp")
     root = tmp_path / "attachments"
     root.mkdir()
+    (root.parent / "legacy").mkdir()
     monkeypatch.setenv("ERP_FILE_STORAGE_DIR", str(root))
-    monkeypatch.setenv("ERP_LEGACY_UPLOAD_DIR", str(root / "legacy"))
+    monkeypatch.setenv("ERP_LEGACY_UPLOAD_DIR", str(root.parent / "legacy"))
     Image.new("RGB", (1200, 900), "white").save(root / "engineering.png")
     Image.new("RGB", (240, 180), "red").save(root / "thumb.webp")
     document = fitz.open()

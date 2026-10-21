@@ -19,7 +19,8 @@ from app.models.customer import Customer
 from app.models.drawing_design import DrawingRelease
 from app.models.product import Product
 from app.models.product_drawing import ProductDrawing
-from app.services.product_drawings import PRINT_ARTWORK_PREFIX, engineering_drawing_condition
+from app.models.shared_finished_stock import SharedFinishedMember
+from app.services.product_drawings import PRINT_ARTWORK_PREFIX, engineering_drawing_condition, shared_product_drawings
 from app.services.secure_uploads import resolve_stored_reference
 
 HEADERS = {"Cache-Control": "private, no-store, max-age=0", "Pragma": "no-cache",
@@ -71,25 +72,33 @@ def product_drawing_metadata(db: Session, product_ids, *, user, visible_customer
         return result
     if not can_preview_product(user):
         return {value: {"status": "forbidden", "items": []} for value in ids}
-    statement = select(Product).join(Customer).where(Product.id.in_(ids),
+    statement = select(Product,SharedFinishedMember.product_id).select_from(Product).join(Customer,Customer.id==Product.customer_id).outerjoin(
+        SharedFinishedMember,SharedFinishedMember.product_id==Product.id).where(Product.id.in_(ids),
         Product.is_active.is_(True), Product.deleted_at.is_(None), Customer.is_active.is_(True))
     if visible_customer_ids is not None:
         statement = statement.where(Product.customer_id.in_(visible_customer_ids))
-    products = {p.id: p for p in db.scalars(statement)}
+    rows=list(db.execute(statement))
+    products = {p.id: p for p,member_id in rows}
+    shared_ids={p.id for p,member_id in rows if member_id is not None}
     if not products:
         return result
     # Uploads are separate engineering attachments, not replacements. Return
     # every retained upload, in stable newest-first order, without opening files.
     # Product/customer filtering happens before attachment metadata is read.
     sources: dict[int, list[DrawingSource]] = {}
-    attachments = select(ProductDrawing).where(ProductDrawing.product_id.in_(products),
-        engineering_drawing_condition()).order_by(ProductDrawing.product_id,
-        ProductDrawing.uploaded_at.desc(), ProductDrawing.id.desc())
+    targets={pid:{pid} for pid in products}
+    from app.services.shared_product_master import catalog_products
+    for pid in shared_ids:
+        for peer in catalog_products(db,products[pid]):
+            targets.setdefault(peer.id,set()).add(pid)
+    attachments=select(ProductDrawing).where(ProductDrawing.product_id.in_(targets),
+        engineering_drawing_condition()).order_by(ProductDrawing.uploaded_at.desc(),ProductDrawing.id.desc())
     for drawing in db.scalars(attachments):
         if _engineering_reference(drawing.image_path):
-            sources.setdefault(drawing.product_id, []).append(DrawingSource(
-                f"attachment-{drawing.id}", drawing.image_path,
-                thumbnail=drawing.thumbnail_path, uploaded_at=drawing.uploaded_at))
+            for pid in targets[drawing.product_id]:
+                sources.setdefault(pid, []).append(DrawingSource(
+                    f"attachment-{drawing.id}", drawing.image_path,
+                    thumbnail=drawing.thumbnail_path, uploaded_at=drawing.uploaded_at))
     released = select(DrawingRelease.id.label("id"), func.row_number().over(
         partition_by=DrawingRelease.product_id, order_by=DrawingRelease.id.desc()).label("rank")
     ).join(Product, Product.id == DrawingRelease.product_id).where(
@@ -123,8 +132,10 @@ def require_drawing_source(db: Session, product: Product, key: str) -> DrawingSo
     if key == "legacy":
         source = DrawingSource(key, product.die_cut_path or "")
     elif re.fullmatch(r"attachment-[1-9][0-9]*", key):
+        from app.services.shared_product_master import catalog_products
+        shared_ids=[p.id for p in catalog_products(db,product)]
         drawing = db.scalar(select(ProductDrawing).where(ProductDrawing.id == int(key.split("-")[1]),
-                            ProductDrawing.product_id == product.id, engineering_drawing_condition()))
+                            ProductDrawing.product_id.in_(shared_ids), engineering_drawing_condition()))
         source = DrawingSource(key, drawing.image_path, thumbnail=drawing.thumbnail_path) if drawing else None
     elif re.fullmatch(r"release-[1-9][0-9]*", key):
         release = db.scalar(select(DrawingRelease).where(DrawingRelease.id == int(key.split("-")[1]),

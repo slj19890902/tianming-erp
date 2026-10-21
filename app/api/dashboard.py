@@ -91,7 +91,9 @@ def stock_warnings(db: Session = Depends(get_db), user: User = Depends(can_read)
     if not all(has_permission(user, p) for p in ("warehouse.view", "requisition.view")):
         raise HTTPException(403, "需要库存及报料查看权限")
     visible = None if has_unrestricted_customer_access(user, db) else customer_scope_ids(user, db)
-    return {'items': _common_box_low_stock_warnings(db, visible)}
+    from app.services.dashboard_workbench import decorate_stock_warnings
+    return {'items': decorate_stock_warnings(db, user=user,
+        warnings=_common_box_low_stock_warnings(db, visible), visible_customer_ids=visible)}
 
 
 @router.post("/task-preferences")

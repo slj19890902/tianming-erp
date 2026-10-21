@@ -58,6 +58,33 @@ def _pending_requests(db, user, scope):
     return list(db.scalars(query.order_by(BusinessApproval.created_at, BusinessApproval.id)))
 
 
+def decorate_stock_warnings(db, *, user, warnings, visible_customer_ids, requests=None, customers=None):
+    """Keep the full homepage and its stock-only refresh on the same contract."""
+    if requests is None:
+        requests = _pending_requests(db, user, visible_customer_ids)
+    if customers is None:
+        ids = {w['customer_id'] for w in warnings}
+        if visible_customer_ids is not None:
+            ids.intersection_update(visible_customer_ids)
+        customers = {c.id: {'label': c.chinese_short_name or c.customer_code or c.name}
+            for c in db.scalars(select(Customer).where(Customer.id.in_(ids)))} if ids else {}
+    pending = {}
+    for request in requests:
+        if request.customer_id not in customers or request.action != 'stock_replenishment':
+            continue
+        try:
+            payload = json.loads(request.payload_json or '{}')
+        except (TypeError, ValueError):
+            payload = {}
+        for item in payload.get('items', []):
+            if item.get('stock_policy_id'):
+                pending.setdefault((request.customer_id, int(item['stock_policy_id'])), []).append(request.id)
+    for warning in warnings:
+        warning['customer_label'] = customers.get(warning['customer_id'], {}).get('label') or warning.get('customer_name')
+        warning['pending_request_ids'] = pending.get((warning['customer_id'], warning['policy_id']), [])
+    return warnings
+
+
 def build_workbench(db, *, user, data, warnings, today, visible_customer_ids):
     sources = data["rows"]
     requests = _pending_requests(db, user, visible_customer_ids)
@@ -201,17 +228,9 @@ def build_workbench(db, *, user, data, warnings, today, visible_customer_ids):
     from app.services.business_approvals import ACTIONS
     applicant_ids = {r.applicant_id for r in requests}
     applicants = dict(db.execute(select(User.id, User.real_name).where(User.id.in_(applicant_ids))).all()) if applicant_ids else {}
-    pending_policies = {}
     for request in requests:
         if request.customer_id not in customers:
             continue
-        try:
-            payload = json.loads(request.payload_json or "{}")
-        except (TypeError, ValueError):
-            payload = {}
-        for item in payload.get("items", []) if request.action == "stock_replenishment" else []:
-            if item.get("stock_policy_id"):
-                pending_policies.setdefault((request.customer_id, int(item["stock_policy_id"])), []).append(request.id)
         customer = customers[request.customer_id]
         tasks.append({
             "id": f"approval:{request.id}", "key": "approval", "type": "待审批" if user.role in {"admin", "boss"} else "我的申请",
@@ -223,10 +242,8 @@ def build_workbench(db, *, user, data, warnings, today, visible_customer_ids):
             "target": "approvals", "action_text": "审核" if user.role in {"admin", "boss"} else "查看申请",
             "target_filter": {"customer_id": request.customer_id},
         })
-    for warning in warnings:
-        customer = customers.get(warning["customer_id"], {})
-        warning["customer_label"] = customer.get("label") or warning.get("customer_name")
-        warning["pending_request_ids"] = pending_policies.get((warning["customer_id"], warning["policy_id"]), [])
+    decorate_stock_warnings(db, user=user, warnings=warnings, visible_customer_ids=visible_customer_ids,
+        requests=requests, customers=customers)
     tasks.sort(key=lambda r: ({"overdue": 0, "today": 1, "approval": 2}.get(r["urgency"], 3), r.get("due_date") or "9999-12-31", r["id"]))
     return {"tasks": tasks, "customers": sorted(customers.values(), key=lambda c: c["label"]),
             "can_review": user.role in {"admin", "boss"},

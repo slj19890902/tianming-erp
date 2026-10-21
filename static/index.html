@@ -6842,7 +6842,7 @@
                 </div>
                 <div v-if="!['其他','BOM组合'].includes(productForm.box_style)" class="field product-supply-compact"><label>结构</label><select class="select" v-model="productForm.supply_mode"><option value="corrugated_production">纸板生产</option><option value="mixed_bom">纸板＋外购组件</option></select></div>
               </div>
-              <div class="field" style="grid-column:1/-1">
+              <div v-if="productForm.supply_mode!=='external_purchase'" class="field" style="grid-column:1/-1">
                 <label>客户规格原文</label>
                 <textarea class="input" rows="2" maxlength="1000" v-model="productForm.customer_specification" placeholder="可填写客户订单中的规格与包装说明"></textarea>
                 <div class="toolbar"><button type="button" class="btn small" @click="productForm.customer_specification=null">使用产品尺寸</button><button type="button" class="btn small" @click="productForm.customer_specification=''">送货规格留空</button></div>
@@ -6881,7 +6881,12 @@
                   <template v-else-if="productForm.external_packaging_category_code==='other_packaging'">
                     <div class="field wide"><label>客户要求及报给供应商的规格</label><textarea class="textarea" maxlength="500" v-model.trim="productForm._external_specification.summary" @input="syncProductExternalProfile" placeholder="按客户样本填写材质、孔径、长×宽×厚及其他采购要求"></textarea></div>
                   </template>
-                  <div class="field"><label>客户规格</label><input class="input" :value="productForm.external_packaging_specification_summary || '请填写客户规格'" readonly /></div>
+                  <div class="field wide">
+                    <label>客户规格（同步客户送货单）</label>
+                    <textarea class="input" rows="2" maxlength="1000" v-model="productExternalDeliverySpecification" placeholder="填写客户送货单需要显示的规格"></textarea>
+                    <div class="toolbar"><button type="button" class="btn small" @click="productForm.customer_specification=null">随外购规格更新</button><button type="button" class="btn small" @click="productForm.customer_specification=''">送货规格留空</button></div>
+                    <div class="muted">保存后刷新客户送货单即可同步；采购规格与数量比例保持独立。{{ productForm.customer_specification == null ? "当前随外购规格更新。" : productForm.customer_specification === "" ? "当前送货规格留空。" : "当前使用填写的客户规格。" }}</div>
+                  </div>
                   <div class="field"><label>采购单位</label><input class="input" :value="productForm.external_packaging_purchase_unit || '自动带出'" readonly /></div>
                   <div class="field">
                     <label>默认采购数量比例</label>
@@ -11394,6 +11399,15 @@
           productExternalPackagingCategoryOptions() {
             return this.supplierCategoryOptions.filter(option => option.value !== "corrugated_board"
               && (option.value !== "coated_board" || (this.productForm?.id && this.productForm.external_packaging_category_code === "coated_board")));
+          },
+          productExternalDeliverySpecification: {
+            get() {
+              const form = this.productForm || {};
+              return String(form.customer_specification ?? form.external_packaging_specification_summary ?? "");
+            },
+            set(value) {
+              this.productForm.customer_specification = String(value ?? "");
+            },
           },
           pagedSuppliers() {
             const pageSize = Math.max(1, Number(this.pageSize || DESKTOP_LIST_PAGE_SIZE_STANDARD));

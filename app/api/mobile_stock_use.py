@@ -6,13 +6,15 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import case, exists, func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.api.deps import PermissionChecker, get_db, has_permission
 from app.core.time_contract import utc_now_naive, utc_naive_to_api
 from app.models.user import User
+from app.models.customer import Customer
+from app.models.product import Product
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail as Finished, SemiFinishedInventoryDetail as Board,
     InventoryLot, InventoryMovement, WarehouseLocation,
@@ -25,6 +27,50 @@ from app.services.mobile_product_drawings import attach_product_drawings
 
 router = APIRouter(prefix="/warehouse/dimension-stock")
 PURPOSES = {"cash": "现金取用", "sample": "免费打样"}
+
+
+def _dimension_products(db, user, scope, values, operators, flute, near_mm, offset, limit):
+    """Read-only identification candidates, independent of lot existence/snapshots."""
+    columns = [Product.length_mm, Product.width_mm, Product.height_mm]
+    targets = [int(value) for value in values]
+    differences = [func.abs(column - target) for column, target in zip(columns, targets)]
+    query = select(Product, Customer.name).join(Customer, Customer.id == Product.customer_id).where(
+        Product.is_active.is_(True), Product.deleted_at.is_(None), Customer.is_active.is_(True),
+    )
+    if scope is not None:
+        query = query.where(Product.customer_id.in_(scope))
+    for column, target, difference, operator in zip(columns, targets, differences, operators):
+        # Always bound every axis: a huge box is not an identity candidate merely
+        # because it meets a stock-cutting >= filter. Never rotate the axes.
+        query = query.where(column > 0, difference <= near_mm)
+        if operator != "near":
+            query = query.where({"eq": column == target, "ge": column >= target, "le": column <= target}[operator])
+    if flute:
+        query = query.where(func.upper(Product.flute_type) == flute.strip().upper())
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    # Portable scalar maximum; rank before LIMIT/OFFSET, with stable tie-breaks.
+    maximum = differences[0]
+    for difference in differences[1:]:
+        maximum = case((maximum >= difference, maximum), else_=difference)
+    stocked = exists(select(InventoryLot.id).join(Finished, Finished.inventory_lot_id == InventoryLot.id).where(
+        Finished.product_id == Product.id, Finished.owner_customer_id == Product.customer_id,
+        InventoryLot.inventory_type == "finished", InventoryLot.status.in_(["active", "frozen"]),
+        InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged > 0,
+    )).correlate(Product)
+    rows = db.execute(query.add_columns(stocked).order_by(
+        maximum, sum(differences), Customer.name, Product.customer_material_code, Product.id,
+    ).offset(offset).limit(limit)).all()
+    items = []
+    for product, customer, has_stock in rows:
+        dimensions = [float(getattr(product, name)) for name in ("length_mm", "width_mm", "height_mm")]
+        deltas = [round(value - target, 2) for value, target in zip(dimensions, targets)]
+        items.append({
+            "product_id": product.id, "code": product.customer_material_code or product.product_code,
+            "name": product.product_name, "customer": customer, "dimensions": dimensions,
+            "dimension_deltas": deltas, "match_exact": all(delta == 0 for delta in deltas),
+            "flute": product.flute_type, "has_stock": bool(has_stock), "can_take": False,
+        })
+    return total, attach_product_drawings(db, items, user=user, visible_customer_ids=scope)
 
 
 def _stock_payload(lot):
@@ -65,6 +111,9 @@ def search(
     height_op: Literal["near", "eq", "ge", "le"] = "ge",
     flute: str | None = Query(None, max_length=20),
     offset: int = Query(0, ge=0), limit: int = Query(30, ge=1, le=100),
+    near_mm: int = Query(10, ge=1, le=50),
+    include_products: bool = False,
+    product_offset: int = Query(0, ge=0), product_limit: int = Query(20, ge=1, le=50),
     db: Session = Depends(get_db), user: User = Depends(PermissionChecker("warehouse.view")),
 ):
     from app.api.warehouse import _lot_query, _visible_customer_ids, _visible_lot_condition
@@ -92,7 +141,9 @@ def search(
             continue
         value = int(value)
         query = query.where(column.is_not(None), column > 0)
-        if operator != "near":
+        if operator == "near":
+            query = query.where(func.abs(column - value) <= near_mm)
+        else:
             query = query.where({"eq": column == value, "ge": column >= value, "le": column <= value}[operator])
         distance = distance + func.abs(column - value)
     if flute:
@@ -103,8 +154,15 @@ def search(
         query = query.order_by(distance)
     lots = db.scalars(query.order_by(InventoryLot.id).offset(offset).limit(limit)).all()
     items = attach_product_drawings(db, [_stock_payload(lot) for lot in lots], user=user, visible_customer_ids=scope)
+    product_total, product_matches = 0, []
+    if include_products and kind == "box" and all(value is not None for value in values):
+        product_total, product_matches = _dimension_products(
+            db, user, scope, values, [length_op, width_op, height_op], flute, near_mm, product_offset, product_limit,
+        )
     return {"total": total, "offset": offset, "limit": limit,
             "can_execute": has_permission(user, "warehouse.execute"),
+            "product_matches": product_matches, "product_total": product_total,
+            "product_offset": product_offset, "product_limit": product_limit, "near_mm": near_mm,
             "items": items}
 
 

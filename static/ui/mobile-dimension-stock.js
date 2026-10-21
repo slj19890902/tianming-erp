@@ -22,30 +22,34 @@
     root.innerHTML = `<style>
       #dimensionStock {margin-bottom:18px;min-width:0} #dimensionStock h2{margin:0 0 10px;font-size:18px}
       #dimensionStock .ds-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-      #dimensionStock .ds-axis{display:grid;grid-template-columns:28px 58px minmax(0,1fr);align-items:center;gap:4px;margin-top:8px}
+      #dimensionStock .ds-axis{display:grid;grid-template-columns:28px 68px minmax(0,1fr);align-items:center;gap:4px;margin-top:8px}
       #dimensionStock input,#dimensionStock select{min-width:0;width:100%;font-size:16px;min-height:42px;box-sizing:border-box}
       #dimensionStock button{min-height:44px;padding:8px 12px} #dimensionStock .ds-result{display:block;width:100%;text-align:left;margin-top:8px;white-space:normal;overflow-wrap:anywhere;background:#f4f8ff;color:#163253;border:1px solid #cbd5e1;border-radius:8px}
       #dimensionStock .ds-actions{display:flex;gap:8px;margin-top:10px} #dimensionStock .ds-actions>*{flex:1}
       #dimensionStock .ds-take{background:#b91c1c;color:white;border:0;border-radius:8px} #dimensionStock .ds-cancel{background:#15803d;color:white;border:0;border-radius:8px}
-      #dimensionStock .ds-detail{margin-top:10px;padding:10px;border:1px solid #cbd5e1;border-radius:8px}
+      #dimensionStock .ds-detail{overflow-wrap:anywhere;margin-top:10px;padding:10px;border:1px solid #cbd5e1;border-radius:8px}
       #dimensionStock small{font-size:13px} #dimensionStock [hidden]{display:none!important}
       #dimensionStock #dsRecoveryItem{white-space:pre-line;overflow-wrap:anywhere}
-    </style><h2>按尺寸找库存</h2><form id="dsForm">
-      <div class="ds-grid"><select id="dsKind" aria-label="库存形态"><option value="board">纸板 / 半成品</option><option value="box">纸箱成品</option></select>
+    </style><h2>按尺寸找库存 / 产品</h2><form id="dsForm">
+      <div class="ds-grid"><select id="dsKind" aria-label="库存形态"><option value="box">纸箱成品</option><option value="board">纸板 / 半成品</option></select>
       <select id="dsFlute" aria-label="楞型"><option value="">全部楞型</option>${["A","B","E","AB","BE","AAA","ABC","NONE"].map(v=>`<option value="${v}">${v==="NONE"?"卡纸":v+"楞"}</option>`).join("")}</select></div>
-      ${[["length","长"],["width","宽"],["height","高"]].map(([axis,label])=>`<label class="ds-axis" id="ds-${axis}-row" ${axis==="height"?"hidden":""}>${label}<select id="ds-${axis}-op" aria-label="${label}条件"><option value="ge">≥</option><option value="eq">＝</option><option value="le">≤</option></select><input id="ds-${axis}" type="text" inputmode="numeric" pattern="[0-9]{1,5}" maxlength="5" placeholder="毫米" aria-label="${label}毫米"></label>`).join("")}
-      <div class="ds-actions"><button type="submit">查库存</button><button type="button" id="dsClear">清空</button></div></form>
+      ${[["length","长"],["width","宽"],["height","高"]].map(([axis,label])=>`<label class="ds-axis" id="ds-${axis}-row">${label}<select id="ds-${axis}-op" aria-label="${label}条件"><option value="near">接近</option><option value="ge">≥</option><option value="eq">＝</option><option value="le">≤</option></select><input id="ds-${axis}" type="text" inputmode="numeric" pattern="[0-9]{1,5}" maxlength="5" placeholder="毫米" aria-label="${label}毫米"></label>`).join("")}
+      <label>接近范围<select id="dsTolerance" aria-label="接近范围"><option value="10">每边 ±10 mm</option><option value="20">每边 ±20 mm</option><option value="50">每边 ±50 mm</option></select></label>
+      <small>长、宽、高按原顺序比较。填全纸箱尺寸可同时查找未入库产品。</small>
+      <div class="ds-actions"><button type="submit">查询</button><button type="button" id="dsClear">清空</button></div></form>
       <p id="dsReceipt" role="status" aria-live="polite" hidden></p><button id="dsRefresh" type="button" hidden>刷新库存</button>
       <p id="dsStatus" role="status" aria-live="polite"></p><button id="dsRecover" type="button" hidden>核对上次取用</button>
       <button id="dsReloadRecovery" type="button" hidden>重新读取恢复记录</button>
       <section id="dsRecovery" class="ds-detail" hidden><p id="dsRecoveryItem" hidden></p><p id="dsRecoveryStatus" role="status" aria-live="polite"></p>
         <div class="ds-actions"><button id="dsContinue" class="ds-take" type="button" hidden>按当前账号继续这笔取用</button>
         <button id="dsRecoveryAck" type="button" hidden>已核对</button><button id="dsRecoveryStock" type="button" hidden>查看库存 / 取用记录</button></div></section>
-      <div id="dsResults"></div>
+      <section id="dsProducts" hidden><h3>相近产品档案</h3><p id="dsProductStatus" role="status"></p><div id="dsProductResults"></div>
+      <div class="ds-actions" id="dsProductPager" hidden><button id="dsProductPrev" type="button">上一页产品</button><span id="dsProductPage"></span><button id="dsProductNext" type="button">下一页产品</button></div></section>
+      <h3 id="dsStockHeading" hidden>实存批次</h3><div id="dsResults"></div>
       <div class="ds-actions" id="dsPager" hidden><button id="dsPrev" type="button">上一页</button><span id="dsPage"></span><button id="dsNext" type="button">下一页</button></div>
       <div id="dsDetail" class="ds-detail" hidden></div>`;
     const get = id => root.querySelector("#" + id);
-    let offset = 0, items = [], criteria = null, selected = null, selectedCanExecute = false, busy = false, serial = 0, detailSerial = 0, resolveSerial = 0;
+    let offset = 0, productOffset = 0, items = [], criteria = null, selected = null, selectedCanExecute = false, busy = false, serial = 0, detailSerial = 0, resolveSerial = 0;
     const pendingKey = `tm-dimension-take-pending-v2:${userId}`, legacyKey = "tm-dimension-take-pending-v1";
     let pending = null, legacy = null, resolved = null, storageBlocked = false, accountChanged = false;
     const controllers = new Set();
@@ -162,18 +166,42 @@
       }
       if (get("dsFlute").value) params.set("flute",get("dsFlute").value);
       if (params.size===1) throw new Error("请填写尺寸或选择楞型");
+      params.set("near_mm", get("dsTolerance").value || "10");
+      params.set("include_products", "true");
       return params;
+    }
+    function clearProducts() {
+      window.TmProductDrawings?.disposeWithin(get("dsProductResults"));
+      get("dsProductResults").replaceChildren(); get("dsProducts").hidden = true;
+      get("dsProductPager").hidden = true; get("dsStockHeading").hidden = true;
+    }
+    function renderProducts(data) {
+      if (criteria.get("kind") !== "box") return;
+      get("dsProducts").hidden = false; get("dsStockHeading").hidden = false;
+      const complete = ["length", "width", "height"].every(axis => criteria.has(axis));
+      const matches = complete ? (data.product_matches || []) : [], total = data.product_total || 0;
+      get("dsProductStatus").textContent = complete
+        ? `找到 ${total} 款产品 · 每边不超过 ±${data.near_mm || criteria.get("near_mm")} mm，按所选条件筛选。尺寸相近仅供辨认，请核对客户与实物。`
+        : "填全长、宽、高，可查找没有入库记录的相近产品。";
+      get("dsProductResults").innerHTML = matches.map((item, index) => {
+        const delta = (item.dimension_deltas || []).map((v, i) => `${["长", "宽", "高"][i]}${v > 0 ? "+" : ""}${v} mm`).join(" · ");
+        return `<article class="ds-detail" data-index="${index}"><strong>${esc(item.code)}</strong><p>${esc(item.customer)} · ${esc(item.name)}</p><p>${esc(item.dimensions.join("×"))} mm${item.flute ? ` · ${item.flute === "NONE" ? "卡纸" : esc(item.flute) + "楞"}` : ""}</p><small>${item.match_exact ? "尺寸完全一致" : "相近尺寸"} · ${esc(delta)}<br>${item.has_stock ? "有实存记录，请在实存批次核对位置与数量" : "暂无实存 · 产品档案，仅供辨认"}</small></article>`;
+      }).join("");
+      get("dsProductResults").querySelectorAll("article").forEach(card => window.TmProductDrawings?.append(card, matches[Number(card.dataset.index)]));
+      get("dsProductPager").hidden = total <= 20;
+      get("dsProductPrev").disabled = productOffset === 0; get("dsProductNext").disabled = productOffset + 20 >= total;
+      get("dsProductPage").textContent = `${Math.floor(productOffset / 20) + 1} / ${Math.max(1, Math.ceil(total / 20))}`;
     }
     async function search(reset = false) {
       if (!active() || busy) return false;
       const token = ++serial;
       try {
-        if (reset || !criteria) { criteria = readCriteria(); offset = 0; }
-        close(); status("查询中…"); window.TmProductDrawings?.disposeWithin(get("dsResults")); get("dsResults").replaceChildren(); get("dsPager").hidden=true;
-        const params = new URLSearchParams(criteria); params.set("offset",offset); params.set("limit",30);
+        if (reset || !criteria) { criteria = readCriteria(); offset = 0; productOffset = 0; }
+        close(); clearProducts(); status("查询中…"); window.TmProductDrawings?.disposeWithin(get("dsResults")); get("dsResults").replaceChildren(); get("dsPager").hidden=true;
+        const params = new URLSearchParams(criteria); params.set("offset",offset); params.set("limit",30); params.set("product_offset", productOffset); params.set("product_limit", 20);
         const data = await request(apiGet, base+"?"+params);
         if (!active() || token!==serial) return false;
-        items = data.items; status(`找到 ${data.total} 个库存批次 · 按尺寸接近度排列`);
+        renderProducts(data); items = data.items; status(`找到 ${data.total} 个库存批次 · 按尺寸接近度排列`);
         get("dsResults").innerHTML = items.map((item,index)=>`<div class="ds-result-group" data-index="${index}"><button class="ds-result" type="button" data-index="${index}"><strong>${esc(item.code || item.name)}</strong>　${esc(item.dimensions.filter(v=>v!=null).join("×"))} mm<br>${esc(item.name)} · ${esc(item.customer)}<br><small>${esc(qtyText(item))}${item.status==="frozen"?" · 冻结":""}　查看位置 ›</small></button></div>`).join("");
         get("dsResults").querySelectorAll("button").forEach(button=>button.onclick=()=>detail(items[Number(button.dataset.index)],data.can_execute));
         get("dsResults").querySelectorAll(".ds-result-group").forEach(group=>window.TmProductDrawings?.append(group,items[Number(group.dataset.index)]));
@@ -328,11 +356,13 @@
       await sendPending();
     }
     for(const axis of ["length","width","height"])get("ds-"+axis).oninput=event=>{event.target.value=digits(event.target.value);};
-    get("dsKind").onchange=()=>{get("ds-height-row").hidden=get("dsKind").value!=="box";};
+    get("dsKind").onchange=()=>{const box=get("dsKind").value==="box";get("ds-height-row").hidden=!box;for(const axis of ["length","width","height"])get("ds-"+axis+"-op").value=box?"near":"ge";};
     get("dsForm").onsubmit=event=>{event.preventDefault();search(true);};
+    get("dsProductPrev").onclick=()=>{if(!busy){productOffset=Math.max(0,productOffset-20);search();}};
+    get("dsProductNext").onclick=()=>{if(!busy){productOffset+=20;search();}};
     get("dsPrev").onclick=()=>{if(!busy){offset=Math.max(0,offset-30);search();}};
     get("dsNext").onclick=()=>{if(!busy){offset+=30;search();}};
-    get("dsClear").onclick=()=>{if(!active() || busy)return;serial++;criteria=null;offset=0;get("dsForm").reset();get("ds-height-row").hidden=true;window.TmProductDrawings?.disposeWithin(get("dsResults"));get("dsResults").replaceChildren();get("dsPager").hidden=true;close();status("");};
+    get("dsClear").onclick=()=>{if(!active() || busy)return;serial++;criteria=null;offset=0;productOffset=0;clearProducts();get("dsForm").reset();get("ds-height-row").hidden=false;window.TmProductDrawings?.disposeWithin(get("dsResults"));get("dsResults").replaceChildren();get("dsPager").hidden=true;close();status("");};
     get("dsRecover").onclick=resolveRecovery;
     get("dsContinue").onclick=continueResolved;
     get("dsReloadRecovery").onclick=readRecovery;

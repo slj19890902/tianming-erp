@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.702"
-APP_VERSION_NAME = "未印刷模切半成品确认用途抵扣"
+APP_VERSION = "v0.22.703"
+APP_VERSION_NAME = "手机尺寸查找未入库产品"
 APP_BUILD_DATE = "2026-10-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6861,3 +6861,16 @@ APP_VERIFICATION_STEPS = [
     "按实际需求核对采用数量并保存订单，确认预占和剩余库存正确；再次点击保存不重复扣减。",
 ]
 APP_CHANGELOG = [*(f"v0.22.702：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.703：按实测纸箱尺寸辨认未入库产品。
+APP_CHANGES = [
+    "手机查询按尺寸同时查实存和有效产品档案，无入库记录也能找到高度匹配的存货编码及客户名称。",
+    "纸箱默认按完整长宽高每轴±10毫米匹配，可扩大至20或50毫米；原方向比较、精确优先、显示逐轴差和实存状态。",
+    "产品候选只供辨认，保留客户查看范围、原库存数量与取用门禁；无数据库迁移，不修改历史业务事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新手机端，进入查询→按尺寸查实存/找产品/取用，输入纸箱380×340×420，核对相近产品的编码、客户及档案尺寸。",
+    "确认未入库产品标为暂无实存，可查看已有工程图纸；范围可在每边10/20/50毫米切换。",
+    "用实际已有库存尺寸查询，确认实存批次仍显示原数量与位置；产品档案卡片没有取用操作。",
+]
+APP_CHANGELOG = [*(f"v0.22.703：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -143,8 +143,8 @@ def test_mobile_sections_and_buttons():
     root=Path(__file__).resolve().parents[1]
     html=(root/'static/mobile_erp.html').read_text(encoding='utf-8')
     js=(root/'static/ui/mobile-dimension-stock.js').read_text(encoding='utf-8')
-    assert html.index('id="dimensionStock"')<html.index('id="lookupInput"')
-    assert 'TmDimensionStock?.mount({apiGet, apiPost})' in html
+    assert html.index('id="fieldStockTools"') < html.index('id="dimensionStock"')
+    assert 'TmDimensionStock?.mount({apiGet, apiPost, userId:user.id' in html
     assert 'maxlength="5"' in js and 'inputmode="numeric"' in js
     assert '.ds-take{background:#b91c1c' in js and '.ds-cancel{background:#15803d' in js
     assert 'get("dsCancel").onclick=close' in js

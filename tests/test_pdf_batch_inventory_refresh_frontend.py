@@ -27,10 +27,10 @@ const sandbox = {
   axios: { defaults:{}, interceptors:{ request:{ use() {} }, response:{ use() {} } } },
   Vue: { createApp(definition) { sandbox.definition = definition; return { component() { return this; }, mount() { return this; } }; } },
   localStorage: { getItem(k) { return storage.get(k) || ""; }, setItem(k,v) {storage.set(k,v)}, removeItem() {} },
-  window: {}, TMOrderReference:{component:{}}, console, URLSearchParams, setTimeout, clearTimeout,
+  window: {TianmingIncomingActual:{methods:{}}}, TMOrderReference:{component:{}}, console, URLSearchParams, setTimeout, clearTimeout,
 };
 vm.createContext(sandbox);
-vm.runInContext(script.slice(0, script.indexOf('app.mixin(TMDemandStock.mixin)')), sandbox);
+vm.runInContext(script.slice(0, script.indexOf('window.TmDeliveryEditorLayout.install(app)')), sandbox);
 const methods = sandbox.definition.methods;
 
 if (methods.inventoryComponents({_inventory_product:{is_composite:true,box_style:'A3'}}).length !== 0)
@@ -144,7 +144,7 @@ sandbox.axios.post = async (url, payload) => {
     }]});
     draft._save_status = 'success';
   }
-  assert(refreshCalls === 2, `expected two authoritative refreshes, got ${refreshCalls}`);
+  assert(refreshCalls === 3, `expected both pending drafts then the final draft to refresh, got ${refreshCalls}`);
   assert(first._save_status === "success", `first status ${first._save_status}`);
   assert(second._save_status === "success", `second status ${second._save_status}: ${second._save_message}`);
   process.stdout.write(JSON.stringify({ refreshCalls, serverVersion, requestedQuantities }));
@@ -162,7 +162,7 @@ sandbox.axios.post = async (url, payload) => {
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
-        "refreshCalls": 2,
+        "refreshCalls": 3,
         "serverVersion": 3,
         "requestedQuantities": [20, 10],
     }

@@ -24,8 +24,8 @@ def require_reader(db, manifest):
         raise ValueError('当前数据库已有精确销售金额，目标程序不能保留原始单价与金额；禁止启动或回退')
 
 
-def recover_empty_migration(manager, candidate, previous, manifest, state, environment=None, *, _shared_catalog=False):
-    """Undo only this six-NULL-column migration after failed first startup.
+def recover_empty_migration(manager, candidate, previous, manifest, state, environment=None, *, _shared_catalog=False, _supplier_edges=False):
+    """Undo only a fixed empty additive migration after failed first startup.
 
     The installed previous supervisor cannot recognize a future revision. Return
     to its exact original schema using the signed downgrade, never an old DB.
@@ -42,14 +42,21 @@ def recover_empty_migration(manager, candidate, previous, manifest, state, envir
     from desktop_assistant import migration
     from desktop_assistant.runtime_platform import process_options
 
+    if _shared_catalog and _supplier_edges:
+        raise ValueError('恢复类型不唯一')
     source_revision, target_revision = ('ew1020em','ex1021cp') if _shared_catalog else ('ev1020hr','ew1020em')
     capability = 'shared_product_master_v1' if _shared_catalog else CAPABILITY
+    label, audit_key, prefix = ('客户共用','empty_shared_schema_recovery','empty-shared-recovery-') if _shared_catalog else ('精确金额','empty_exact_schema_recovery','empty-exact-recovery-')
+    if _supplier_edges:
+        from desktop_assistant.supplier_sheet_reader import CAPABILITY as capability
+        source_revision, target_revision = 'ex1021cp', 'ey1021se'
+        label, audit_key, prefix = '供应商毛净', 'empty_supplier_edges_recovery', 'empty-supplier-edges-recovery-'
     root = manager.root
     shared = root / 'shared'
     database = shared / 'data/carton_erp.sqlite3'
     def require(ok):
         if not ok:
-            raise ValueError(('客户共用' if _shared_catalog else '精确金额')+'首次启动恢复依据不完整，保留数据库及现场')
+            raise ValueError(label+'首次启动恢复依据不完整，保留数据库及现场')
     require(manager._process() is None and state.get('operation') == 'update'
             and state.get('current') == candidate)
     packages = [root / 'packages' / (identity + '.zip') for identity in (previous, candidate)]
@@ -78,7 +85,14 @@ def recover_empty_migration(manager, candidate, previous, manifest, state, envir
             and migration.files(shared) == state.get('migration_files'))
     with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro', uri=True)) as db:
         db.execute('PRAGMA query_only=ON')
-        if _shared_catalog:
+        if _supplier_edges:
+            from desktop_assistant.supplier_sheet_reader import COLUMNS as edge_columns, has_facts as edge_facts
+            require(not edge_facts(db))
+            for table, columns in edge_columns.items():
+                info = {r[1]: r for r in db.execute('PRAGMA table_info("'+table+'")')}
+                require(all(name in info and info[name][2].upper() == 'VARCHAR(20)'
+                    and info[name][3] == 0 and info[name][4] is None for name in columns))
+        elif _shared_catalog:
             from desktop_assistant.reader_contract import has_shared_product_master_facts
             require(not has_shared_product_master_facts(db))
             for table in ('customer_sharing_groups','customer_sharing_members','scrap_production_jobs'):
@@ -101,15 +115,15 @@ def recover_empty_migration(manager, candidate, previous, manifest, state, envir
     # the fixed direction/revision change; no arbitrary migration is accepted.
     require(arguments[-2:] == ['upgrade', target_revision])
     arguments[-2:] = ['downgrade', source_revision]
-    log = root/'control'/(('empty-shared-recovery-' if _shared_catalog else 'empty-exact-recovery-')+uuid.uuid4().hex+'.log')
+    log = root/'control'/(prefix+uuid.uuid4().hex+'.log')
     audit = dict(status='running', candidate=candidate, previous=previous,
         from_revision=target_revision, to_revision=source_revision,
         source_report_sha256=state['migration_report_sha256'],
         backup_sha256=state['migration_backup_sha256'],
         database_replaced=False, started_at=datetime.now(timezone.utc).isoformat(), log=str(log))
-    audit['new_shared_facts' if _shared_catalog else 'new_exact_facts']=0
+    audit['new_supplier_edge_facts' if _supplier_edges else ('new_shared_facts' if _shared_catalog else 'new_exact_facts')]=0
     state.update(operation='migration_running')
-    state['empty_shared_schema_recovery' if _shared_catalog else 'empty_exact_schema_recovery']=audit
+    state[audit_key]=audit
     write_json(root/'state.json', state)
     try:
         with log.open('xb') as output:

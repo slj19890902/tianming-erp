@@ -152,6 +152,9 @@ class Manager:
         if database.is_file():
             with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
                 db.execute('PRAGMA query_only=ON')
+                from desktop_assistant.supplier_sheet_reader import has_facts as sheet_facts, CAPABILITY as SHEET_READER
+                if sheet_facts(db) and not self._shared_finished_reader(release, SHEET_READER):
+                    return False
                 if has_mold_label_text_facts(db) and not self._shared_finished_reader(release, MOLD_LABEL_TEXT_READER):
                     return False
                 from desktop_assistant.exact_sales_reader import has_facts, CAPABILITY
@@ -1189,6 +1192,15 @@ class Manager:
                     if new.get('operation')!='migration_failed':new['operation']='update_failed_reader_contract'
                     write_json(self.root/'state.json',new)
                     raise ValueError('共用资料首次启动恢复校验未通过，保留现库与现场；未覆盖旧数据') from None
+            if migrate and candidate['revision']=='ey1021se':
+                from desktop_assistant.exact_sales_reader import recover_empty_migration
+                try:
+                    recover_empty_migration(self,candidate['id'],old['current'],
+                        migration_manifest,new,environment=migration_environment,_supplier_edges=True)
+                except BaseException:
+                    if new.get('operation')!='migration_failed':new['operation']='update_failed_reader_contract'
+                    write_json(self.root/'state.json',new)
+                    raise ValueError('供应商毛净首次启动恢复校验未通过，保留现库与现场；未覆盖旧数据') from None
             if not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']):
                 new.update(operation='update_failed_reader_contract', previous=None)
                 write_json(self.root / 'state.json', new)

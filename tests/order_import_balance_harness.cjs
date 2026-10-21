@@ -2,8 +2,8 @@
 const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
 const html=fs.readFileSync('static/index.html','utf8');
 const script=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(m=>m[1]).find(s=>s.trim());
-const sandbox={axios:{defaults:{},interceptors:{response:{use(){}}}},Vue:{createApp(d){sandbox.definition=d;return{component(){return this},mount(){return this}}}},localStorage:{getItem(){return ''},setItem(){},removeItem(){}},window:{},console,URLSearchParams,setTimeout,clearTimeout,TMOrderReference:{component:{}}};
-vm.createContext(sandbox);vm.runInContext(script,sandbox);
+const sandbox={axios:{defaults:{},interceptors:{request:{use(){}},response:{use(){}}}},Vue:{createApp(d){sandbox.definition=d;return{component(){return this},mixin(){return this},mount(){return this}}}},localStorage:{getItem(){return ''},setItem(){},removeItem(){}},window:{TianmingIncomingActual:{methods:{}}},console,URLSearchParams,setTimeout,clearTimeout,TMOrderReference:{component:{}},TMDemandStock:{mixin:{},summary:{},importer:{}},TMManualReplenishment:{picker:{}},TMManualSheetDeduction:{component:{}}};
+vm.createContext(sandbox);vm.runInContext(script.slice(0,script.indexOf('window.TmDeliveryEditorLayout.install(app)')),sandbox);
 const ctx={...sandbox.definition.methods,canViewSalesAmounts:true};
 const line={matched_product_id:1,quantity:60,_inventory:ctx.newOrderInventoryState()};
 line._inventory.authoritative={finished_stock_on_hand_quantity:100,finished_stock_reserved_quantity:20,finished_stock_available_quantity:80,finished_stock_line_allocated_quantity:60,finished_stock_allocated_quantity:60,finished_stock_remaining_quantity:20,finished_stock_batch_remaining_quantity:20,finished_stock_unit:'只'};

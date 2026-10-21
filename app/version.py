@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.701"
+APP_VERSION = "v0.22.702"
 APP_VERSION_NAME = "未印刷模切半成品确认用途抵扣"
 APP_BUILD_DATE = "2026-10-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -6838,7 +6838,19 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.700：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
-# v0.22.701：在订单采用时确认真实批次用途，与预占同事务保存。
+# v0.22.701：同客户PDF草稿库存版本统一刷新。
+APP_CHANGES = [
+    "邮件收单保存前刷新同客户参与计算的待存草稿；保存成功后自动刷新剩余草稿，避免自己上一份订单预占库存引发版本冲突。",
+    "刷新期间暂停数量预览，保留人工采用、不采用及批量保存确认；剩余草稿刷新失败不改变已保存订单的成功回执。",
+    "本版无数据库迁移，后台库存版本、数量、客户权限和幂等保护继续生效。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新邮件收单，按实际需要连续保存同客户多份PDF，核对剩余库存与需报料数量自动更新。",
+    "核对人工选择不采用的片料仍不采用；已保存订单显示保存成功，重复查询不重复创建或预占。",
+]
+APP_CHANGELOG = [*(f"v0.22.701：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.702：在订单采用时确认真实批次用途，与预占同事务保存。
 APP_CHANGES = [
     "同客户未印刷模切半成品，资料兼容但尚未关联当前产品时，可在原库存行确认适用并采用，不再只能查看用途待核。",
     "保存订单时按选定批次记录具体产品用途和预占；取消、未选及保存失败不建立关联，其他批次和产品不自动套用。",
@@ -6848,4 +6860,4 @@ APP_VERIFICATION_STEPS = [
     "刷新邮箱收单，打开PO2026100117的21301464半成品库存，核对实物与位置后点击对应批次的确认未印刷且适用并采用。",
     "按实际需求核对采用数量并保存订单，确认预占和剩余库存正确；再次点击保存不重复扣减。",
 ]
-APP_CHANGELOG = [*(f"v0.22.701：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.702：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

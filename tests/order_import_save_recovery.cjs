@@ -2,9 +2,9 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
 const repo=path.resolve(__dirname,'..'),html=fs.readFileSync(path.join(repo,'static/index.html'),'utf8');
 const source=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(x=>x[1]).find(x=>x.trim());
 const store=new Map();const storage={get length(){return store.size},key:i=>[...store.keys()][i]??null,getItem:k=>store.get(k)??null,setItem:(k,v)=>store.set(k,String(v)),removeItem:k=>store.delete(k)};
-const box={axios:{defaults:{},interceptors:{request:{use(){}},response:{use(){}}}},Vue:{createApp(d){box.methods=d.methods;return{component(){return this},mixin(d){Object.assign(box.methods,d.methods);return this},mount(){return this}}}},localStorage:storage,window:{},TMOrderReference:{component:{}},TMDemandStock:{mixin:{},component:{}},TMManualReplenishment:{picker:{}},console,URLSearchParams,setTimeout,clearTimeout};
+const box={axios:{defaults:{},interceptors:{request:{use(){}},response:{use(){}}}},Vue:{createApp(d){box.methods=d.methods;return{component(){return this},mixin(d){Object.assign(box.methods,d.methods);return this},mount(){return this}}}},localStorage:storage,window:{TianmingIncomingActual:{methods:{}}},TMOrderReference:{component:{}},TMDemandStock:{mixin:{},component:{}},TMManualReplenishment:{picker:{}},TMManualSheetDeduction:{component:{}},console,URLSearchParams,setTimeout,clearTimeout};
 box.axios.create=config=>{box.lastHttpConfig=config;return box.axios};
-vm.createContext(box);vm.runInContext(source,box);
+vm.createContext(box);vm.runInContext(source.slice(0,source.indexOf('window.TmDeliveryEditorLayout.install(app)')),box);
 vm.runInContext(fs.readFileSync(path.join(repo,'static/ui/pdf-workspace.js'),'utf8'),box);box.window.ERPPdfWorkspace.install({mixin(d){Object.assign(box.methods,d.methods)}});
 const moduleFile=path.join(repo,'static/ui/order-import-save-recovery.js');if(fs.existsSync(moduleFile))vm.runInContext(fs.readFileSync(moduleFile,'utf8'),box);
 function draft(name='one'){return{source_name:name,file_hash:name,order_date:'2026-10-10',confirmed:true,matched_customer_id:1,customer_po:'PO-'+name,preview_safety_token:'synthetic-token',integrity_check:{integrity_status:'passed'},items:[{matched_product_id:1,quantity:10,unit_price:1}],_save_status:'idle'};}

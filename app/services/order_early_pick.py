@@ -12,7 +12,7 @@ from app.models.customer import Customer
 from app.models.order import OrderItem
 from app.models.order_import_source import OrderImportSource, OrderImportSourceLine
 from app.models.warehouse_inventory import InventoryLot, WarehouseLocation, WarehouseLocationAlias
-from app.services.excel_document_import import PICK_LIST_TEMPLATE
+from app.services.excel_document_import import ORDER_LIST_TEMPLATES
 
 
 def _document(raw):
@@ -25,7 +25,7 @@ def _document(raw):
 
 def source_for_order(db, order_id):
     source = db.scalar(select(OrderImportSource).where(OrderImportSource.order_id == order_id))
-    if source and _document(source.confirmation_summary_json).get("source_template") == PICK_LIST_TEMPLATE:
+    if source and _document(source.confirmation_summary_json).get("source_template") in ORDER_LIST_TEMPLATES:
         return source
     return None
 

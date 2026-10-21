@@ -165,7 +165,7 @@ def signed_source_lines(draft: dict) -> list[dict[str, Any]]:
                      "stock_reference": item.get("source_stock_reference"),
                      "original_quantity": item.get("quantity"),
                      "original_code": item.get("raw_product_code")}}
-                   if draft.get("template") == "yg_gy_location_order_v1" else {}),
+                   if draft.get("template") in {"yg_gy_location_order_v1", "yg_gy_shortage_order_v1"} else {}),
             }
         )
     return result

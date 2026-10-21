@@ -274,7 +274,7 @@ from app.services.secure_uploads import (
     stored_file_metadata,
     temporary_token_file,
 )
-from app.services.excel_document_import import ExcelImportError, PICK_LIST_TEMPLATE, parse_excel_document
+from app.services.excel_document_import import ExcelImportError, ORDER_LIST_TEMPLATES, parse_excel_document
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
@@ -4466,7 +4466,7 @@ def _order_import_preview(
         draft["delivery_date"] = delivery_date.isoformat()
     draft["file_hash"] = digest
     matched = _match_pdf_preview_for_user(db, draft, user)
-    if matched.get("template") == PICK_LIST_TEMPLATE and matched.get("matched_customer_id"):
+    if matched.get("template") in ORDER_LIST_TEMPLATES and matched.get("matched_customer_id"):
         from app.services.order_import_source import resolve_upload_source
         try:
             existing, _predecessor, _old_order_id = resolve_upload_source(
@@ -4844,7 +4844,7 @@ def _excel_order_draft(db: Session, document) -> dict:
         },
         "items": items,
         "warnings": list(document.warnings)
-        + (["原表无客户单号，可留空；系统会生成订单号。"] if document.template == PICK_LIST_TEMPLATE else
+        + (["原表无客户单号，可留空；系统会生成订单号。"] if document.template in ORDER_LIST_TEMPLATES else
            (["未识别到客户订单号，保存前必须人工填写。"] if not document.customer_po else [])),
     }
 
@@ -7600,7 +7600,7 @@ def _create_order_impl(
         user,
         observability=observability,
     )
-    if pdf_safety_claims.get("source_template") == PICK_LIST_TEMPLATE and payload.delivery_date is None:
+    if pdf_safety_claims.get("source_template") in ORDER_LIST_TEMPLATES and payload.delivery_date is None:
         raise HTTPException(422, "位置清单订单请填写要求交货日期")
     if observability is not None and pdf_safety_claims:
         observability["pdf_filename"] = _safe_pdf_log_filename(

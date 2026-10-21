@@ -222,7 +222,8 @@ def enroll_new_lot(db, lot, *, operator_id, production_verified=False):
     if not production_verified and not (
             lot.source_type in {"manual", "stocktake"} and lot.source_ref_type is None):
         return False
-    member = db.get(SharedFinishedMember, identity[0])
+    from app.services.shared_product_master import effective_member
+    member = effective_member(db, db.get(SharedFinishedMember, identity[0]))
     from app.services.shared_member_policy import enabled
     if not member or not _policy(db, member.group_id) or not enabled(db, member.group_id, identity[0]):
         return False
@@ -264,7 +265,8 @@ def enroll_production_receipt(db, lot, *, completion, item, operator_id):
     from app.services.shared_finished_receipts import order_identity
     from app.services.production_workflow import _new_task_printing_snapshot, ProductionWorkflowError
     product = db.get(Product, item.product_id)
-    member = db.get(SharedFinishedMember, item.product_id)
+    from app.services.shared_product_master import effective_member
+    member = effective_member(db, db.get(SharedFinishedMember, item.product_id))
     from app.services.shared_member_policy import enabled
     if not member or not _policy(db, member.group_id) or not enabled(db, member.group_id, item.product_id) or not shared._ordinary(db, product):
         return False

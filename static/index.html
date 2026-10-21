@@ -6626,6 +6626,22 @@
                   <div v-if="customerFinishedStorageState.preferences.length" class="muted" style="margin-top:6px">系统按顺序找空位；所选区域都无空位时会停止并提示，不会改放一楼。</div>
                 </template>
               </section>
+              <details v-if="customerForm.id && canEditCustomers" class="panel" style="margin:10px 0;padding:10px" @toggle="if($event.target.open) loadCustomerSharing()">
+                <summary><strong>产品与库存共用</strong><span class="muted"> · 母子公司／部门共用设置</span></summary>
+                <div v-if="customerSharing.error" class="notice danger">{{customerSharing.error}}</div>
+                <fieldset :disabled="customerSharing.busy || customerSharing.loadedId!==Number(customerForm.id)" @change="customerSharing.preview=null" class="form-grid" style="margin-top:8px">
+                  <div class="field"><label>沿用哪个客户的产品</label><search-select v-model="customerSharing.source_customer_id" :options="activeCustomerOptions.filter(c=>Number(c.id)!==Number(customerForm.id))" label-key="name" value-key="id" @change="loadSharingProducts" placeholder="选择共用客户"></search-select></div>
+                  <div class="field"><label>现有产品范围</label><select class="select" v-model="customerSharing.scope"><option value="all">全部产品</option><option value="selected">指定产品</option></select></div>
+                  <div class="field"><label>以后新增产品</label><select class="select" v-model="customerSharing.new_products_shared"><option :value="false">默认仅本客户</option><option :value="true">默认全组共用</option></select></div>
+                  <div class="field"><label>送货单抬头</label><select class="select" v-model="customerSharing.delivery_heading_customer_id"><option :value="null">本客户资料</option><option v-for="c in sharingDocumentCustomers()" :key="c.id" :value="c.id">{{c.name}}</option></select></div>
+                  <div class="field"><label>送货地址／联系人</label><select class="select" v-model="customerSharing.delivery_address_customer_id"><option :value="null">本客户资料</option><option v-for="c in sharingDocumentCustomers()" :key="c.id" :value="c.id">{{c.name}}</option></select></div>
+                  <div class="field wide" v-if="customerSharing.scope==='selected'" style="max-height:160px;overflow:auto"><label v-for="p in customerSharing.products" :key="p.id" style="display:block"><input type="checkbox" :value="p.id" v-model="customerSharing.selected" /> {{p.code}} · {{p.name}}</label></div>
+                </fieldset>
+                <div class="muted">共用生产资料与合法库存；销售价格保持独立。开票是否共用，请使用下面现有的“开票／税务资料 → 合作模式”。历史单据保持原内容。</div>
+                <div class="toolbar-group" style="margin-top:8px"><button class="btn" type="button" :disabled="customerSharing.busy || !customerSharing.source_customer_id" @click="previewCustomerSharing">核对共用范围</button><button v-if="customerSharing.preview" class="btn primary" type="button" :disabled="customerSharing.busy" @click="saveCustomerSharing">保存共用设置</button></div>
+                <div v-if="customerSharing.preview" class="notice" style="margin-top:8px">可共用 {{customerSharing.preview.actions.length}} 款；需核对 {{customerSharing.preview.blocked.length}} 款。保存只处理可共用项目。<div v-for="p in customerSharing.preview.blocked" :key="p.product_id">{{p.code}}：{{p.reason}}</div><template v-for="a in customerSharing.preview.actions" :key="a.source_id"><div v-for="lot in (a.stock_pending||[])" :key="lot.lot_id">{{a.code}} · 批次{{lot.lot_id}}暂不共用：{{lot.reason}}</div></template></div>
+                <div v-if="customerSharing.saved" class="status green">{{customerSharing.saved}}</div>
+              </details>
               <section v-if="customerForm.id && canManageInvoiceProfiles" class="panel" style="margin:10px 0 0;padding:10px">
                 <div class="toolbar"><strong>开票 / 税务资料</strong><span v-if="customerInvoiceState.profileLoading" class="status blue">税务资料读取中</span><span v-else :class="['status',customerInvoiceProfile.confirmation_status==='confirmed'?'green':'orange']">{{ customerInvoiceProfile.confirmation_status==='confirmed'?'已确认':'待确认' }}</span><button class="btn small" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving" @click="loadCustomerInvoiceProfile(customerForm.id)">{{ customerInvoiceState.profileLoading ? '读取中…' : '刷新' }}</button></div>
                 <div class="notice">首次设置：先核对下方“默认项目规则”，选择已确认并保存；再选择销方、补齐税务资料，选择已确认并保存税务资料。保存客户基本资料不会代替这两项保存。</div>
@@ -6788,6 +6804,7 @@
               <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">
                 转入常用箱前请确认单片报料尺寸。用户手填值不会被自动覆盖；只有点击“重新推荐”才会重算。
               </div>
+              <div v-if="productForm.shared_manufacturing_enabled" class="notice">共用产品：材质、报料及生产资料保存后同步至共用客户；各客户价格和历史单据保持独立。</div>
               <div class="product-form-row product-core-row">
                 <div class="field"><label>正式存货编码</label><input class="input" v-model.trim="quotationConvertForm.product_code" /></div>
                 <div class="field"><label>产品名称</label><input class="input" v-model.trim="quotationConvertForm.product_name" /></div>
@@ -6830,6 +6847,7 @@
               <div class="product-form-row product-core-row">
                 <div class="field"><label>客户</label><search-select v-model="productForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户" @change="onProductExternalCustomerChange"></search-select></div>
                 <div class="field"><label>存货编码</label><input class="input" v-model.trim="productForm.product_code" /></div>
+                <div v-if="!productForm.id" class="field"><label>产品范围</label><select class="select" v-model="productForm.share_with_customer_group"><option :value="null">沿用客户共用设置</option><option :value="false">仅本客户</option><option :value="true">客户共用组</option></select></div>
                 <div class="field"><label>客户料号（品目号／物料代号）</label><input class="input" v-model.trim="productForm.customer_material_code" /></div>
                 <div class="field"><label>产品名称</label><input class="input" v-model.trim="productForm.product_name" /></div>
                 <div class="field"><label>箱型</label>
@@ -7601,9 +7619,9 @@
               </details>
               <div v-for="(draft,draftIndex) in orderImportDrafts" :key="draft.file_hash || draft.source_name" v-show="(!emailQueueMode || !pdfQueueVisible) && pdfCurrentDraft(draft)" class="order-group-detail-card" style="margin-bottom:12px">
 
-                <div v-if="draft.template==='yg_gy_location_order_v1' && (draft._saved_order_id || draft.duplicate_order_id)" class="toolbar-group" style="margin-bottom:10px"><button type="button" class="btn primary" @click="openEarlyPickPrint(draft._saved_order_id || draft.duplicate_order_id)">打印提前备货单</button><span class="muted">包含未生产和缺货产品，可先备已有成品。</span></div>
+                <div v-if="['yg_gy_location_order_v1','yg_gy_shortage_order_v1'].includes(draft.template) && (draft._saved_order_id || draft.duplicate_order_id)" class="toolbar-group" style="margin-bottom:10px"><button type="button" class="btn primary" @click="openEarlyPickPrint(draft._saved_order_id || draft.duplicate_order_id)">打印提前备货单</button><span class="muted">包含未生产和缺货产品，可先备已有成品。</span></div>
                 <manual-replenishment-picker v-if="canRequisition" :customer-id="draft.matched_customer_id" :lines="draft.items"></manual-replenishment-picker>
-                <details v-if="draft.source_format==='weekly_demand' || draft.template==='yg_gy_location_order_v1'"><summary>原需求表与原单库存参考（不写入仓库）</summary><div v-for="row in draft.items" :key="row.line_no">{{row.raw_product_code}} · 原位置 {{row.source_location||'未填写'}} · 原文 {{(row.raw_lines||[]).join(' ')}}<span v-if="row.source_stock_reference"> · 原单现存 {{row.source_stock_reference.on_hand}} / 原单剩余 {{row.source_stock_reference.remaining}}</span></div></details>
+                <details v-if="draft.source_format==='weekly_demand' || ['yg_gy_location_order_v1','yg_gy_shortage_order_v1'].includes(draft.template)"><summary>原需求表与原单库存参考（不写入仓库）</summary><div v-for="row in draft.items" :key="row.line_no">{{row.raw_product_code}} · 原位置 {{row.source_location||'未填写'}} · 原文 {{(row.raw_lines||[]).join(' ')}}<span v-if="row.source_stock_reference"> · 原单现存 {{row.source_stock_reference.on_hand}} / 原单剩余 {{row.source_stock_reference.remaining}}</span></div></details>
                 <div v-if="emailQueueMode && draft.email_attachment_id && draft._show_advanced_details" class="toolbar-group" style="margin-bottom:8px">
                   <button class="btn small" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'processed')">已人工处理</button>
                   <button class="btn small" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'duplicate')">重复，不再提醒</button>
@@ -7647,7 +7665,7 @@
                 </div>
                 <div class="pdf-order-summary">
                   <div class="field"><label>客户</label><search-select v-model="draft.matched_customer_id" :options="importCustomerOptions(draft)" label-key="name" value-key="id" placeholder="确认客户" :disabled="isImportDraftLocked(draft)" @change="handleImportDraftCustomerChange(draftIndex)"></search-select></div>
-                  <div class="field"><label>客户单号<span v-if="draft.template==='yg_gy_location_order_v1'">（原表没有可留空）</span></label><input class="input customer-po" v-model.trim="draft.customer_po" @input="invalidateImportDraftConfirmation(draft)" /></div>
+                  <div class="field"><label>客户单号<span v-if="['yg_gy_location_order_v1','yg_gy_shortage_order_v1'].includes(draft.template)">（原表没有可留空）</span></label><input class="input customer-po" v-model.trim="draft.customer_po" @input="invalidateImportDraftConfirmation(draft)" /></div>
                   <div class="field"><label>交货日期</label><input class="input" type="date" v-model="draft.delivery_date" @input="invalidateImportDraftConfirmation(draft)" /></div>
                   <span :class="['status',importDraftSaveStatusClass(draft)]">{{importDraftSaveStatusText(draft)}}</span>
                 </div>
@@ -10563,7 +10581,7 @@
         };
       };
       const blankProduct = () => ({
-        id: null, version: null, customer_id: null, product_code: "", customer_material_code: "",
+        id: null, version: null, customer_id: null, product_code: "", customer_material_code: "", share_with_customer_group:null,
         product_name: "", material_id: null, legacy_material_text: null,
         customer_drawing_number:null, customer_category:null, customer_model:null, customer_specification:null,
         length_mm: null, width_mm: null, height_mm: null, box_category: "normal",
@@ -11140,6 +11158,7 @@
             productBoxTypeRulesLoading: false,
             productBoxTypeRulesError: "",
             productRecommendationSequence: 0,
+            customerSharing:{busy:false,error:"",loadedId:null,source_customer_id:null,scope:"all",selected:[],products:[],members:[],new_products_shared:false,delivery_heading_customer_id:null,delivery_address_customer_id:null,preview:null,saved:""},
             customerForm: blankCustomer(), customerQuotePreferences: [], customerQuotePreferenceLoading: false,
             customerFinishedStorageState: {loading:false,saving:false,loadedCustomerId:null,error:"",customerVersion:null,floors:[],preferences:[]},
             customerFinishedStorageDraft: {floor_id:null,area_id:null},
@@ -27051,6 +27070,41 @@
           customerFinishedStorageAreaSelected(areaId) {
             return (this.customerFinishedStorageState.preferences || []).some(row => Number(row.area_id) === Number(areaId));
           },
+          sharingDocumentCustomers() {
+            const ids=new Set([...(this.customerSharing.members||[]).map(c=>Number(c.id)),Number(this.customerSharing.source_customer_id)]);
+            return this.activeCustomerOptions.filter(c=>ids.has(Number(c.id)) && Number(c.id)!==Number(this.customerForm.id));
+          },
+          async loadCustomerSharing() {
+            const cid=Number(this.customerForm.id); if(!cid || this.customerSharing.busy || this.customerSharing.loadedId===cid) return;
+            this.customerSharing.busy=true; this.customerSharing.error="";
+            try {
+              const {data}=await axios.get(`/api/master/customers/${cid}/product-sharing`,{timeout:10000});
+              if(Number(this.customerForm.id)!==cid)return;
+              Object.assign(this.customerSharing,data,{loadedId:cid,source_customer_id:data.members.find(c=>Number(c.id)!==cid)?.id||null,scope:"all",selected:[],products:[],preview:null,saved:""});
+              if(this.customerSharing.source_customer_id) await this.loadSharingProducts();
+            } catch(e) {if(Number(this.customerForm.id)===cid)this.customerSharing.error=this.errorMessage(e);}
+            finally {if(Number(this.customerForm.id)===cid)this.customerSharing.busy=false;}
+          },
+          async loadSharingProducts() {
+            const id=Number(this.customerSharing.source_customer_id);this.customerSharing.preview=null;this.customerSharing.selected=[];this.customerSharing.products=[];
+            if(!id)return;
+            try {const {data}=await axios.get(`/api/master/customers/${id}/product-sharing/products`,{timeout:10000});if(id===Number(this.customerSharing.source_customer_id))this.customerSharing.products=data;}
+            catch(e){this.customerSharing.error=this.errorMessage(e);}
+          },
+          sharingPayload() {
+            const s=this.customerSharing;
+            return {source_customer_id:s.source_customer_id,product_ids:s.scope==='selected'?s.selected:null,new_products_shared:s.new_products_shared,delivery_heading_customer_id:s.delivery_heading_customer_id,delivery_address_customer_id:s.delivery_address_customer_id};
+          },
+          async previewCustomerSharing() {
+            const s=this.customerSharing,cid=Number(this.customerForm.id);s.busy=true;s.error="";s.preview=null;s.saved="";
+            try {const {data}=await axios.post(`/api/master/customers/${cid}/product-sharing/preview`,this.sharingPayload(),{timeout:30000});if(Number(this.customerForm.id)===cid)s.preview=data;}
+            catch(e){s.error=this.errorMessage(e);}finally{s.busy=false;}
+          },
+          async saveCustomerSharing() {
+            const s=this.customerSharing,cid=Number(this.customerForm.id);if(!s.preview)return;s.busy=true;s.error="";
+            try {const {data}=await axios.post(`/api/master/customers/${cid}/product-sharing/confirm`,{...this.sharingPayload(),preview_hash:s.preview.preview_hash},{timeout:60000});if(Number(this.customerForm.id)!==cid)return;s.saved=`已保存，已连接 ${data.linked.length} 款；待核对 ${data.blocked.length} 款`;s.preview=null;}
+            catch(e){s.error=this.errorMessage(e);}finally{s.busy=false;}
+          },
           async loadCustomerFinishedStorage(customerId=this.customerForm?.id) {
             const requestedCustomerId = Number(customerId || 0);
             if (!requestedCustomerId || Number(this.customerForm?.id) !== requestedCustomerId) return false;
@@ -27150,6 +27204,7 @@
             if (!row) next.customer_number = Math.max(0, ...this.customers.map(c => Number(c.customer_number || 0))) + 1;
             if (!Number.isInteger(Number(next.statement_cycle_start_day)) || Number(next.statement_cycle_start_day) < 1 || Number(next.statement_cycle_start_day) > 28) next.statement_cycle_start_day = 20;
             this.customerForm = next;
+            this.customerSharing={busy:false,error:"",loadedId:null,source_customer_id:null,scope:"all",selected:[],products:[],members:[],new_products_shared:false,delivery_heading_customer_id:null,delivery_address_customer_id:null,preview:null,saved:""};
             this.customerInvoiceProfile = {invoice_title:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,settlement_entity_id:null,price_tax_mode:"tax_inclusive",default_tax_rate:"0.13",is_enabled:true,confirmation_status:"pending",version:null,error:""};
             this.customerInvoiceRule = {project_name:"纸箱",tax_classification_code:"1060105010000000000",unit:"PCS",tax_rate:"0.13",spec_source:"product_code_snapshot",fill_unit_price:true,confirmation_status:"pending",version:null,error:""};
             this.customerInvoiceState.profileLoading = false;
@@ -30264,6 +30319,7 @@
             const f = this.productForm;
             const printing = this.productPrintingWriteFields(f);
             return {
+              share_with_customer_group:f.share_with_customer_group ?? null,
               customer_id: f.customer_id, product_code: f.product_code, unit: f.unit,
               customer_material_code: f.customer_material_code, product_name: f.product_name,
               customer_drawing_number:f.customer_drawing_number, customer_category:f.customer_category, customer_model:f.customer_model, customer_specification:f.customer_specification,
@@ -33678,8 +33734,8 @@
             const reasons = [];
             if (!draft?.preview_safety_token) reasons.push("订单文件预览安全确认缺失，请重新识别。");
             if (!draft?.matched_customer_id) reasons.push("客户未确认。");
-            if (!String(draft?.customer_po || "").trim() && draft?.template!=="yg_gy_location_order_v1") reasons.push("客户订单号未填写，不能保存。");
-            if (draft?.template==="yg_gy_location_order_v1" && !draft.delivery_date) reasons.push("请填写要求交货日期。");
+            if (!String(draft?.customer_po || "").trim() && !['yg_gy_location_order_v1','yg_gy_shortage_order_v1'].includes(draft?.template)) reasons.push("客户订单号未填写，不能保存。");
+            if (['yg_gy_location_order_v1','yg_gy_shortage_order_v1'].includes(draft?.template) && !draft.delivery_date) reasons.push("请填写要求交货日期。");
             if (draft?.matched_customer_id && draft?._reminder_loading) reasons.push("生产提醒仍在读取，请稍候。");
             else if (draft?.matched_customer_id && (!draft?._reminder_loaded || draft?._reminder_error)) reasons.push("生产提醒未读取成功，请重试。");
             else {

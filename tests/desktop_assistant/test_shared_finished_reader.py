@@ -93,3 +93,29 @@ def test_member_policy_receipt_blocks_old_reader_without_changing_state():
         assert manager.compatible(ids['new-member'],'r1')
         assert manager.state==state
     finally:fixture.tearDown()
+
+
+def test_shared_master_requires_signed_reader_for_receipts_and_catalog():
+    import json
+    fixture=recovery.RecoveryTests();fixture.setUp()
+    try:
+        manager=fixture.manager;ids={}
+        for name,extra in [('pre-master',{}),('shared-master',{'shared_product_master_v1':1})]:
+            fixture.release(name,'r1');package=fixture.root/(name+'-cap.zip')
+            pack_tree(fixture.root/('source-'+name),package,dict(type='tianming.release.v1',version=name,revision='r1',reader_capabilities=extra),fixture.key)
+            ids[name]=manager.stage_release(package)['id']
+        database=manager.root/'shared/data/carton_erp.sqlite3'
+        with closing(sqlite3.connect(database)) as db:
+            db.execute('CREATE TABLE shared_finished_mutations(id INTEGER PRIMARY KEY,result_json TEXT)')
+            db.execute('CREATE TABLE customer_sharing_members(customer_id INTEGER PRIMARY KEY)');db.commit()
+        assert manager.compatible(ids['pre-master'],'r1')
+        with closing(sqlite3.connect(database)) as db:
+            db.execute('INSERT INTO customer_sharing_members VALUES(1)');db.commit()
+        assert not manager.compatible(ids['pre-master'],'r1')
+        assert manager.compatible(ids['shared-master'],'r1')
+        with closing(sqlite3.connect(database)) as db:
+            db.execute('DELETE FROM customer_sharing_members')
+            db.execute('INSERT INTO shared_finished_mutations(result_json) VALUES(?)',(json.dumps({'shared_product_master_v1':{'members':{}}}),));db.commit()
+        assert not manager.compatible(ids['pre-master'],'r1')
+        assert manager.compatible(ids['shared-master'],'r1')
+    finally:fixture.tearDown()

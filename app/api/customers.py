@@ -857,3 +857,55 @@ def delete_customer(
         db.rollback()
         raise
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+class CustomerSharingPayload(BaseModel):
+    source_customer_id: int = Field(gt=0)
+    product_ids: list[int] | None = Field(default=None,max_length=1000)
+    new_products_shared: bool = False
+    delivery_heading_customer_id: int | None = Field(default=None,gt=0)
+    delivery_address_customer_id: int | None = Field(default=None,gt=0)
+
+
+class CustomerSharingConfirmPayload(CustomerSharingPayload):
+    preview_hash: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+def _sharing_error(exc):
+    from app.services.warehouse_inventory import WarehouseInventoryError
+    if isinstance(exc,WarehouseInventoryError):
+        raise HTTPException(exc.status_code,str(exc)) from exc
+    raise exc
+
+
+@router.get('/{customer_id}/product-sharing')
+def get_product_sharing(customer_id:int,db:Session=Depends(get_db),user:User=Depends(can_read)):
+    from app.services.customer_sharing import settings
+    return settings(db,customer_id,user)
+
+
+@router.post('/{customer_id}/product-sharing/preview')
+def preview_product_sharing(customer_id:int,payload:CustomerSharingPayload,db:Session=Depends(get_db),user:User=Depends(can_write)):
+    if user.role!='admin':raise HTTPException(403,'仅管理员可设置客户共用')
+    from app.services.customer_sharing import preview
+    try:return preview(db,customer_id=customer_id,actor=user,**payload.model_dump())
+    except Exception as exc:_sharing_error(exc)
+
+
+@router.post('/{customer_id}/product-sharing/confirm')
+def confirm_product_sharing(customer_id:int,payload:CustomerSharingConfirmPayload,db:Session=Depends(get_db),user:User=Depends(can_write)):
+    from app.services.customer_sharing import confirm
+    try:
+        result=confirm(db,customer_id=customer_id,actor=user,**payload.model_dump())
+        commit_business_change(db)
+        return result
+    except Exception as exc:
+        db.rollback();_sharing_error(exc)
+
+
+@router.get('/{customer_id}/product-sharing/products')
+def customer_sharing_products(customer_id:int,db:Session=Depends(get_db),user:User=Depends(can_read)):
+    require_customer_access(customer_id,current_user=user,db=db)
+    from app.models.product import Product
+    return [dict(id=p.id,code=p.product_code,name=p.product_name) for p in db.scalars(select(Product).where(
+        Product.customer_id==customer_id,Product.is_active.is_(True),Product.deleted_at.is_(None),Product.purged_at.is_(None)).order_by(Product.product_code,Product.id))]

@@ -458,11 +458,20 @@ def replace_product_bom(
     preserve_parent_unit: bool = False,
 ) -> dict[str, Any]:
     with atomic_bom(db):
-        return _replace_product_bom(db, parent_product_id=parent_product_id,
+        from app.services.shared_product_master import recipe_sync_plan,finish_recipe_sync
+        shared_plan=recipe_sync_plan(db,parent_product_id,user)
+        result = _replace_product_bom(db, parent_product_id=parent_product_id,
             components=components, expected_version=expected_version, user=user,
             change_reason=change_reason, inventory_mode=inventory_mode,
             material_mode=material_mode, delivery_mode=delivery_mode,
             preserve_parent_unit=preserve_parent_unit)
+        if shared_plan:
+            from app.services.warehouse_inventory import WarehouseInventoryError
+            try:
+                finish_recipe_sync(db,parent_product_id,shared_plan,user,change_reason)
+            except WarehouseInventoryError as exc:
+                raise CompositeBOMError(str(exc),exc.status_code) from exc
+        return result
 
 
 def _replace_product_bom(

@@ -118,6 +118,10 @@ class Manager:
                 mold_deletion_contract = any(row[1] == 'deleted_at' for row in
                     db.execute('PRAGMA table_info(mold_tools)'))
                 supplier_trim_contract = _has_supplier_trim_facts(db)
+                from desktop_assistant.reader_contract import has_shared_product_master_facts
+                shared_product_master_contract = has_shared_product_master_facts(db)
+            if shared_product_master_contract and not self._shared_finished_reader(release, "shared_product_master_v1"):
+                return False
             if actual_receipt_facts and not self._shared_finished_reader(release,"actual_receipt_specs_v1"):
                 return False
             if supplier_trim_contract and not self._shared_finished_reader(release, "supplier_sheet_trim_v1"):

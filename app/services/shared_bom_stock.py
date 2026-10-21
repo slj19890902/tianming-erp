@@ -50,7 +50,8 @@ def contract(db,product):
         for edge in edges:
             relation=db.get(ProductBomInventoryRelation,edge.id)
             child=db.get(Product,edge.component_product_id)
-            member=db.get(SharedFinishedMember,edge.component_product_id)
+            from app.services.shared_product_master import effective_member
+            member=effective_member(db,db.get(SharedFinishedMember,edge.component_product_id))
             confirmed=db.get(SharedBomMember,edge.component_product_id)
             if (not relation or relation.relation!='assembly' or role(db,child)!='component'
                     or child.customer_id!=product.customer_id or not member or not confirmed
@@ -94,10 +95,40 @@ def persist_contract(db,product_id,identity):
         db.add(SharedBomMember(product_id=product_id,role=info['role'],contract_json=encode(info)))
 
 
-def basis_matches(db,product_id,actual,expected=None,*,info=None):
+def historical_contracts(db,product_id):
+    """Frozen reservations/consumption may retain an earlier approved recipe.
+
+    Separate versions are never unioned: an old and a new material cannot
+    become interchangeable merely because both were valid at different times.
+    Original rows and every master receipt are immutable approval evidence.
+    """
+    from app.models.shared_finished_stock import SharedFinishedMutation
+    record=db.get(SharedBomMember,product_id)
+    if not record:return []
+    result=json.loads(record.contract_json);contracts={encode(result):result}
+    member=db.get(SharedFinishedMember,product_id)
+    if member:
+        from app.services.shared_product_master import CAPABILITY
+        for raw in db.scalars(select(SharedFinishedMutation.result_json).where(
+                SharedFinishedMutation.group_id==member.group_id,
+                SharedFinishedMutation.result_json.contains('"'+CAPABILITY+'":',autoescape=True))):
+            current=json.loads(raw)[CAPABILITY].get('members',{}).get(str(product_id))
+            info=json.loads(current['identity_json']).get('bom') if current else None
+            if info and info['role']==result['role']:contracts[encode(info)]=info
+    return list(contracts.values())
+
+
+def basis_matches(db,product_id,actual,expected=None,*,info=None,historical=False):
     """Validate against immutable approved variants, including frozen orders."""
     record=db.get(SharedBomMember,product_id) if info is None else None
-    info=info or (json.loads(record.contract_json) if record else None)
+    if info is None and historical:
+        return any(basis_matches(db,product_id,actual,expected,info=contract)
+                   for contract in historical_contracts(db,product_id))
+    if info is None:
+        from app.services.shared_product_master import effective_member
+        member=effective_member(db,db.get(SharedFinishedMember,product_id))
+        info=json.loads(member.identity_json).get('bom') if member else None
+        info=info or (json.loads(record.contract_json) if record else None)
     if not info:
         return False
     def normalize(raw):
@@ -158,7 +189,7 @@ def reservation_matches(db,reservation,lot,product_id,customer_id,expected_basis
     fact=db.get(SharedFinishedReservation,reservation.id)
     return bool(fact and fact.product_id==product_id and fact.customer_id==customer_id and db.get(SharedBomMember,product_id)
         and shared.reserved_match(db,reservation,lot,product_id=product_id,customer_id=customer_id)
-        and basis_matches(db,product_id,fact.product_basis_json,expected_basis))
+        and basis_matches(db,product_id,fact.product_basis_json,expected_basis,historical=True))
 
 
 def execution_identity(db,lot,compiled,order_item_id,*,allow_free=False):
@@ -202,7 +233,7 @@ def verify_consumed(db,lot,evidence,product_id,customer_id):
     return bool(evidence and member and source and source.group_id==member.group_id and evidence.get('product_id')==product_id
         and evidence.get('customer_id')==customer_id and member.customer_id==customer_id
         and member.group_id==evidence.get('group_id') and evidence.get('source_identity')==lot_identity(lot)
-        and basis_matches(db,product_id,evidence.get('target_basis')))
+        and basis_matches(db,product_id,evidence.get('target_basis'),historical=True))
 
 
 def enroll_completed_bom(db,lot,*,operator_id):

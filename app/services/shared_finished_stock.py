@@ -112,9 +112,11 @@ def preview(db, *, product_ids, lot_ids, group_id=None, confirmed_printed_lots=N
     if len({p.customer_id for p in products}) != len(products):
         raise _error("每个客户在同一共用组只能指定一个产品")
     identities = [member_identity(p) for p in products]
-    if len({_interchangeability_key(value) for value in identities}) != 1:
+    from app.services.shared_product_master import approved_members, effective_member
+    if (len({_interchangeability_key(value) for value in identities}) != 1
+            and not approved_members(db, group_id, products, identities)):
         raise _error("产品的单位、规格、材质、模具、印刷或工艺不同，不能直接共用")
-    members = [db.get(SharedFinishedMember, pid) for pid in pids]
+    members = [effective_member(db, db.get(SharedFinishedMember, pid)) for pid in pids]
     if group_id is None:
         if any(members):
             raise _error("所选产品已有共用关联，请在原组追加批次")
@@ -297,7 +299,8 @@ def _apply_confirmed(db, *, product_ids, lot_ids, preview_hash, operation_key, e
 
 def match(db, lot, *, product_id, customer_id, expected_basis=None, lock=False):
     """Return frozen member evidence only for this expressly approved live lot."""
-    member = db.get(SharedFinishedMember, product_id)
+    from app.services.shared_product_master import effective_member, lot_allowed
+    member = effective_member(db, db.get(SharedFinishedMember, product_id))
     approved = db.get(SharedFinishedLot, lot.id)
     if member is None or approved is None or member.customer_id != customer_id or member.group_id != approved.group_id:
         return None
@@ -314,7 +317,7 @@ def match(db, lot, *, product_id, customer_id, expected_basis=None, lock=False):
             return None
     except (ValueError, RuntimeError):
         return None
-    if lot_identity(lot) != approved.identity_json:
+    if lot_identity(lot) != approved.identity_json or not lot_allowed(db, member, lot):
         return None
     if expected_basis is not None and not (bom.basis_matches(db,product_id,member.product_basis_json,expected_basis)
             if bom.role(db,product) else matches_stock_identity(member.product_basis_json, expected_basis)):

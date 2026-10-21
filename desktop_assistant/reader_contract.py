@@ -16,6 +16,18 @@ TABLE_READERS = {
 }
 
 
+SHARED_PRODUCT_MASTER_READER = 'shared_product_master_v1'
+
+
+def has_shared_product_master_facts(db):
+    tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'customer_sharing_members' in tables and db.execute('SELECT 1 FROM customer_sharing_members LIMIT 1').fetchone():
+        return True
+    return bool('shared_finished_mutations' in tables and db.execute(
+        "SELECT 1 FROM shared_finished_mutations WHERE json_valid(result_json) "
+        "AND json_type(result_json,'$.shared_product_master_v1')='object' LIMIT 1").fetchone())
+
+
 def has_supplier_trim_facts(db):
     for table, column in (
         ('products', 'sheet_cutting_settings'),
@@ -84,6 +96,7 @@ def target_readers(database, source, target, inventory_record, dispatch_record, 
         if 'shared_finished_mutations' in tables and db.execute(
                 "SELECT 1 FROM shared_finished_mutations WHERE json_valid(result_json) AND json_type(result_json, '$.member_states') = 'object' LIMIT 1").fetchone():
             required.add('shared_customer_members_v1')
+        if has_shared_product_master_facts(db): required.add(SHARED_PRODUCT_MASTER_READER)
         if has_mold_label_text_facts(db):
             required.add(MOLD_LABEL_TEXT_READER)
         else:

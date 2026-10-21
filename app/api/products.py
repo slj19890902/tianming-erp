@@ -483,6 +483,7 @@ class ProductExternalSupplyPayload(BaseModel):
 
 
 class ProductPayload(BaseModel):
+    share_with_customer_group: bool | None = None
     sheet_cutting_settings: dict | None = None
 
     @field_validator("sheet_cutting_settings")
@@ -1317,7 +1318,7 @@ def _product_payload_snapshot(product: Product) -> dict:
     data = {
         field_name: getattr(product, field_name, None)
         for field_name in ProductPayload.model_fields
-        if field_name != "external_supply"
+        if field_name not in {"external_supply","share_with_customer_group"}
     }
     data["external_supply"] = _external_supply_snapshot(product)
     return data
@@ -1333,6 +1334,7 @@ def _product_write_data(payload: ProductPayload, user: User) -> dict:
     """
     data = payload.model_dump(include=set(ProductPayload.model_fields))
     data.pop("external_supply", None)
+    data.pop("share_with_customer_group", None)
     if "sheet_cutting_settings" not in payload.model_fields_set:
         data.pop("sheet_cutting_settings", None)
     from app.services.customer_document_fields import FIELDS
@@ -2326,7 +2328,12 @@ def get_product(
 ) -> dict:
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
-    return _response(product, user)
+    result=_response(product,user)
+    from app.models.shared_finished_stock import SharedFinishedMember
+    from app.services.shared_product_master import receipt
+    member=db.get(SharedFinishedMember,product.id)
+    result['shared_manufacturing_enabled']=bool(member and receipt(db,member.group_id))
+    return result
 
 
 @router.post("/{product_id}/update-preview")
@@ -2722,6 +2729,8 @@ def _create_product(payload, db, user, *, commit=True) -> dict:
             details=data,
         )
         if commit:
+            from app.services.customer_sharing import enroll_new_product
+            enroll_new_product(db,product,user,payload.share_with_customer_group)
             db.commit()
     except IntegrityError as error:
         db.rollback()
@@ -2814,6 +2823,9 @@ def _save_product_with_bom(payload, db, user, product_id=None):
             product = _product_or_404(db, saved["id"])
             bom_payload = payload.bom.model_copy(update={"expected_version": product.version})
             bom = _update_product_bom(product.id, bom_payload, db, user, commit=False, preserve_parent_unit=True)
+            if product_id is None:
+                from app.services.customer_sharing import enroll_new_product
+                enroll_new_product(db,product,user,payload.product.share_with_customer_group)
             db.flush()
             db.refresh(product)
             result = {"product": _response(product, user), "bom": bom}

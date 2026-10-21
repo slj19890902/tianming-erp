@@ -41,6 +41,8 @@ def capture_order(connection, item):
         SharedFinishedMember.product_id==item.product_id)).mappings().first()
     if not member:
         return
+    from app.services.shared_product_master import effective_member
+    member = vars(effective_member(connection, dict(member)))
     group=connection.execute(select(SharedFinishedGroup.__table__).where(
         SharedFinishedGroup.id==member["group_id"])).mappings().one()
     policy=connection.execute(select(SharedFinishedPolicy.auto_enroll).where(

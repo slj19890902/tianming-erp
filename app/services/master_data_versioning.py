@@ -851,7 +851,29 @@ def record_versioned_create(
     return revision
 
 
-def apply_versioned_update(
+def apply_versioned_update(db, *, object_type, entity, updates, expected_version, user,
+                           reason, source, **kwargs):
+    from app.services.shared_product_master import prepare_sync, finish_sync
+    from app.services.bom_transactions import atomic_bom
+    from app.services.warehouse_inventory import WarehouseInventoryError
+    try:
+        plan = prepare_sync(db, entity, updates, user) if object_type == "product" else None
+        if plan is None:
+            return _apply_versioned_update(db, object_type=object_type, entity=entity,
+                updates=updates, expected_version=expected_version, user=user,
+                reason=reason, source=source, **kwargs)
+        with atomic_bom(db):
+            revision = _apply_versioned_update(db, object_type=object_type, entity=entity,
+                updates=updates, expected_version=expected_version, user=user,
+                reason=reason, source=source, **kwargs)
+            if revision is not None:
+                finish_sync(db, entity, plan, user, reason, source)
+            return revision
+    except WarehouseInventoryError as exc:
+        raise HTTPException(exc.status_code,str(exc)) from exc
+
+
+def _apply_versioned_update(
     db: Session,
     *,
     object_type: str,

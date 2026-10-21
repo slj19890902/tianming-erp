@@ -8987,6 +8987,7 @@ def create_delivery(
         company = db.scalar(
             select(CompanyConfig).where(CompanyConfig.id == 1)
         )
+        from app.services.customer_sharing import delivery_defaults
         print_template = delivery_print_template_snapshot(
             db, payload.customer_id
         )
@@ -9004,10 +9005,7 @@ def create_delivery(
             version=1,
             vehicle_number=(payload.vehicle_number or "").strip() or None,
             print_snapshot_version=1,
-            customer_name_snapshot=customer.name,
-            customer_contact_snapshot=customer.contact_person,
-            customer_phone_snapshot=customer.phone,
-            customer_address_snapshot=customer.address,
+            **delivery_defaults(db,customer),
             sender_company_name_snapshot=(
                 company.company_name if company else ""
             ),

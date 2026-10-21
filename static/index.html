@@ -15690,14 +15690,14 @@
             this.invalidateLineInventory(line);
             if (line.product_id || line.matched_product_id) this.loadOrderLineInventory(line, customerId);
           },
-          async loadOrderLineInventory(line, customerId) {
+          async loadOrderLineInventory(line, customerId, preserveDraftConfirmation = false) {
             if (!this.inventoryPlanApplies(line)) {
               line._inventory = null;
               if (!(line.product_id || line.matched_product_id)) line._inventory_product = null;
               line._show_inventory_details = false;
               return;
             }
-            this.invalidatePdfDraftForItem?.(line);
+            if (!preserveDraftConfirmation) this.invalidatePdfDraftForItem?.(line);
             const productId = Number(line.product_id || line.matched_product_id || 0);
             customerId = Number(customerId || this.inventoryCustomerForLine(line));
             if (!productId || !customerId) return;
@@ -15964,6 +15964,7 @@
             if (draft._inventory_authority_timer) clearTimeout(draft._inventory_authority_timer);
             // Invalidate in-flight responses immediately, before the debounce.
             draft._inventory_authority_generation = Number(draft._inventory_authority_generation || 0) + 1;
+            if (draft._inventory_refreshing || draft._save_status === "success") return;
             (draft.items || []).forEach(line => {
               if (line._inventory) line._inventory.authoritative_loading = true;
             });
@@ -15973,6 +15974,7 @@
             }, 100);
           },
           async loadPdfDraftInventoryAuthority(draft) {
+            if (draft?._save_status === "success") return;
             const auth = this.authGeneration;
             const customerId = Number(draft?.matched_customer_id || 0);
             const items = (draft?.items || []).filter(line => (
@@ -15982,6 +15984,9 @@
             ));
             const sequence = this.pdfInventoryDraftSequence();
             const sameCustomer = sequence.includes(draft) ? sequence.filter(row => Number(row.matched_customer_id) === customerId) : [draft];
+            // A preview must never mix refreshed candidates with the previous
+            // versions held by another document in this same calculation.
+            if (sameCustomer.some(row => row._inventory_refreshing)) return;
             const batchItems = sameCustomer.flatMap(row => (row.items || []).filter(line => (
               Number(line?.matched_product_id || line?.product_id || 0) > 0
               && Number.isInteger(Number(line?.quantity)) && Number(line.quantity) > 0
@@ -16059,7 +16064,7 @@
             this.reallocateDraftInventorySequentially(
               pdfDrafts.flatMap(draft => draft.items || [])
             );
-            (this.orderImportDrafts || []).forEach(draft => {
+            pdfDrafts.forEach(draft => {
               this.schedulePdfDraftInventoryAuthority(draft);
             });
           },
@@ -16142,19 +16147,42 @@
           },
           async refreshImportDraftInventoryForSave(draft) {
             const customerId = Number(draft?.matched_customer_id || 0);
-            const lines = (draft?.items || []).filter(line => (
+            const auth = this.authGeneration;
+            const sequence = this.pdfInventoryDraftSequence();
+            const drafts = sequence.filter(row => Number(row.matched_customer_id) === customerId);
+            if (draft && draft._save_status !== "success" && !drafts.includes(draft)) drafts.unshift(draft);
+            const lines = drafts.flatMap(row => row.items || []).filter(line => (
               !!line?._inventory
               && this.inventoryPlanApplies(line)
               && Number(line?.matched_product_id || line?.product_id || 0) > 0
             ));
             if (!lines.length) return;
-            for (const [index, line] of lines.entries()) {
-              await this.loadOrderLineInventory(line, customerId);
-              if (!this.inventoryStateMatchesLine(line, customerId)) {
-                throw new Error(`第${index + 1}条${line._inventory?.error || '产品、客户或数量已变化，请重新查询库存后再保存。'}`);
+            drafts.forEach(row => {
+              row._inventory_refreshing = true;
+              row._inventory_authority_generation = Number(row._inventory_authority_generation || 0) + 1;
+              if (row._inventory_authority_timer) clearTimeout(row._inventory_authority_timer);
+              row._inventory_authority_timer = null;
+            });
+            lines.forEach(line => {
+              line._inventory.stale = true;
+              line._inventory.authoritative = null;
+              line._inventory.authoritative_error = "";
+            });
+            try {
+              for (const [index, line] of lines.entries()) {
+                if (this.authGeneration !== auth || !this.orderImportDrafts.includes(draft)) return;
+                // This refresh changes stock balances, not the operator's
+                // document confirmation or per-lot adoption/refusal decisions.
+                await this.loadOrderLineInventory(line, customerId, true);
+                if (this.authGeneration !== auth || !this.orderImportDrafts.includes(draft)) return;
+                if (!this.inventoryStateMatchesLine(line, customerId)) {
+                  throw new Error(`第${index + 1}条${line._inventory?.error || '产品、客户或数量已变化，请重新查询库存后再保存。'}`);
+                }
               }
+            } finally {
+              drafts.forEach(row => { row._inventory_refreshing = false; });
+              if (this.authGeneration === auth && this.orderImportDrafts.includes(draft)) this.reallocateAllDraftInventory();
             }
-            this.reallocateAllDraftInventory();
           },
           buildReservationPlan(line) {
             if (!this.inventoryPlanApplies(line)) return { finished:[], semi:[] };
@@ -34222,6 +34250,15 @@
             this.reloadPdfSaveRecovery();
             this.showToast(record.message);
             this.showOrderNextStepGuide({orderNo:result.orderNumber,count:1,source:"pdf"});
+            if (draft) {
+              try { await this.refreshImportDraftInventoryForSave(draft); }
+              catch (_) {
+                if (current()) {
+                  draft._save_message = record.message + "剩余草稿库存刷新失败，请重新获取库存后继续。";
+                  this.showToast(draft._save_message, true);
+                }
+              }
+            }
             try {await Promise.all([this.loadOrders(),this.loadKpi()]);}
             catch(_){if(current()){record.message=`订单 ${result.orderNumber} 已保存；${result.priceNormalized?'单价按系统6位精度保存。':''}订单列表未刷新，请点击查看已保存订单。`;if(draft)draft._save_message=record.message;this.showToast(record.message,true);}}
           },

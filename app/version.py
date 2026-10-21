@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.700"
-APP_VERSION_NAME = "作废订单Excel重新导入"
-APP_BUILD_DATE = "2026-10-20"
+APP_VERSION = "v0.22.701"
+APP_VERSION_NAME = "邮件收单连续保存库存刷新"
+APP_BUILD_DATE = "2026-10-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -6837,3 +6837,15 @@ APP_VERIFICATION_STEPS = [
     "按实际业务需要保存，确认生成新订单号；再次导入同一文件应提示已有新订单。",
 ]
 APP_CHANGELOG = [*(f"v0.22.700：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.701：同客户PDF草稿库存版本统一刷新。
+APP_CHANGES = [
+    "邮件收单保存前刷新同客户参与计算的待存草稿；保存成功后自动刷新剩余草稿，避免自己上一份订单预占库存引发版本冲突。",
+    "刷新期间暂停数量预览，保留人工采用、不采用及批量保存确认；剩余草稿刷新失败不改变已保存订单的成功回执。",
+    "本版无数据库迁移，后台库存版本、数量、客户权限和幂等保护继续生效。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新邮件收单，按实际需要连续保存同客户多份PDF，核对剩余库存与需报料数量自动更新。",
+    "核对人工选择不采用的片料仍不采用；已保存订单显示保存成功，重复查询不重复创建或预占。",
+]
+APP_CHANGELOG = [*(f"v0.22.701：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

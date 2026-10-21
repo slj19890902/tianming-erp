@@ -760,6 +760,8 @@
       .delivery-page-head,
       .finance-page-head { align-items:center; margin-bottom:10px; gap:12px; }
       .finance-filter-panel { overflow:visible; position:relative; z-index:25; }
+      .customer-sharing-panel { overflow:visible; position:relative; }
+      .customer-sharing-panel .search-select:focus-within { z-index:710; }
       .finance-filter-panel .search-select:focus-within { z-index:300; }
       .finance-filter-panel .search-select-list { z-index:500; }
       .finance-overview-grid { display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,.8fr);gap:10px;margin-bottom:10px; }
@@ -6655,9 +6657,10 @@
                   <div v-if="customerFinishedStorageState.preferences.length" class="muted" style="margin-top:6px">系统按顺序找空位；所选区域都无空位时会停止并提示，不会改放一楼。</div>
                 </template>
               </section>
-              <details id="customer-sharing-section" v-if="customerForm.id && canAdmin" class="panel" style="margin:10px 0;padding:10px" @toggle="$event.target.open && loadCustomerSharing()">
+              <details id="customer-sharing-section" v-if="customerForm.id && canAdmin" class="panel customer-sharing-panel" style="margin:10px 0;padding:10px" @toggle="$event.target.open && loadCustomerSharing()">
                 <summary><strong>产品与库存共用</strong><span class="muted"> · 母子公司／部门共用设置</span></summary>
-                <div v-if="customerSharing.error" class="notice danger">{{customerSharing.error}}</div>
+                <div v-if="customerSharing.error" class="notice danger">{{customerSharing.error}} <button class="btn small" type="button" :disabled="customerSharing.busy" @click="loadCustomerSharing(true)">重新读取</button></div>
+                <div v-if="customerSharing.busy" class="muted" role="status">正在读取／保存共用设置…</div>
                 <fieldset :disabled="customerSharing.busy || customerSharing.loadedId!==Number(customerForm.id)" @change="customerSharing.preview=null" class="form-grid" style="margin-top:8px">
                   <div class="field"><label>沿用哪个客户的产品</label><search-select v-model="customerSharing.source_customer_id" :options="activeCustomerOptions.filter(c=>Number(c.id)!==Number(customerForm.id))" label-key="name" value-key="id" @change="loadSharingProducts" placeholder="选择共用客户"></search-select></div>
                   <div class="field"><label>现有产品范围</label><select class="select" v-model="customerSharing.scope"><option value="all">全部产品</option><option value="selected">指定产品</option></select></div>
@@ -6667,7 +6670,7 @@
                   <div class="field wide" v-if="customerSharing.scope==='selected'" style="max-height:160px;overflow:auto"><label v-for="p in customerSharing.products" :key="p.id" style="display:block"><input type="checkbox" :value="p.id" v-model="customerSharing.selected" /> {{p.code}} · {{p.name}}</label></div>
                 </fieldset>
                 <div class="muted">整套共用：库存、模具、常用箱生产报料资料、印刷图纸、当前报价和成本参数。开票资料沿用下面“开票／税务资料 → 合作模式”。</div>
-                <div class="toolbar-group" style="margin-top:8px"><button class="btn" type="button" :disabled="customerSharing.busy || !customerSharing.source_customer_id" @click="previewCustomerSharing">核对共用范围</button><button v-if="customerSharing.preview" class="btn primary" type="button" :disabled="customerSharing.busy" @click="saveCustomerSharing">保存共用设置</button></div>
+                <div class="toolbar-group" style="margin-top:8px"><button class="btn" type="button" :disabled="customerSharing.busy || !customerSharing.source_customer_id" @click="previewCustomerSharing">核对共用范围</button><button class="btn primary" type="button" :disabled="customerSharing.busy || customerSharing.loadedId!==Number(customerForm.id) || !customerSharing.source_customer_id" @click="saveCustomerSharing">{{customerSharing.busy?'处理中…':'保存共用设置'}}</button></div>
                 <div v-if="customerSharing.preview" class="notice" style="margin-top:8px">可共用 {{customerSharing.preview.actions.length}} 款；需核对 {{customerSharing.preview.blocked.length}} 款。保存只处理可共用项目。<div v-for="p in customerSharing.preview.blocked" :key="p.product_id">{{p.code}}：{{p.reason}}</div><template v-for="a in customerSharing.preview.actions" :key="a.source_id"><div v-for="lot in (a.stock_pending||[])" :key="lot.lot_id">{{a.code}} · 批次{{lot.lot_id}}暂不共用：{{lot.reason}}</div></template></div>
                 <div v-if="customerSharing.saved" class="status green">{{customerSharing.saved}}</div>
               </details>
@@ -10204,7 +10207,8 @@
             <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" title="保存（Ctrl+Enter）" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderReminderBlocking()" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderEdit'" class="btn primary" :disabled="loading || orderGroupSaveState.saving || orderGroupSaveState.committed || orderGroupSaveState.outcomeUncertain" @click="saveModal()">{{ orderGroupSaveState.saving ? '正在保存订单组…' : (orderGroupSaveState.committed ? '订单组已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderItem'" class="btn primary" :disabled="loading || orderItemSaveState.saving || orderItemSaveState.committed || orderItemSaveState.outcomeUncertain || finishedReservationActionBlocked() || !!orderItemCreaseMismatch" @click="saveModal()">{{ orderItemSaveState.saving ? '正在保存明细…' : (orderItemSaveState.committed ? '订单明细已保存' : '保存') }}</button>
-            <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :class="{'delivery-guide-target':modal?.type==='delivery' && ['review','save','print'].includes(deliveryGuideStage)}" :disabled="loading || masterSavePending || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
+            <button v-if="canSaveModal && modal?.type==='customer'" class="btn primary" :disabled="loading || masterSavePending || customerSharing.busy" @click="saveModal()">{{masterSavePending?'保存中…':'保存客户基本资料'}}</button>
+            <button v-if="canSaveModal && !['customer','quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :class="{'delivery-guide-target':modal?.type==='delivery' && ['review','save','print'].includes(deliveryGuideStage)}" :disabled="loading || masterSavePending || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
           </div>
         </div>
       </div>
@@ -27157,20 +27161,25 @@
             const ids=new Set([...(this.customerSharing.members||[]).map(c=>Number(c.id)),Number(this.customerSharing.source_customer_id)]);
             return this.activeCustomerOptions.filter(c=>ids.has(Number(c.id)) && Number(c.id)!==Number(this.customerForm.id));
           },
-          async loadCustomerSharing() {
-            const cid=Number(this.customerForm.id); if(!cid || this.customerSharing.busy || this.customerSharing.loadedId===cid) return;
-            this.customerSharing.busy=true; this.customerSharing.error="";
+          async loadCustomerSharing(force=false) {
+            const cid=Number(this.customerForm.id),s=this.customerSharing;
+            if(!cid || s.busy || (!force && s.loadedId===cid))return;
+            const current=()=>this.customerSharing===s && Number(this.customerForm.id)===cid;
+            s.busy=true;s.error="";s.loadedId=null;
             try {
+              if(await this.loadCustomerOptions(force)!==true)throw new Error('客户选项未读取完成，请重新读取');
+              if(!current())return;
               const {data}=await axios.get(`/api/master/customers/${cid}/product-sharing`,{timeout:10000});
-              if(Number(this.customerForm.id)!==cid)return;
-              Object.assign(this.customerSharing,data,{loadedId:cid,source_customer_id:data.members.find(c=>Number(c.id)!==cid)?.id||null,scope:"all",selected:[],products:[],preview:null,saved:""});
-              if(this.customerSharing.source_customer_id){
+              if(!current())return;
+              Object.assign(s,data,{loadedId:cid,source_customer_id:data.members.find(c=>Number(c.id)!==cid)?.id||null,scope:"all",selected:[],products:[],preview:null,saved:""});
+              if(s.source_customer_id){
                 await this.loadSharingProducts();
-                this.customerSharing.selected=data.shared_source_product_ids?.[String(this.customerSharing.source_customer_id)]||[];
-                this.customerSharing.scope='selected';
+                if(!current())return;
+                s.selected=data.shared_source_product_ids?.[String(s.source_customer_id)]||[];
+                s.scope='selected';
               }
-            } catch(e) {if(Number(this.customerForm.id)===cid)this.customerSharing.error=this.errorMessage(e);}
-            finally {if(Number(this.customerForm.id)===cid)this.customerSharing.busy=false;}
+            } catch(e) {if(current())s.error=this.errorMessage(e);}
+            finally {s.busy=false;}
           },
           async loadSharingProducts() {
             const id=Number(this.customerSharing.source_customer_id);this.customerSharing.preview=null;this.customerSharing.selected=[];this.customerSharing.products=[];
@@ -27188,8 +27197,19 @@
             catch(e){s.error=this.errorMessage(e);}finally{s.busy=false;}
           },
           async saveCustomerSharing() {
-            const s=this.customerSharing,cid=Number(this.customerForm.id);if(!s.preview)return;s.busy=true;s.error="";
-            try {const {data}=await axios.post(`/api/master/customers/${cid}/product-sharing/confirm`,{...this.sharingPayload(),preview_hash:s.preview.preview_hash},{timeout:60000});if(Number(this.customerForm.id)!==cid)return;s.saved=`已保存，已连接 ${data.linked.length} 款；待核对 ${data.blocked.length} 款`;s.preview=null;}
+            const s=this.customerSharing,cid=Number(this.customerForm.id);if(s.busy)return;
+            if(!s.source_customer_id){s.error='请先选择共用客户';return;}
+            if(s.loadedId!==cid){s.error='共用设置尚未读取完成，请重新读取';return;}
+            s.busy=true;s.error="";s.saved="";
+            const current=()=>this.customerSharing===s && Number(this.customerForm.id)===cid;
+            const payload=this.sharingPayload();
+            try {
+              if(!s.preview){const {data}=await axios.post(`/api/master/customers/${cid}/product-sharing/preview`,payload,{timeout:30000});if(!current())return;s.preview=data;}
+              const {data}=await axios.post(`/api/master/customers/${cid}/product-sharing/confirm`,{...payload,preview_hash:s.preview.preview_hash},{timeout:60000});
+              if(!current())return;
+              s.saved=`已保存，已连接 ${data.linked.length} 款；待核对 ${data.blocked.length} 款`;s.preview=null;
+              this.showToast(s.saved);
+            }
             catch(e){s.error=this.errorMessage(e);}finally{s.busy=false;}
           },
           async loadCustomerFinishedStorage(customerId=this.customerForm?.id) {

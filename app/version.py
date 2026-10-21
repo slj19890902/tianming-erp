@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.704"
-APP_VERSION_NAME = "客户产品共用与多模具废料生产"
+APP_VERSION = "v0.22.705"
+APP_VERSION_NAME = "共用客户选择与保存修复"
 APP_BUILD_DATE = "2026-10-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6891,3 +6891,14 @@ APP_VERIFICATION_STEPS = [
     "确有废料生产时，在待报料更多或已保存常用箱中操作；仅安排不增加库存，实际完工后入库并按订单预占。",
 ]
 APP_CHANGELOG = [*(f"v0.22.704：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "客户资料直接打开共用设置时自动加载完整有效客户选项，修复来源客户下拉为空及菜单被裁切。",
+    "保存共用设置自动沿原核对与确认协议提交，读取失败可重试；客户基本资料保存单独标识。",
+    "关闭后重新打开保留服务器设置，旧弹窗响应不覆盖新弹窗；沿用v704共用资料和库存保护，不批量改写业务数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "直接进入客户资料→共用设置，选择另一有效客户；点击保存共用设置后关闭并重新打开核对。",
+    "核对全部/指定产品及独立送货资料；保存客户基本资料与保存共用设置分别显示明确结果。",
+]
+APP_CHANGELOG = [*(f"v0.22.705：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

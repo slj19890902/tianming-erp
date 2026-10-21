@@ -1,3 +1,5 @@
+2026-10-21 MAIL-SEMI-USAGE：v0.22.702 半成品逐批用途确认与采用已技术发布（b53e9ee9 / 7c9b63b2，revision ew1020em），停服373.181秒，待人工验收。保留v701邮件库存刷新。见 `docs/release_reports/MAIL_SEMI_USAGE_20261021.md`；后续任务仍实时核对正式状态。
+
 ## 2026-10-19 对账三位小数显示 v0.22.684
 
 2026-10-20：外购现有库存送货修复已技术发布v0.22.693 / 4a6a816b，承接v692，schema et1019fl不变。POORD041914正式只读候选600只；备份及原生收尾完成，人工页面验收待确认。详见docs/release_reports/EXTERNAL_STOCK_DELIVERY_20261020.md。

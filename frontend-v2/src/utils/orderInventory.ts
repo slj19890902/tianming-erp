@@ -8,7 +8,7 @@ export interface InventoryCandidate {
   warehouse_location?: { employee_location_name?: string; current_address_name?: string; location_name?: string; location_id?: number; id?: number }
   customer_id?: number | null; customer_bound?: boolean; applicability_scope?: string
   source?: string; recommendation_source?: string; recommendation_tier?: string
-  automatic_recommendation?: boolean; direct_deduction_eligible?: boolean; selectable?: boolean
+  usage_confirmation_required?: boolean; match_reason?: string; automatic_recommendation?: boolean; direct_deduction_eligible?: boolean; selectable?: boolean
   requires_override?: boolean; override_required?: boolean; requires_confirmation?: boolean
   is_general?: boolean; shared_stock?: boolean; shared_stock_notice?: string; warning_codes?: string[]; warning_messages?: string[]; signature_differences?: string[]
   internal_name?: string; board_length_mm?: number; board_width_mm?: number; material_code?: string; flute_type?: string
@@ -61,6 +61,7 @@ export function semiCandidateRequest(product: Product, customer: number, compone
 export function generalSheet(c: InventoryCandidate) { return (c.recommendation_source || c.source) === 'general_signature' || (c.warning_codes || []).includes('GENERAL_SEMI_FINISHED_STOCK') }
 export function directSheet(c: InventoryCandidate) { return c.direct_deduction_eligible === true && (c.automatic_recommendation === true || (!generalSheet(c) && !(c.signature_differences || []).length)) }
 export function safeCandidate(part: InventoryPart, c: InventoryCandidate): boolean {
+  if (c.usage_confirmation_required) return false
   if (c.source === 'manual') return false
   if (part !== 'finished') {
     if (c.selectable === false || c.customer_bound !== true || c.recommendation_tier === 'more') return false
@@ -126,6 +127,7 @@ export function semiPlans(lines: Array<{ product: Product; state: InventoryLineS
         const source = c.recommendation_source || c.source || 'signature', direct = directSheet(c), general = generalSheet(c)
         const override = !direct && (general || source === 'customer_generic' || c.source === 'manual' || (source === 'learned' && !!c.signature_differences?.length))
         const warnings = [...(source === 'customer_generic' ? ['CUSTOMER_GENERIC_SEMI_FINISHED_STOCK'] : []), ...(override && !general ? ['SEMI_SIGNATURE_OVERRIDE'] : []), ...(general ? ['GENERAL_SEMI_FINISHED_STOCK'] : [])]
+        if (c.usage_confirmation_required && override && !direct) warnings.push('BLANK_DIE_CUT_PRODUCT_USE_CONFIRMED')
         line.state.plan.semi.push({ lot_id: c.lot_id, expected_version: c.version, requested_qty: request, component_type: component.component_type, recommendation_source: source,
           match_rule_id: c.match_rule_id || null, direct_deduction: direct, override, confirmed: true, warning_acknowledged_codes: warnings })
         line.state.allocations.push({ part: component.component_type, lot_id: c.lot_id, stock_quantity: Math.ceil(request / factor), credited_quantity: request })

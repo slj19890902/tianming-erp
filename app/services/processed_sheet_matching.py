@@ -80,5 +80,17 @@ def processed_match(db, lot, product, expected):
     same_customer = profile.get("scope") == "customers" and product.customer_id in profile.get("customer_ids", [])
     auto = (known and same_customer and profile.get("material_confidence") == "confirmed"
             and bool(product.layer_count) and profile.get("processing") == "die_cut")
-    return {"known": known, "automatic": bool(auto), "score": 100 if known else max(0, 100-round(closeness*100)),
-            "reason": "已确认产品适用" if approved else "同模具未印刷片料" if mold_match else "加工后片料，需确认形状与用途"}
+    # Review only an unassigned die-cut sheet in the already authorized customer
+    # scope. The operator confirms the actual blank/shape, never a size inference.
+    reviewable = bool(not known and profile.get("processing") == "die_cut"
+        and same_customer and not profile.get("product_ids")
+        and product.is_active and not product.deleted_at and product.layer_count
+        and profile.get("material_confidence") == "confirmed"
+        and detail.stock_yield_per_sheet == expected.stock_yield_per_sheet == 1
+        and (not profile.get("mold_tool_id") or (mold and mold.is_active
+            and profile.get("mold_version") == mold.version)))
+    return {"known": known, "automatic": bool(auto), "usage_confirmation_required": reviewable,
+            "score": 100 if known else max(0, 100-round(closeness*100)),
+            "reason": "已确认产品适用" if approved else "同模具未印刷片料" if mold_match else (
+                "尚未关联本产品；确认这批未印刷片料的模切形状适用后，可在本行采用，保存订单时记录用途"
+                if reviewable else "加工后片料，需在库存资料中维护适用产品、模具及实际加工状态")}

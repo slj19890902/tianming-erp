@@ -8044,7 +8044,7 @@
                                     <td>{{semiStockField({candidates:[candidate]},'flute_type')}}</td><td>{{candidate.material_code || '—'}}<info-note v-if="candidate.signature_differences?.length || candidate.warning_messages?.length">{{[...(candidate.signature_differences||[]),...(candidate.warning_messages||[])].join('；')}}</info-note></td>
                                     <td>{{semiStockField({candidates:[candidate]},'processing')}}<small class="semi-stock-match-note">{{candidate.match_reason}}</small></td>
                                     <td>{{candidate.available_stock_quantity}} 张<small v-if="candidate.deductible_requirement_quantity!==candidate.available_stock_quantity">（可抵 {{candidate.deductible_requirement_quantity}} 片）</small><div v-if="item._inventory.semi[component].allocations.some(a=>a.candidate.lot_id===candidate.lot_id)" class="status green">采用 {{item._inventory.semi[component].allocations.filter(a=>a.candidate.lot_id===candidate.lot_id).reduce((n,a)=>n+Number(a.stock_quantity||0),0)}} 张</div></td><td><order-stock-location :candidate="candidate" :item="item"></order-stock-location></td>
-                                    <td class="semi-stock-actions"><button class="btn success small" :disabled="candidate.selectable===false || item._inventory.loading || item._inventory.stale || item._inventory.api_error" :title="candidate.cut_plan?'按此理论开数采用，需核对修边/刀缝；裁切完成后才能出货':isGeneralSemiFinishedCandidate(candidate)?'采用即确认跨客户使用':'采用即确认此批次适配'" @click="chooseSemiStockGroup(item,component,{candidates:[candidate]},true)">{{candidate.selectable===false?'用途待核':'采用'}}</button><button class="btn danger small" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,{candidates:[candidate]},false)">不采用</button>
+                                    <td class="semi-stock-actions"><button class="btn success small" :disabled="candidate.selectable===false || item._inventory.loading || item._inventory.stale || item._inventory.api_error" :title="candidate.cut_plan?'按此理论开数采用，需核对修边/刀缝；裁切完成后才能出货':isGeneralSemiFinishedCandidate(candidate)?'采用即确认跨客户使用':'采用即确认此批次适配'" @click="chooseSemiStockGroup(item,component,{candidates:[candidate]},true)">{{candidate.selectable===false?'需完善用途':candidate.usage_confirmation_required?'确认未印刷且适用并采用':'采用'}}</button><button class="btn danger small" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,{candidates:[candidate]},false)">不采用</button>
                                     </td>
                                   </tr><tr v-if="!pdfMaterialCandidates(item,component,item._inventory_tab).length"><td colspan="9">暂无符合条件的可用材料</td></tr>
                                 </tbody></table>
@@ -8299,7 +8299,7 @@
                               <td>{{ semiStockField(group,'processing') }}<small class="semi-stock-match-note">{{group.candidates.map(c=>c.match_reason).filter(Boolean).join('；')}}</small></td>
                               <td><strong>{{ group.quantity }} 张</strong><div v-if="group.adopted" class="status green">采用 {{ group.adopted }} 张</div><small v-else-if="group.rejected" class="muted"> · 不采用</small></td>
                               <td><order-stock-location :candidate="group.candidate" :item="item"></order-stock-location></td>
-                              <td class="semi-stock-actions"><button class="btn small success" type="button" :disabled="group.candidates.every(c=>c.selectable===false) || item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,true)">采用</button><button class="btn small danger" type="button" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,false)">不采用</button></td>
+                              <td class="semi-stock-actions"><button class="btn small success" type="button" :disabled="group.candidates.every(c=>c.selectable===false) || item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,true)">{{group.candidates.some(c=>c.usage_confirmation_required)?'确认未印刷且适用并采用':'采用'}}</button><button class="btn small danger" type="button" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,false)">不采用</button></td>
                             </tr></tbody>
                           </table>
                           <span v-else class="muted">{{inventoryQueryStatus(item)}}</span>
@@ -15313,6 +15313,7 @@
             ].filter(Boolean);
           },
           isSafeSystemInventoryCandidate(component, candidate) {
+            if (candidate?.usage_confirmation_required) return false;
             if (component !== "finished" && this.isOptInSheetCandidate(candidate)) return false;
             if (component !== "finished" && candidate?.recommendation_tier === 'more') return false;
             if (component !== "finished" && candidate?.automatic_recommendation === true && this.isDirectSemiDeductionCandidate(candidate)) return true;
@@ -16176,6 +16177,7 @@
                 if (customerGeneric) warningAcknowledgedCodes.push("CUSTOMER_GENERIC_SEMI_FINISHED_STOCK");
                 if (override && !general && !directDeduction) warningAcknowledgedCodes.push("SEMI_SIGNATURE_OVERRIDE");
                 if (general && part.general_confirmation) warningAcknowledgedCodes.push("GENERAL_SEMI_FINISHED_STOCK");
+                if (candidate.usage_confirmation_required && override && !directDeduction) warningAcknowledgedCodes.push("BLANK_DIE_CUT_PRODUCT_USE_CONFIRMED");
                 return { lot_id:candidate.lot_id, expected_version:candidate.version, requested_qty, component_type:component, recommendation_source:recommendationSource, match_rule_id:candidate.match_rule_id || null, override:directDeduction ? false : override, direct_deduction:directDeduction, warning_acknowledged_codes:warningAcknowledgedCodes, confirmed:!general || part.general_confirmation };
               });
             });

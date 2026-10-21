@@ -5,6 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from tests.test_semi_finished_order_reservation import fictional_document_evidence
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -274,6 +275,11 @@ def eligibility_db(tmp_path: Path):
             credit_limit=0,
         )
         db.add_all([admin, customer, other_customer])
+        # Entry valuation now requires a real quoted material in isolated tests.
+        from app.models.material import Material
+        db.add(Material(code="A416D", supplier_name="资格测试供应商", layer_count=3,
+            flute_type="B", quote_price=Decimal("3"), price_unit="元/平方米", is_active=True,
+            purchase_currency="CNY", purchase_tax_included=True, purchase_tax_rate=Decimal("0.13")))
         db.flush()
 
         def product(owner: Customer, code: str) -> Product:

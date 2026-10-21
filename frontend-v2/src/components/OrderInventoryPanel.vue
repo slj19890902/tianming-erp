@@ -37,9 +37,9 @@ function locationURL(c: InventoryCandidate, part: InventoryPart) {
             <template v-else><td>{{ c.internal_name || '未登记' }}</td><td>{{ c.board_length_mm || '未登记' }}</td><td>{{ c.board_width_mm || '未登记' }}</td><td>{{ c.flute_type || '未登记' }}</td><td>{{ c.material_code || '未登记' }}</td><td>{{ processingName(c) }}</td><td>{{ c.available_stock_quantity }} 张
               <strong v-if="state.allocations.some(a=>a.part===part&&a.lot_id===c.lot_id)"> · 拟用 {{ state.allocations.filter(a=>a.part===part&&a.lot_id===c.lot_id).reduce((s,a)=>s+a.stock_quantity,0) }} 张</strong></td>
               <td>{{ inventoryLocation(c) }} <a v-if="locationURL(c,part)" :href="locationURL(c,part)" target="_blank" rel="noopener">地图定位</a></td></template>
-            <td><el-button size="small" type="success" :disabled="disabled||c.selectable===false" @click="emit('choose',part,c.lot_id)">采用此批</el-button>
+            <td><el-button size="small" type="success" :disabled="disabled||c.selectable===false" @click="emit('choose',part,c.lot_id)">{{ c.usage_confirmation_required ? '确认未印刷且适用并采用' : '采用此批' }}</el-button>
               <p v-for="warning in c.warning_messages" :key="warning">{{ warningText(warning) }}</p>
-              <span v-if="c.selectable===false">用途待核，不能采用</span></td>
+              <span v-if="c.selectable===false || c.usage_confirmation_required">{{ c.match_reason || c.warning_messages?.[0] || '请在库存资料中维护适用产品及实际加工状态' }}</span></td>
           </tr><tr v-if="!state.parts[part].candidates.length&&!state.parts[part].manual.length"><td :colspan="part==='finished'?4:9">暂无可用候选</td></tr></tbody>
         </table>
       </div>

@@ -64,6 +64,7 @@ GENERAL_SEMI_FINISHED_STOCK = "GENERAL_SEMI_FINISHED_STOCK"
 CUSTOMER_GENERIC_SEMI_FINISHED_STOCK = "CUSTOMER_GENERIC_SEMI_FINISHED_STOCK"
 MATERIAL_VARIANCE_PRESERVED = "MATERIAL_VARIANCE_PRESERVED"
 REVERSE_CREASE_ADMIN_OVERRIDE = "REVERSE_CREASE_ADMIN_OVERRIDE"
+BLANK_DIE_CUT_PRODUCT_USE_CONFIRMED = "BLANK_DIE_CUT_PRODUCT_USE_CONFIRMED"
 
 
 def _cut_review_contract(db, lot, requirement, actor_id):
@@ -115,6 +116,7 @@ class SemiFinishedCandidate:
     dimension_distance: float = 0.0
     cut_plan: dict | None = None
     selectable: bool = True
+    usage_confirmation_required: bool = False
 
 
 def _rank_sheet_candidates(db, product_id, expected, candidates):
@@ -131,6 +133,12 @@ def _rank_sheet_candidates(db, product_id, expected, candidates):
         valid = all(a and b and a > 0 and b > 0 for a, b in axes)
         near = valid and all(abs(a-b)*10 <= b for a, b in axes)
         known = processed_match(db, row.lot, product, expected)
+        if known and known.get("usage_confirmation_required"):
+            row = replace(row, selectable=True, usage_confirmation_required=True,
+                automatic_recommendation=False, direct_deduction_eligible=False,
+                match_reason=known["reason"],
+                warning_codes=tuple(dict.fromkeys([*row.warning_codes, BLANK_DIE_CUT_PRODUCT_USE_CONFIRMED])),
+                warning_messages=(known["reason"],))
         if known and known["known"]:
             near = True
         distance = sum(abs(a-b)/b for a, b in axes) if valid else 1e9
@@ -761,6 +769,7 @@ def ensure_semi_finished_lot_eligibility(
     expected: SemiFinishedSignature,
     reviewed: bool = False,
     allow_rotation: bool = False,
+    confirm_processed_use: bool = False,
 ) -> str:
     """Recheck the lot-level hard authorization independently of client data."""
 
@@ -777,6 +786,8 @@ def ensure_semi_finished_lot_eligibility(
     processed = processed_match(db, lot, product, expected)
     if processed:
         if not processed["known"]:
+            if confirm_processed_use and reviewed and processed.get("usage_confirmation_required"):
+                return "customer_generic"
             if processed.get("measurement_review"):
                 raise WarehouseInventoryError(processed["reason"],409)
             raise WarehouseInventoryError("加工片料用途待确认：请管理员在库存用途维护确认具体产品、模具及加工状态，不能仅按尺寸采用", 409)
@@ -1608,6 +1619,7 @@ def confirm_semi_finished_match(
     admin_reverse_crease_override: bool = False,
     reverse_crease_override_reason: str | None = None,
     allow_rotation: bool = False,
+    allow_processed_use: bool = False,
 ) -> SemiFinishedMatchConfirmation:
     requirement = db.get(OrderItemSemiRequirement, requirement_id)
     if requirement is None:
@@ -1628,6 +1640,8 @@ def confirm_semi_finished_match(
         expected=requirement_signature(requirement),
         reviewed=override and SIGNATURE_OVERRIDE_WARNING in warning_acknowledged_codes,
         allow_rotation=allow_rotation,
+        confirm_processed_use=allow_processed_use and operator_id is not None
+            and BLANK_DIE_CUT_PRODUCT_USE_CONFIRMED in warning_acknowledged_codes,
     )
     if scope == "general":
         differences = _physical_signature_differences(
@@ -1718,6 +1732,8 @@ def confirm_semi_finished_match(
                 raise WarehouseInventoryError("规则产品关联并发保存失败，请重试", 409)
     db.flush()
     warning_codes: list[str] = []
+    if processed and processed.get("usage_confirmation_required"):
+        warning_codes.append(BLANK_DIE_CUT_PRODUCT_USE_CONFIRMED)
     if scope == "general":
         warning_codes.append(GENERAL_SEMI_FINISHED_STOCK)
     if scope == "customer_generic":
@@ -2512,6 +2528,7 @@ def reserve_semi_finished_inventory(
                 admin_reverse_crease_override=admin_reverse_crease_override,
                 reverse_crease_override_reason=reverse_crease_override_reason,
                 allow_rotation=allow_rotation,
+                allow_processed_use=True,
             )
             detail = lot.semi_finished_detail
             remaining_target = target - allocated
@@ -2552,6 +2569,22 @@ def reserve_semi_finished_inventory(
                 else f"{idempotency_key}:{lot.id}"
             )
             saved_warnings = list(confirmation.warning_codes)
+            if BLANK_DIE_CUT_PRODUCT_USE_CONFIRMED in saved_warnings:
+                # Commit this exact lot/product confirmation with its reservation;
+                # failed saves roll both back. Do not change the profile or other lots.
+                product_id = _requirement_product_id(db, requirement)
+                db.add(SemiFinishedLotAllowedProduct(inventory_lot_id=lot.id,
+                    product_id=product_id, confirmed_by=operator_id, confirmed_at=now))
+                from app.models.audit import OperationLog
+                from app.models.user import User
+                actor = db.get(User, operator_id)
+                db.add(OperationLog(user_id=operator_id, username=actor.username, role=actor.role,
+                    action="UPDATE", resource=f"warehouse/goods/{lot.id}",
+                    entity_type="warehouse_goods_profile", entity_id=lot.id,
+                    description="订单采用时确认本批未印刷模切片适用产品，不改实物及客户范围",
+                    details=json.dumps(dict(product_id=product_id, requirement_id=requirement.id,
+                        lot_version=expected_versions[lot.id], profile=goods_profile(db, lot),
+                        requirement=asdict(requirement_signature(requirement))), ensure_ascii=False)))
             if cut_plan and override and SIGNATURE_OVERRIDE_WARNING in warnings:
                 # Keep the explicit allocation review, not just the generic
                 # match scope returned by confirm_semi_finished_match.

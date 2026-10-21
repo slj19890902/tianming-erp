@@ -25,3 +25,14 @@ test('cover/base and composite use real product structure',()=>{assert.deepEqual
 test('direct customer-generic recommendation retains audit flags without override',()=>{const a=line('a',5),c={...sheet(1,10),source:'customer_generic',automatic_recommendation:true,direct_deduction_eligible:true,warning_codes:['CUSTOMER_GENERIC_SEMI_FINISHED_STOCK']};a.state.parts.whole.candidates=[c];a.state.authority=authority(a,5);u.semiPlans([a]);assert.equal(a.state.plan.semi[0].direct_deduction,true);assert.equal(a.state.plan.semi[0].override,false);assert.deepEqual(plain(a.state.plan.semi[0].warning_acknowledged_codes),['CUSTOMER_GENERIC_SEMI_FINISHED_STOCK'])});
 test('manual browse never becomes an automatic adoption',()=>{assert.equal(u.safeCandidate('whole',{...sheet(1,10),source:'manual',automatic_recommendation:true,direct_deduction_eligible:true}),false)});
 test('current formal positive integer cutting labels supported and invalid labels rejected',()=>{assert.equal(u.semiCandidateRequest({...product,default_cutting_mode:'一开12'},1,'whole').stock_yield_per_sheet,12);assert.equal(u.semiCandidateRequest({...product,default_cutting_mode:'7'},1,'whole').stock_yield_per_sheet,7);assert.throws(()=>u.semiCandidateRequest({...product,default_cutting_mode:'一开0'},1,'whole'),/不能猜测/)});
+
+test('blank die cut usage review is explicit per lot and preserves other drafts',()=>{
+  const a=line('a',50),c={...sheet(861,126),source:'customer_generic',usage_confirmation_required:true,direct_deduction_eligible:false,automatic_recommendation:false};
+  a.state.parts.whole.candidates=[c,{...c,lot_id:862}];a.state.authority=authority(a,50);
+  u.semiPlans([a]);assert.equal(a.state.plan.semi.length,0);
+  a.state.parts.whole.mode='exact';a.state.parts.whole.selected=[861];u.semiPlans([a]);
+  assert.equal(a.state.plan.semi.length,1);assert.equal(a.state.plan.semi[0].lot_id,861);
+  assert(a.state.plan.semi[0].warning_acknowledged_codes.includes('BLANK_DIE_CUT_PRODUCT_USE_CONFIRMED'));
+  assert.equal(a.state.plan.semi[0].requested_qty,50);assert.equal(a.state.plan.semi[0].direct_deduction,false);
+  a.state.parts.whole.mode='skipped';u.semiPlans([a]);assert.equal(a.state.plan.semi.length,0);
+});

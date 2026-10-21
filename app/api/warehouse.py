@@ -3240,6 +3240,7 @@ def _semi_candidate_dict(
         ),
         "requires_requisition_cut_plan": bool(row.cut_plan),
         "selectable": row.selectable,
+        "usage_confirmation_required": row.usage_confirmation_required,
         "layer_count": detail.layer_count,
         "sheet_type": detail.sheet_type,
         "crease_type": detail.crease_type,

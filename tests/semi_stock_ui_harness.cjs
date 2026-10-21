@@ -1,12 +1,13 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const html=fs.readFileSync('static/index.html','utf8');
 const script=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(m=>m[1]).find(s=>s.trim());
-const sandbox={axios:{defaults:{},interceptors:{response:{use(){}}}},Vue:{createApp(d){sandbox.definition=d;return{component(){return this},mount(){return this}}}},TMOrderReference:{component:{}},localStorage:{getItem(){return ''},setItem(){},removeItem(){}},window:{},console,URLSearchParams,setTimeout,clearTimeout};
+const sandbox={axios:{defaults:{},interceptors:{request:{use(){}},response:{use(){}}}},Vue:{createApp(d){sandbox.definition=d;return{mixin(){return this},component(){return this},mount(){return this}}}},TMDemandStock:{mixin:{},summary:{},importer:{}},TMManualReplenishment:{picker:{}},TMManualSheetDeduction:{component:{}},TMOrderReference:{component:{}},localStorage:{getItem(){return ''},setItem(){},removeItem(){}},window:{TianmingIncomingActual:{methods:{}},TmDeliveryEditorLayout:{install(){}}},console,URLSearchParams,setTimeout,clearTimeout};
 vm.createContext(sandbox);vm.runInContext(script,sandbox);
 const ctx={...sandbox.definition.methods,inventoryComponents:()=>['whole'],inventoryPlanApplies:()=>true,reallocateAllDraftInventory(){},invalidatePdfDraftForItem(){}};
 const a={lot_id:861,version:2,source:'customer_generic',available_stock_quantity:121,warehouse_location:{id:1251,employee_location_name:'三楼 北K-04'},board_length_mm:1345,board_width_mm:1300,flute_type:'B',material_code:'R7A',sheet_type:'semi_finished',signature_differences:['customer']};
 const b={...a,lot_id:862,available_stock_quantity:300,warehouse_location:{id:1256,employee_location_name:'三楼 北K-03'}};
 const line={product_id:206,quantity:500,_inventory:ctx.newOrderInventoryState()};
+ctx.orderForm={customer_id:1,items:[line]};ctx.orderImportDrafts=[];line._inventory.context={customer_id:1,product_id:206,quantity:500};
 const part=line._inventory.semi.whole;part.candidates=[a,b];part.manual_candidates=[a];
 assert.equal(ctx.orderLineSemiAvailable(line),421);
 assert.match(ctx.orderLineInventoryAutoSummary(line),/半成品可用421张/);
@@ -62,3 +63,19 @@ const pdf={mixin(definition){Object.assign(ctx,definition.methods)}};sandbox.win
 assert.equal(ctx.pdfMaterialCandidates(line,'whole','semi').length,0);
 part.show_more_sizes=true;assert.equal(ctx.pdfMaterialCandidates(line,'whole','semi').length,1);
 console.log('near-size folding, dimension-before-quantity order, no hidden automatic use/save block, PDF parity passed');
+
+// Mail import: review remains opt-in and its payload is bound to the clicked lot.
+const blank={...a,lot_id:9861,usage_confirmation_required:true,selectable:true,source:'customer_generic',customer_bound:true,stock_yield_per_sheet:1};
+const unselected={...blank,lot_id:9862};
+line._inventory.context={customer_id:1,product_id:206,quantity:line.quantity};part.candidates=[blank,unselected];part.manual_candidates=[];part.selected_candidates=[];part.selected=null;part.allocations=[];
+assert.equal(ctx.isSafeSystemInventoryCandidate('whole',blank),false);
+ctx.chooseSemiStockGroup(line,'whole',{candidates:[blank]},true);
+part.allocations=part.selected_candidates.map(candidate=>({candidate,requested_qty:50,stock_quantity:50}));
+const reviewed=ctx.buildReservationPlan(line).semi;
+assert.equal(reviewed.length,1);assert.equal(reviewed[0].lot_id,9861);
+assert(reviewed[0].warning_acknowledged_codes.includes('BLANK_DIE_CUT_PRODUCT_USE_CONFIRMED'));
+assert.equal(reviewed[0].direct_deduction,false);
+ctx.chooseSemiStockGroup(line,'whole',{candidates:[blank]},false);
+assert.equal(ctx.buildReservationPlan(line).semi.length,0);
+assert(html.includes('确认未印刷且适用并采用'));
+console.log('mail blank use: explicit selected-lot confirmation and cancel passed');

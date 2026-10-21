@@ -92,12 +92,13 @@ def test_supplier_draft_keeps_recommended_and_review_lots_visible() -> None:
     harness = f"""
 const vm = require("vm");
 const sandbox = {{
-  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
-  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  axios: {{ defaults: {{}}, interceptors: {{ request: {{ use() {{}} }}, response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ mixin() {{ return this; }}, component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
-  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+  window: {{ TianmingIncomingActual: {{ methods: {{}} }}, TmDeliveryEditorLayout: {{ install() {{}} }} }}, console, URLSearchParams, setTimeout, clearTimeout,
 }};
 sandbox.TMOrderReference = {{component:{{}}}};
+sandbox.TMDemandStock={{mixin:{{}},summary:{{}},importer:{{}}}}; sandbox.TMManualReplenishment={{picker:{{}}}}; sandbox.TMManualSheetDeduction={{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const method = sandbox.definition.methods.draftSemiInventoryCandidates;
@@ -206,12 +207,13 @@ def test_exact_semi_finished_candidate_keeps_direct_deduction_contract() -> None
     harness = f"""
 const vm = require("vm");
 const sandbox = {{
-  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
-  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  axios: {{ defaults: {{}}, interceptors: {{ request: {{ use() {{}} }}, response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ mixin() {{ return this; }}, component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
-  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+  window: {{ TianmingIncomingActual: {{ methods: {{}} }}, TmDeliveryEditorLayout: {{ install() {{}} }} }}, console, URLSearchParams, setTimeout, clearTimeout,
 }};
 sandbox.TMOrderReference = {{component:{{}}}};
+sandbox.TMDemandStock={{mixin:{{}},summary:{{}},importer:{{}}}}; sandbox.TMManualReplenishment={{picker:{{}}}}; sandbox.TMManualSheetDeduction={{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const methods = sandbox.definition.methods;
@@ -257,12 +259,13 @@ def test_refreshed_pdf_draft_cannot_silently_downgrade_direct_deduction() -> Non
     harness = f"""
 const vm = require("vm");
 const sandbox = {{
-  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
-  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  axios: {{ defaults: {{}}, interceptors: {{ request: {{ use() {{}} }}, response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ mixin() {{ return this; }}, component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
-  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+  window: {{ TianmingIncomingActual: {{ methods: {{}} }}, TmDeliveryEditorLayout: {{ install() {{}} }} }}, console, URLSearchParams, setTimeout, clearTimeout,
 }};
 sandbox.TMOrderReference = {{component:{{}}}};
+sandbox.TMDemandStock={{mixin:{{}},summary:{{}},importer:{{}}}}; sandbox.TMManualReplenishment={{picker:{{}}}}; sandbox.TMManualSheetDeduction={{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const methods = sandbox.definition.methods;
@@ -332,12 +335,13 @@ def test_shared_lot_is_reallocated_in_line_order_with_yield() -> None:
     harness = f"""
 const vm = require("vm");
 const sandbox = {{
-  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
-  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  axios: {{ defaults: {{}}, interceptors: {{ request: {{ use() {{}} }}, response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ mixin() {{ return this; }}, component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
-  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+  window: {{ TianmingIncomingActual: {{ methods: {{}} }}, TmDeliveryEditorLayout: {{ install() {{}} }} }}, console, URLSearchParams, setTimeout, clearTimeout,
 }};
 sandbox.TMOrderReference = {{component:{{}}}};
+sandbox.TMDemandStock={{mixin:{{}},summary:{{}},importer:{{}}}}; sandbox.TMManualReplenishment={{picker:{{}}}}; sandbox.TMManualSheetDeduction={{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(TIME_UTILS)}, sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
@@ -521,13 +525,14 @@ def test_safe_inventory_recommendation_one_click_excludes_risky_candidates() -> 
     harness = f"""
 const vm = require("vm");
 const sandbox = {{
-  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
-  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  axios: {{ defaults: {{}}, interceptors: {{ request: {{ use() {{}} }}, response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ mixin() {{ return this; }}, component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
-  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+  window: {{ TianmingIncomingActual: {{ methods: {{}} }}, TmDeliveryEditorLayout: {{ install() {{}} }} }}, console, URLSearchParams, setTimeout, clearTimeout,
   confirm() {{ throw new Error("browser confirm must not run"); }},
 }};
 sandbox.TMOrderReference = {{component:{{}}}};
+sandbox.TMDemandStock={{mixin:{{}},summary:{{}},importer:{{}}}}; sandbox.TMManualReplenishment={{picker:{{}}}}; sandbox.TMManualSheetDeduction={{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const methods = sandbox.definition.methods;
@@ -540,7 +545,7 @@ const learnedDifference = {{lot_id:4,source:"learned",available_stock_quantity:2
 const accidentalManual = {{lot_id:5,source:"manual",available_stock_quantity:20,signature_differences:[],warning_codes:[]}};
 const line = {{product_id:99,quantity:10,_inventory:{{loading:false,stale:false,api_error:false,context:{{product_id:99,customer_id:7,quantity:10}},finished:part([dedicated,general,warningAlias]),semi:{{whole:part([safeSemi,learnedDifference,accidentalManual]),cover:part([]),base:part([])}}}}}};
 let reallocations = 0;
-const context = {{ ...methods, orderImportDrafts:[],
+const context = {{ ...methods, orderImportDrafts:[], orderForm:{{items:[line],customer_id:7}},
   inventoryComponents:() => ["whole"], inventoryStateMatchesLine:() => true,
   semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride,
   isGeneralSemiFinishedCandidate:methods.isGeneralSemiFinishedCandidate,
@@ -581,12 +586,13 @@ def test_loading_inventory_automatically_selects_only_safe_candidates() -> None:
     harness = f"""
 const vm = require("vm");
 const sandbox = {{
-  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
-  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  axios: {{ defaults: {{}}, interceptors: {{ request: {{ use() {{}} }}, response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ mixin() {{ return this; }}, component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
-  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+  window: {{ TianmingIncomingActual: {{ methods: {{}} }}, TmDeliveryEditorLayout: {{ install() {{}} }} }}, console, URLSearchParams, setTimeout, clearTimeout,
 }};
 sandbox.TMOrderReference = {{component:{{}}}};
+sandbox.TMDemandStock={{mixin:{{}},summary:{{}},importer:{{}}}}; sandbox.TMManualReplenishment={{picker:{{}}}}; sandbox.TMManualSheetDeduction={{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const methods = sandbox.definition.methods;
@@ -645,12 +651,13 @@ def test_general_semi_finished_requires_explicit_confirmation_before_payload_war
     harness = f"""
 const vm = require("vm");
 const sandbox = {{
-  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
-  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  axios: {{ defaults: {{}}, interceptors: {{ request: {{ use() {{}} }}, response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ mixin() {{ return this; }}, component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
-  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+  window: {{ TianmingIncomingActual: {{ methods: {{}} }}, TmDeliveryEditorLayout: {{ install() {{}} }} }}, console, URLSearchParams, setTimeout, clearTimeout,
 }};
 sandbox.TMOrderReference = {{component:{{}}}};
+sandbox.TMDemandStock={{mixin:{{}},summary:{{}},importer:{{}}}}; sandbox.TMManualReplenishment={{picker:{{}}}}; sandbox.TMManualSheetDeduction={{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const methods = sandbox.definition.methods;
@@ -658,7 +665,7 @@ const general = {{lot_id:11,version:3,source:"general_signature",recommendation_
 const part = {{candidates:[general],manual_candidates:[],selected:null,selected_candidates:[],allocations:[],skipped:false,manual_override:false,general_confirmation:false,unavailable_reason:""}};
 const line = {{product_id:99,quantity:5,_inventory:{{loading:false,stale:false,api_error:false,context:{{product_id:99,customer_id:7,quantity:5}},finished:{{candidates:[],manual_candidates:[],selected:null,selected_candidates:[],allocations:[],skipped:false}},semi:{{whole:part,cover:{{candidates:[],manual_candidates:[],selected_candidates:[],allocations:[],skipped:false}},base:{{candidates:[],manual_candidates:[],selected_candidates:[],allocations:[],skipped:false}}}}}}}};
 let reallocations = 0;
-const context = {{ ...methods, orderImportDrafts:[],
+const context = {{ ...methods, orderImportDrafts:[], orderForm:{{items:[line],customer_id:7}},
   inventoryPlanApplies:methods.inventoryPlanApplies,
   inventoryComponents:() => ["whole"],
   inventoryCandidateWarnings:methods.inventoryCandidateWarnings,

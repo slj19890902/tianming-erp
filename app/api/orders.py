@@ -287,6 +287,7 @@ from app.services.warehouse_inventory import (
     reserve_finished_inventory,
 )
 from app.services.semi_finished_inventory import (
+    BLANK_DIE_CUT_PRODUCT_USE_CONFIRMED,
     CUSTOMER_GENERIC_SEMI_FINISHED_STOCK,
     GENERAL_SEMI_FINISHED_STOCK,
     SIGNATURE_OVERRIDE_WARNING,
@@ -1347,6 +1348,7 @@ def _preflight_reservation_plans(
                     customer_id=customer_id,
                     expected=expected,
                     reviewed=entry.override and SIGNATURE_OVERRIDE_WARNING in entry.warning_acknowledged_codes,
+                    confirm_processed_use=entry.confirmed and BLANK_DIE_CUT_PRODUCT_USE_CONFIRMED in entry.warning_acknowledged_codes,
                 )
                 if rectangular_cut_plan(db, lot, product, expected) is not None:
                     raise WarehouseInventoryError(

@@ -1,5 +1,6 @@
 import json
 import pytest
+from tests.test_semi_finished_order_reservation import fictional_document_evidence
 from sqlalchemy import select
 from test_semi_finished_lot_eligibility import eligibility_db, _add_lot, _add_requirement
 from app.models.warehouse_goods import WarehouseGoodsProfile

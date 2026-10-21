@@ -1424,8 +1424,8 @@ def browse_semi_finished_inventory_for_requirement(
             product_id=product_id,
         )
         raw_review = False
-        rotated_review = (allow_rotation and expected.board_length_mm != expected.board_width_mm
-            and (detail.board_length_mm, detail.board_width_mm) == (expected.board_width_mm, expected.board_length_mm))
+        rotated_review = allow_rotation and bool((rectangular_cut_plan(
+            db, lot, db.get(Product, product_id), expected, reviewed=True, allow_rotation=True) or {}).get('rotated'))
         if (scope is None or rotated_review) and reviewed_raw and (detail.sheet_type == "raw_board" or rotated_review):
             try:
                 scope = ensure_semi_finished_lot_eligibility(
@@ -2961,7 +2961,8 @@ def consume_semi_finished_reservation(
             if reviewed_cut:
                 current_plan = rectangular_cut_plan(db, lot, db.get(Product, requirement_product_id),
                     requirement_signature(requirement), reviewed=True, allow_rotation=frozen_plan.get('rotated') is True)
-                if current_plan != {key: value for key, value in frozen_plan.items() if key != 'review_contract'}:
+                if current_plan != {key: value for key, value in frozen_plan.items()
+                        if key not in {'review_contract','full_sheet_output_v1'}}:
                     raise WarehouseInventoryError("当前原板裁切条件与已确认方案不一致，请重新核对", 409)
         from app.services.raw_purchase_plans import validate_reservation
         from app.services.order_replenishment_supply import validate_material_output_reservation

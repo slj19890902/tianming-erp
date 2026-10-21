@@ -16,7 +16,7 @@ from app.services import shared_finished_stock as shared
 
 CAPABILITY = 'shared_product_master_v1'
 MATERIAL = ('material_id', 'legacy_material_text', 'flute_type', 'layer_count', 'default_material_code')
-REPORT = ('report_length_mm', 'report_width_mm', 'base_report_length_mm', 'base_report_width_mm',
+REPORT = ('supplier_edge_type', 'base_supplier_edge_type', 'report_length_mm', 'report_width_mm', 'base_report_length_mm', 'base_report_width_mm',
           'crease_type', 'crease_left_mm', 'crease_middle_mm', 'crease_right_mm',
           'base_crease_type', 'base_crease_left_mm', 'base_crease_middle_mm', 'base_crease_right_mm',
           'default_cutting_mode', 'sheet_cutting_settings', 'production_variants')

@@ -56,6 +56,10 @@ def test_bidirectional_report_sync_has_cas_history_and_keeps_prices(reservation_
     assert source.report_length_mm==target.report_length_mm==802
     assert (source.version,target.version)==tuple(v+1 for v in initial)
     assert target.sale_unit_price==price and lot.quantity_available==50
+    edit(db,data,source,{'supplier_edge_type':'净料'});db.commit()
+    assert source.supplier_edge_type==target.supplier_edge_type=='净料'
+    assert target.sale_unit_price==price and lot.quantity_available==50
+    initial=(source.version-1,target.version-1)
     assert shared.match(db,lot,product_id=target.id,customer_id=target.customer_id)
     edit(db,data,target,{'report_length_mm':804});db.commit()
     assert source.report_length_mm==target.report_length_mm==804

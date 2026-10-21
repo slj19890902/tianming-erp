@@ -563,6 +563,8 @@ class ProductPayload(BaseModel):
     # v0.19.2-B: 报料尺寸 + 压线信息
     report_length_mm: SheetDimension | None = None
     report_width_mm: SheetDimension | None = None
+    supplier_edge_type: Literal["毛片", "净料"] | None = None
+    base_supplier_edge_type: Literal["毛片", "净料"] | None = None
     crease_type: str | None = Field(default=None, pattern="^(毛片|净料|压线|其他)$|^$")
     crease_left_mm: int | None = None
     crease_middle_mm: int | None = None
@@ -1347,6 +1349,9 @@ def _product_write_data(payload: ProductPayload, user: User) -> dict:
     data.pop("share_with_customer_group", None)
     if 'production_variants' not in payload.model_fields_set:
         data.pop('production_variants', None)
+    for field in ('supplier_edge_type','base_supplier_edge_type'):
+        if field not in payload.model_fields_set:
+            data.pop(field,None)
     if "sheet_cutting_settings" not in payload.model_fields_set:
         data.pop("sheet_cutting_settings", None)
     from app.services.customer_document_fields import FIELDS
@@ -1488,7 +1493,9 @@ def _validate_product_sheet_cutting(payload):
                 raise SheetCuttingContractError("请先填写理论报料长宽，再保存供应商实际长宽")
             if length and width:
                 contract = part.contract(length, width)
-                validate_supplier_trim(contract, payload.base_crease_type if component == "base" else payload.crease_type)
+                validate_supplier_trim(contract,
+                    (payload.base_supplier_edge_type or payload.base_crease_type) if component == "base"
+                    else (payload.supplier_edge_type or payload.crease_type))
                 try:
                     validate_sheet_dimensions(*contract.supplier_size_mm, layer_count=payload.layer_count, flute_type=payload.flute_type)
                 except ValueError as error:
@@ -1561,6 +1568,8 @@ def _response(product: Product, user: User, *, bom_profiles: dict | None = None)
         data["material_flute_type"] = None
     data["readiness"] = product_readiness(product, bom_profiles=bom_profiles)
     data['production_variants'] = product.production_variants
+    data['supplier_edge_type'] = product.supplier_edge_type
+    data['base_supplier_edge_type'] = product.base_supplier_edge_type
     if product.mold_tool is not None:
         data["mold_tool"] = {
             "id": product.mold_tool.id,

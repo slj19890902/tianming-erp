@@ -9213,7 +9213,9 @@ def _create_supplier_order_for_pending_entries(
             if component_type == "cover"
             else "-底" if component_type == "base" else ""
         )
+        from app.services.supplier_paper_edges import product_supplier_edge
         supplier_item = SupplierRequisitionOrderItem(
+                supplier_edge_type=product_supplier_edge(entry.get('product'), component_type),
                 sheet_cutting_snapshot=entry.get("sheet_cutting_snapshot"),
                 supplier_order_id=order.id,
                 order_item_id=order_item.id,
@@ -16092,7 +16094,9 @@ def _build_replenishment_item(
         if crease_error:
             raise StockReplenishmentError(f"{crease_error}。")
 
+    from app.services.supplier_paper_edges import product_supplier_edge
     return StockReplenishmentOrderItem(
+        supplier_edge_type=product_supplier_edge(product, payload.component_type),
         sheet_cutting_snapshot=sheet_snapshot,
         stock_policy_id=policy.id if policy else None,
         target_inventory_type=payload.target_inventory_type,

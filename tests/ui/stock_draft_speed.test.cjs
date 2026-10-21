@@ -42,7 +42,7 @@ test('target details appear before slow options/workbench, without hidden all-po
   target.resolve({data:draft});await tick();
   assert.equal(v.stockReplenishmentForm.items[0].product_code,'FICTION-3');assert.equal(v.stockReplenishmentForm.items[0].reference_product_id,3);
   assert.equal(v.stockReplenishmentForm.items[0].quantity,20);assert.equal(v.stockReplenishmentForm._pendingDrafts,0);assert.deepEqual(v.pages,[]);
-  options.resolve();await opened;assert.deepEqual(v.pages,['requisition']);assert(!calls.includes('/api/requisition/stock-policies'));
+  options.resolve();await opened;assert.deepEqual(v.pages,[]);assert.equal(v.activePage,'dashboard');assert(!calls.includes('/api/requisition/stock-policies'));
 });
 test('manual entry still fetches warnings and selector collections',async()=>{
   const calls=[];const v=setup(async u=>{calls.push(u);return {data:{items:[{id:9}]}};});let customers=0,materials=0;

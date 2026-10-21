@@ -1167,6 +1167,9 @@ class ActualReceiptRequest(BaseModel):
     material_version: int = Field(gt=0)
     length_mm: SheetDimension = Field(gt=0)
     width_mm: SheetDimension = Field(gt=0)
+    supplier_edge_type: Literal['毛片', '净料'] | None = None
+    sync_supplier_defaults: bool | None = None
+    expected_product_version: int | None = Field(default=None, gt=0)
     fingerprint: str | None = Field(default=None,min_length=64,max_length=64)
 
 
@@ -1354,6 +1357,7 @@ def _supplier_order_item_overlay(
         "order_item_id": supplier_item.order_item_id,
         "supplier_order_id": supplier_item.supplier_order_id,
         "supplier_order_item_id": supplier_item.id,
+        "supplier_edge_type": supplier_item.supplier_edge_type,
         "source_type": "supplier_order_item",
         "component_type": component,
         "product_id": supplier_item.product_id,
@@ -1634,6 +1638,7 @@ def _stock_replenishment_pending_rows(
                 ),
                 "layer_count": item.layer_count,
                 "flute_type": clean_supplier_flute_type(item.flute_type) or None,
+                "supplier_edge_type": item.supplier_edge_type,
                 "material_display": _receipt_material_display(
                     clean_supplier_material_code(
                         item.material_code_snapshot,
@@ -4696,7 +4701,7 @@ def receive_item(
             received_quantity=(
                 payload.received_quantity if payload is not None else None
             ),
-            actual_spec=payload.actual_spec.model_dump(mode="json") if payload and payload.actual_spec else None,
+            actual_spec=payload.actual_spec.model_dump(mode="json", exclude_none=True) if payload and payload.actual_spec else None,
             resolution_action=(payload.resolution_action if payload else None),
             resolution_reason=(payload.resolution_reason if payload else None),
             surplus_disposition=(payload.surplus_disposition if payload else None),
@@ -4865,7 +4870,7 @@ def batch_receive_items(
                     user=user,
                     item_key=line.item_id,
                     received_quantity=line.received_quantity,
-                    actual_spec=line.actual_spec.model_dump(mode="json") if line.actual_spec else None,
+                    actual_spec=line.actual_spec.model_dump(mode="json", exclude_none=True) if line.actual_spec else None,
                     resolution_action=line.resolution_action,
                     resolution_reason=line.resolution_reason,
                     surplus_disposition=line.surplus_disposition,

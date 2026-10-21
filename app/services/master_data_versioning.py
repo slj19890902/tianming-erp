@@ -123,6 +123,7 @@ _PRODUCT_FIELDS = (
     "surface_paper_type",
     "report_length_mm",
     "report_width_mm",
+    "supplier_edge_type", "base_supplier_edge_type",
     "crease_type",
     "crease_left_mm",
     "crease_middle_mm",

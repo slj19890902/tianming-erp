@@ -82,6 +82,7 @@ class SupplierRequisitionOrder(Base):
 
 
 class SupplierRequisitionOrderItem(Base):
+    supplier_edge_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     sheet_cutting_snapshot: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     __tablename__ = "supplier_requisition_order_items"
     __table_args__ = (

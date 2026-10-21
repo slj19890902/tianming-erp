@@ -85,6 +85,15 @@ def stock_advice(policy_id: int, db: Session = Depends(get_db), user: User = Dep
     return build_stock_advice(db, warning=warning, today=beijing_today())
 
 
+@router.get("/stock-warnings")
+def stock_warnings(db: Session = Depends(get_db), user: User = Depends(can_read)):
+    """Refresh the existing stock panel without recomputing unrelated queues."""
+    if not all(has_permission(user, p) for p in ("warehouse.view", "requisition.view")):
+        raise HTTPException(403, "需要库存及报料查看权限")
+    visible = None if has_unrestricted_customer_access(user, db) else customer_scope_ids(user, db)
+    return {'items': _common_box_low_stock_warnings(db, visible)}
+
+
 @router.post("/task-preferences")
 def update_home_task_preference(payload: HomeTaskPreferenceRequest,
     db: Session = Depends(get_db), user: User = Depends(can_read)):

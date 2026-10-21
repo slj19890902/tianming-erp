@@ -2237,7 +2237,7 @@ def adopt_bom_paper(snapshot_id: int, payload: BomPaperAdoptPayload,
 
 class ManualSheetReservationPayload(BaseModel):
     component_type: Literal["whole", "cover", "base"] = "whole"
-    match_mode: Literal["exact", "swapped"] = "exact"
+    match_mode: Literal["exact", "swapped", "auto"] = "exact"
     lot_id: int = Field(gt=0)
     stock_quantity: int = Field(gt=0, strict=True)
     expected_version: int = Field(gt=0)
@@ -2257,7 +2257,7 @@ class ManualSheetBatchItem(BaseModel):
 
 class ManualSheetBatchPayload(BaseModel):
     component_type: Literal["whole", "cover", "base"] = "whole"
-    match_mode: Literal["exact", "swapped"] = "exact"
+    match_mode: Literal["exact", "swapped", "auto"] = "exact"
     expected_order_item_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
     idempotency_key: str = Field(min_length=8, max_length=80)
     items: list[ManualSheetBatchItem] = Field(min_length=1, max_length=50)
@@ -4105,9 +4105,33 @@ def _revise_manual_internal_demand(db, item, component, remaining, user, *, snap
 
 
 def _manual_sheet_candidates(db, requirement, user, match_mode):
-    """This explicit workflow only accepts exact axes, then opt-in swapped axes."""
+    """Discover with the same cutting contract used by reservation/production."""
     from app.services.semi_finished_inventory import browse_semi_finished_inventory_for_requirement
     from decimal import Decimal
+
+    if match_mode == 'auto':
+        rows = _semi_candidate_dicts(db, _visible_semi_candidates(
+            browse_semi_finished_inventory_for_requirement(db, requirement,
+                reviewed_raw=True, allow_rotation=True), user, db))
+        eligible = []
+        for row in rows:
+            if (not row.get('selectable') or not requirement.flute_type
+                    or str(row.get('flute_type') or '').strip().upper() != str(requirement.flute_type).strip().upper()):
+                continue
+            plan = row.get('cut_plan') or {}
+            exact = (Decimal(str(row['board_length_mm'])) == Decimal(str(requirement.board_length_mm))
+                and Decimal(str(row['board_width_mm'])) == Decimal(str(requirement.board_width_mm)))
+            if not exact and not plan:
+                continue
+            kind = 'swapped' if plan.get('rotated') else 'exact' if exact else 'cut'
+            row['recommendation_kind'] = kind
+            row['recommendation_label'] = {'exact':'同尺寸', 'cut':'大张裁切／模切', 'swapped':'交换方向'}[kind]
+            eligible.append(row)
+        # Existing FIFO order is the stable tie breaker; preserve actual material.
+        eligible.sort(key=lambda r: ({'exact':0,'cut':1,'swapped':2}[r['recommendation_kind']],
+            normalize_material_code(r.get('material_code')) != requirement.normalized_material_code,
+            -float((r.get('cut_plan') or {}).get('utilization', 100))))
+        return eligible, False
 
     def matching(rows, swapped=False):
         length, width = requirement.board_length_mm, requirement.board_width_mm
@@ -4250,7 +4274,7 @@ def _order_manual_sheet_state(db, item_id, component_type, user, match_mode='exa
 @router.get("/semi-finished/bom-components/{bom_snapshot_id}/manual-inventory")
 def bom_manual_sheet_inventory(
     bom_snapshot_id: int, component_type: Literal["whole", "cover", "base"] = "whole",
-    match_mode: Literal['exact', 'swapped'] = 'exact',
+    match_mode: Literal['exact', 'swapped', 'auto'] = 'exact',
     db: Session = Depends(get_db), user: User = Depends(can_view_reservations),
 ) -> dict:
     try:
@@ -4269,7 +4293,7 @@ def reserve_bom_manual_sheet_inventory(
 
 @router.get("/semi-finished/order-items/{order_item_id}/manual-inventory")
 def order_manual_sheet_inventory(order_item_id: int, component_type: Literal["whole", "cover", "base"] = "whole",
-    match_mode: Literal['exact', 'swapped'] = 'exact',
+    match_mode: Literal['exact', 'swapped', 'auto'] = 'exact',
     db: Session = Depends(get_db), user: User = Depends(can_view_reservations)) -> dict:
     try:
         return _order_manual_sheet_state(db, order_item_id, component_type, user, match_mode)[3]
@@ -4344,10 +4368,16 @@ def _reserve_manual_sheet_inventory(target_id, payload, db, user, *, is_bom, com
             operator_id=user.id, idempotency_key=payload.idempotency_key, confirmed=True,
             override=SIGNATURE_OVERRIDE_WARNING in candidate["warning_codes"],
             warning_acknowledged_codes=payload.warning_acknowledged_codes,
-            allow_rotation=payload.match_mode == 'swapped',
+            allow_rotation=(candidate.get('cut_plan') or {}).get('rotated') is True,
         )
         if sum(row.reserved_stock_quantity for row in result.reservations) != payload.stock_quantity:
             raise WarehouseInventoryError("本次实际预占张数与填写数量不一致，已取消抵扣", 409)
+        if payload.match_mode == 'auto':
+            for reservation in result.reservations:
+                if reservation.cut_plan_json:
+                    plan = json.loads(reservation.cut_plan_json)
+                    plan['full_sheet_output_v1'] = True
+                    reservation.cut_plan_json = json.dumps(plan,ensure_ascii=False,sort_keys=True)
         if is_bom:
             coverage = component_inventory_coverage(db, snapshot.id, component_type=temporary.component_type)
             remaining = max(temporary.required_piece_quantity - coverage["total_piece_quantity"], 0)

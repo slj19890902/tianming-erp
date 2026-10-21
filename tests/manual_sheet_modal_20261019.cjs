@@ -11,12 +11,10 @@ function state() {
   Object.defineProperty(value,'identity',{get:()=>ui.component.computed.identity.call(value)});
   return value;
 }
-test('opening requests original axes; swaps require explicit empty-result action',async()=>{
+test('opening queries all ranked modes once; no further-match click is needed',async()=>{
   const reads=[];global.axios={get:async(url,options)=>{reads.push(options.params);return {data:preview()}}};
   const s=state();await s.open();await s.load('swapped');
-  assert.deepEqual(reads,[{component_type:'whole',match_mode:'exact'}]);
-  s.rows=[];s.preview.can_further_match=true;
-  await s.load('swapped');assert.equal(reads.at(-1).match_mode,'swapped');
+  assert.deepEqual(reads,[{component_type:'whole',match_mode:'auto'}]);
 });
 test('selection suggests only uncovered sheets and keeps per-box pieces separate',async()=>{
   global.axios={get:async()=>({data:preview([stock(1),stock(2)])})};

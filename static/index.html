@@ -7,7 +7,7 @@
     <link rel="icon" type="image/png" href="/static/assets/tianming-brand-symbol.png" />
     <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260926-cost-column" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
-    <link rel="stylesheet" href="/static/ui/home-workbench.css?v=20261010-stock-alert3" />
+    <link rel="stylesheet" href="/static/ui/home-workbench.css?v=f21488411581" />
     <script src="/static/ui/home-workbench.js?v=20261014processed01"></script>
     <link rel="stylesheet" href="/static/ui/product-workbench.css?v=085b188293c9" />
     <link rel="stylesheet" href="/static/ui/stock-origins.css?v=20261019origins02" />
@@ -37,7 +37,7 @@
     <script src="/static/ui/entry-product-editor.js?v=20261020-entry-message"></script>
     <script src="/static/ui/demand-stock.js?v=20261012"></script>
     <link rel="stylesheet" href="/static/ui/manual-sheet-deduction.css?v=7d167e88e29e">
-    <script src="/static/ui/manual-sheet-deduction.js?v=ad4b549c969b"></script>
+    <script src="/static/ui/manual-sheet-deduction.js?v=3e12a54e1042"></script>
     <script src="/static/ui/manual-replenishment-entry.js?v=fb1a07910498"></script>
     <link rel="stylesheet" href="/static/ui/demand-stock.css?v=20261012">
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
@@ -3245,7 +3245,7 @@
     <link rel="stylesheet" href="/static/product-editor-compact.css?v=20261008-cutting-v2" />
     <link rel="stylesheet" href="/static/ui/workspace.css?v=5555873a9b80" />
     <link rel="stylesheet" href="/static/ui/order-reference.css?v=423" />
-    <script src="/static/ui/incoming-actual.js"></script>
+    <script src="/static/ui/incoming-actual.js?v=e251f82faeb0"></script>
 <script src="/static/ui/order-reference.js?v=423"></script>
     <script src="/static/js/unified-navigation.js?v=20261008-inventory-flow"></script>
     <script src="/static/js/frontend-reliability.js?v=20261009"></script>
@@ -4714,7 +4714,7 @@
                   <tbody><tr v-for="(row,index) in incomingRowsForTab()" :key="row.history_key || row.receipt_item_id || row.item_id" :data-workflow-row="'incoming:'+(row.history_key || row.receipt_item_id || row.item_id)" :class="{'workflow-current':workflowRowSelected('incoming:'+(row.history_key || row.receipt_item_id || row.item_id))}" tabindex="0">
                     <td class="incoming-sequence-cell"><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /><input v-else-if="incomingTab!=='pending'" type="checkbox" :checked="incomingProductionCardSelected(row)" :disabled="!canPrintIncomingProductLabel(row)" :title="incomingProductLabelBlockMessage(row)" @change="toggleIncomingProductionCard(row,$event.target.checked)" /> {{ (incomingCurrentPage()-1)*incomingListPageSize()+index+1 }}</td>
                     <td class="incoming-dimension-cell"><strong>{{ incomingDimensionMm(row._actualPreview?.length_mm || row.cardboard_len) }}</strong></td><td class="incoming-times-cell">×</td><td class="incoming-dimension-cell"><strong>{{ incomingDimensionMm(row._actualPreview?.width_mm || row.cardboard_width) }}</strong></td>
-                    <td class="incoming-crease-cell" :title="formatCrease(row)">{{ formatCrease(row) }}</td>
+                    <td class="incoming-crease-cell" :title="formatCrease(row)">{{ formatCrease(row) }}<small v-if="row._actualPreview?.supplier_edge_type || row.supplier_edge_type">{{row._actualPreview?.supplier_edge_type || row.supplier_edge_type}}</small></td>
                     <td class="incoming-material-cell" :title="incomingMaterialTitle(row)" style="position:relative">
                       <span>{{ row._actualPreview ? row._actualPreview.material_code+' / '+row._actualPreview.flute_type : incomingActualMaterialDisplay(row) }}</span>
                       <button v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="btn small" type="button" title="修改本批实际来料" @click="toggleIncomingActual(row)">✎</button>
@@ -4724,9 +4724,11 @@
                         <strong>本批实际来料</strong>
                         <label style="display:block;margin-top:8px">实际材质 <select class="select" v-model.number="row._actualDraft.material_id" @change="previewIncomingActual(row)"><option v-for="m in row._actualCatalog.materials" :key="m.id" :value="m.id">{{ m.code }} / {{ m.flute_type || row._actualCatalog.flute_type }}</option></select></label>
                         <div style="display:flex;gap:8px;margin-top:8px"><label>实收长(mm)<input class="input" type="number" min="0.01" step="0.01" v-model.number="row._actualDraft.length_mm" @input="row._actualPreview=null;row._actualRequest=null" @change="previewIncomingActual(row)" /></label><label>实收宽(mm)<input class="input" type="number" min="0.01" step="0.01" v-model.number="row._actualDraft.width_mm" @input="row._actualPreview=null;row._actualRequest=null" @change="previewIncomingActual(row)" /></label></div>
+                        <label style="display:block;margin-top:8px">供应商毛净 <select class="select" v-model="row._actualDraft.supplier_edge_type" @change="previewIncomingActual(row)"><option :value="null">沿用报料</option><option value="毛片">毛片</option><option value="净料">净片</option></select></label>
+                        <label v-if="row._actualCatalog.product_version && hasPermission('products.edit')" style="display:block;margin-top:8px"><input type="checkbox" v-model="row._actualDraft.sync_supplier_defaults" @change="previewIncomingActual(row)" /> 尺寸／毛净同步为常用箱以后默认值</label>
                         <p v-if="row._actualPreview" style="margin:8px 0;color:#166534">{{ incomingActualSummary(row) }}</p>
                         <p v-if="row._actualError" style="color:#b91c1c">{{ row._actualError }}</p>
-                        <small>随“确认实收”保存，仅用于本批。</small><div style="display:flex;gap:8px;margin-top:8px"><button type="button" class="btn small" @click="row._actualOpen=false">收起</button><button type="button" class="btn small" @click="resetIncomingActual(row)">恢复报料值</button></div>
+                        <small>随“确认实收”保存；实际材质只用于本批，尺寸／毛净按上方选项同步。</small><div style="display:flex;gap:8px;margin-top:8px"><button type="button" class="btn small" @click="row._actualOpen=false">收起</button><button type="button" class="btn small" @click="resetIncomingActual(row)">恢复报料值</button></div>
                       </div>
                     </td>
                     <td class="incoming-product-cell" :title="`${row.customer_name || '-'}｜${row.product_code || '-'}｜${row.product_name || '-'}｜${row.specification || '-'}`"><div class="incoming-product-identity-line"><strong>{{ incomingCustomerLabel(row) }}</strong><span>{{ row.product_code || '-' }}</span></div><div class="incoming-product-name">{{ row.product_name || '-' }}</div></td>
@@ -7070,7 +7072,7 @@
                   <div class="sheet-cutting-inputs" :data-supplier-sheet-default="part.key">
                     <label>供应商报料长 <input class="input" type="number" min="1" step="0.01" :value="productSupplierDimension(part.key,'length')" @input="setProductSupplierDimension(part.key,'length',$event.target.value)" /></label>
                     <label>供应商报料宽 <input class="input" type="number" min="1" step="0.01" :value="productSupplierDimension(part.key,'width')" @input="setProductSupplierDimension(part.key,'width',$event.target.value)" /></label>
-                    <label>供应商纸板要求 <select class="select" aria-label="供应商纸板要求" v-model="productForm[part.key==='base'?'base_crease_type':'crease_type']" @change="part.key==='base' ? markProductBaseCreaseTypeManual() : markProductCreaseTypeManual()"><option :value="null">未设置</option><option v-for="creaseType in productSupportedCreaseTypes(productForm.box_style)" :key="creaseType" :value="creaseType">{{ creaseType }}</option></select></label>
+                    <label>供应商纸板要求 <select class="select" aria-label="供应商纸板要求" v-model="productForm[part.key==='base'?'base_supplier_edge_type':'supplier_edge_type']" @change="syncProductSupplierEdge(part.key)"><option :value="null">未设置</option><option v-for="creaseType in ['毛片','净料']" :key="creaseType" :value="creaseType">{{ creaseType }}</option></select></label>
                     <button v-if="part.value.actual_supplier_length_mm!=null" class="btn small" type="button" @click="resetProductSupplierDimensions(part.key)">恢复按开料计算</button>
                   </div>
                   <small class="muted">随常用箱保存，作为以后新报料的默认值。含修边余量请选择毛片；理论尺寸与每张产出不变。</small>
@@ -13390,6 +13392,7 @@
             if (!isExternal && this.productPrintingColorError) throw new Error(this.productPrintingColorError);
             if (this.productProductionLabelError) throw new Error(this.productProductionLabelError);
             const payload = { ...this.productForm };
+            for(const prefix of ['', 'base_'])if(payload[prefix+'supplier_edge_type']==null && ['毛片','净料'].includes(payload[prefix+'crease_type']))payload[prefix+'supplier_edge_type']=payload[prefix+'crease_type'];
             if (payload.sheet_cutting_settings) {
               for (const part of this.productSheetCuttingParts()) {
                 const prefix=part.key==='base'?'base_report_':'report_';
@@ -20620,11 +20623,11 @@
               return;
             }
             const actorId = this.user?.id, generation = this.authGeneration;
-            // Show the requested draft before loading the unrelated workbench.
-            if (!await this.go("requisition", {load:false})) return;
-            if (this.activePage !== "requisition" || actorId !== this.user?.id || generation !== this.authGeneration) return;
+            // Open in place; the confirmed save receipt offers "查看待报料".
+            if (!this.pageAllowed("requisition")) { this.showToast("当前账号没有访问该功能的权限",true); return; }
+            if (this.activePage === "warehouse" && !await this.checkWarehouseNavigation()) return;
+            if (actorId !== this.user?.id || generation !== this.authGeneration) return;
             await this.openStockReplenishment({ warningOnly:true, policy:{...item,id:item.policy_id} });
-            if (this.activePage === "requisition" && actorId === this.user?.id && generation === this.authGeneration) await this.loadPage("requisition");
           },
           async openLowStockLocations(item) {
             const keyword = encodeURIComponent(String(item.product_code || item.product_name || "").trim());
@@ -30258,6 +30261,10 @@
               return `${snapshot.supplier_length_mm} × ${snapshot.supplier_width_mm} mm`;
             } catch(error) { return error.message; }
           },
+          syncProductSupplierEdge(key) {
+            const prefix=key==='base'?'base_':'';
+            if(this.productForm[prefix+'crease_type']!=='压线')this.productForm[prefix+'crease_type']=this.productForm[prefix+'supplier_edge_type'];
+          },
           productSupplierDimension(key,axis) {
             const part=this.productForm.sheet_cutting_settings[key];
             const prefix=key==='base'?'base_report_':'report_';
@@ -30294,6 +30301,7 @@
           },
           hydrateProductForm(detail) {
             const form = { ...blankProduct(), ...JSON.parse(JSON.stringify(detail || {})) };
+            for(const prefix of ['', 'base_'])if(form[prefix+'supplier_edge_type']==null && ['毛片','净料'].includes(form[prefix+'crease_type']))form[prefix+'supplier_edge_type']=form[prefix+'crease_type'];
             if (detail?.classification?.needs_supply_completion) {
               form.box_style = "其他";
               form.supply_mode = "external_purchase";
@@ -30458,6 +30466,7 @@
               splice_mode: f.splice_mode, pieces_per_box: f.pieces_per_box,
               default_cutting_mode: f.default_cutting_mode, flap_mm: f.flap_mm,
               sheet_cutting_settings: f.sheet_cutting_settings,
+              supplier_edge_type:f.supplier_edge_type,base_supplier_edge_type:f.base_supplier_edge_type,
               production_variants:f.production_variants,
               combination_mode: f.combination_mode,
               composite_fulfillment_mode: f.composite_fulfillment_mode || "component_delivery",
@@ -37191,6 +37200,13 @@
               if(current() && this.activePage==='requisition' && (this.requisitionWorkspace||'board')==='board'){
                 try {if(data.status==='draft')await this.loadRequisition({skipAutoRelease:true});else if(this.requisitionTab==='submitted'){await this.loadReportedDocuments();if(this.reportedItemError)throw Error(this.reportedItemError);}}
                 catch(error){if(current()&&this.stockReplenishmentSavedNotice===notice){refreshFailed=true;notice.readError=this.errorMessage(error);}}
+              }
+              this.invalidatePageCache("dashboard");
+              if(current() && page==='dashboard' && this.hasPermission('warehouse.view') && this.hasPermission('requisition.view')){
+                try {
+                  const {data:fresh}=await axios.get('/api/dashboard/stock-warnings',{timeout:15000});
+                  if(current())this.overview={...this.overview,low_stock_warnings:fresh.items};
+                }catch(error){if(current()){refreshFailed=true;notice.readError="补库已保存；首页库存提示刷新失败，请刷新后继续。";}}
               }
               return current()?{...data,_refresh_failed:refreshFailed,_print_failed:printFailed}:{_stale:true};
             } finally {state.saving=false;if(this.user?.id===actor&&this.authGeneration===generation&&(this.stockReplenishmentRecoveryEpoch||0)===epoch&&this.stockReplenishmentRecoveryBusy===record.key)this.stockReplenishmentRecoveryBusy="";}

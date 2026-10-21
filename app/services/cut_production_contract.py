@@ -15,8 +15,10 @@ def completion_contract(db, task, item, planned_output, *, require_cost=True):
     allocations = []
     has_cut = False
     missing = 0
+    capacities = []
     for requirement in requirements:
         remaining = planned_output * max(requirement.pieces_per_box, 1)
+        physical_output = 0
         rows = db.scalars(select(InventoryReservation).join(InventoryLot).where(
             InventoryReservation.semi_requirement_id == requirement.id,
             InventoryReservation.reservation_type == 'semi_order',
@@ -34,8 +36,10 @@ def completion_contract(db, task, item, planned_output, *, require_cost=True):
             has_cut = has_cut or bool(reservation.cut_plan_json)
             allocations.append(dict(reservation_id=reservation.id, lot_id=reservation.inventory_lot_id,
                 quantity=take, credit=take_credit, cut_plan=json.loads(reservation.cut_plan_json) if reservation.cut_plan_json else None))
+            physical_output += take * reservation.yield_factor
             remaining -= take_credit
         missing += remaining
+        capacities.append(physical_output // max(requirement.pieces_per_box,1))
     if not has_cut:
         return None
     # A mixed supplier/stock batch must keep its independent purchasing cost facts;
@@ -44,6 +48,12 @@ def completion_contract(db, task, item, planned_output, *, require_cost=True):
         if not require_cost:
             return None
         raise WarehouseInventoryError('本批裁切预占尚未齐套，请将缺少的来料入库并补齐本批预占后确认完工', 409)
+    # New explicit sheet reservations keep rounded physical output. The order
+    # coverage cap stays in production_workflow; extra complete goods enter the
+    # existing surplus stock flow. Legacy allocations retain their frozen rule.
+    cuts = [row['cut_plan'] for row in allocations if row['cut_plan']]
+    if len(requirements) == 1 and cuts and all(p.get('full_sheet_output_v1') is True for p in cuts):
+        planned_output = max(planned_output,min(capacities))
     if not require_cost:
         return dict(input_quantity=sum(row['quantity'] for row in allocations), planned_output=planned_output)
     from app.services.inventory_valuation import require_inherited_entry_cost

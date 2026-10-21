@@ -76,7 +76,7 @@
   const component = {
     props:{actorId:{type:Number,default:0},snapshotId:{type:Number,default:0},orderItemId:{type:Number,default:0}, componentType:{type:String,default:'whole'},disabled:{type:Boolean,default:false}},
     emits:['reserved','operation-state'],
-    data() {return {opened:false,loading:false,busy:false,error:'',message:'',preview:null,rows:[],uncertain:false,matchMode:'exact',readSequence:0};},
+    data() {return {opened:false,loading:false,busy:false,error:'',message:'',preview:null,rows:[],uncertain:false,matchMode:'auto',readSequence:0};},
     created() {this.uncertain=pending.has(this.identity);},
     computed:{identity() {return `${this.actorId || 0}:${this.snapshotId?'bom':'order'}:${this.snapshotId || this.orderItemId}:${this.componentType}`;}},
     watch:{identity() {this.readSequence++;this.loading=false;this.busy=false;this.opened=false;this.preview=null;this.rows=[];this.error='';this.message='';this.uncertain=pending.has(this.identity);}},
@@ -110,6 +110,7 @@
       },
       yieldText(row) {
         const output=Number(row.stock_yield_per_sheet),perBox=Math.max(Number(this.preview?.pieces_per_box || 1),1);
+        if(row.cut_plan){const plan=row.cut_plan;return `分切${Number(plan.rows||1)*Number(plan.columns||1)}份 · ${plan.blank_yield||1}模 · 每张出${output}片`;}
         if(this.preview?.is_bom || this.componentType!=='whole')return `一开${output} · 每片出${output}片部件`;
         const unit=this.preview?.output_unit || '只';
         return perBox===1 ? `一开${output} · 每片可做${output}${unit}` : `一开${output} · 每${perBox}片箱片做1${unit}`;
@@ -120,9 +121,9 @@
         this.focusDialog();
         const held=pending.get(this.identity);
         if(held) {this.preview=held.preview;this.rows=held.rows;this.matchMode=held.matchMode || 'exact';this.uncertain=true;return;}
-        await this.load('exact');
+        await this.load('auto');
       },
-      async load(mode='exact') {
+      async load(mode='auto') {
         if(this.busy || this.uncertain)return;
         if(mode==='swapped' && (!this.preview?.can_further_match || this.matchMode!=='exact' || this.rows.length))return;
         this.loading=true;this.error='';this.rows=[];this.matchMode=mode;
@@ -188,9 +189,9 @@
           this.$nextTick?.(()=>{if(this.returnFocus?.isConnected)this.returnFocus.focus();});
           this.$emit('reserved',data);
           try {
-            const {data:fresh}=await root.axios.get(this.endpoint()+'/manual-inventory',{params:{component_type:this.componentType,match_mode:'exact'}});
+            const {data:fresh}=await root.axios.get(this.endpoint()+'/manual-inventory',{params:{component_type:this.componentType,match_mode:'auto'}});
             if(this.identity!==identity)return;
-            this.preview=fresh;this.rows=(fresh.items || []).map(item=>({...item,inputQuantity:'',selected:false}));this.matchMode='exact';this.$emit('reserved',fresh);
+            this.preview=fresh;this.rows=(fresh.items || []).map(item=>({...item,inputQuantity:'',selected:false}));this.matchMode='auto';this.$emit('reserved',fresh);
           } catch(error) {if(this.identity===identity)this.error='抵扣已成功；库存列表刷新失败，请点击重新查看，不要重复抵扣。';}
         } catch(error) {
           const status=error.response?.status;
@@ -213,21 +214,21 @@
               <p v-if="loading" role="status">正在查询匹配片料…</p>
               <p v-if="error" class="status orange" role="alert">{{error}}</p>
               <template v-if="uncertain"><p>原批次和片数已保留，核对后再继续操作。</p><button class="btn primary" type="button" :disabled="busy" @click="submitHeld">{{busy?'正在核对…':'核对上次抵扣结果'}}</button></template>
-              <div v-else-if="rows.length" class="manual-sheet-table-wrap"><table class="manual-sheet-table"><thead><tr><th>选择</th><th>库存片料尺寸</th><th>可用数量</th><th>库位</th><th>一开几</th><th>本次使用</th></tr></thead><tbody>
+              <div v-else-if="rows.length" class="manual-sheet-table-wrap"><table class="manual-sheet-table"><thead><tr><th>选择</th><th>库存片料尺寸／材质</th><th>可用数量</th><th>库位</th><th>每张产出</th><th>本次使用</th></tr></thead><tbody>
                 <tr v-for="row in rows" :key="row.lot_id" :class="{'manual-sheet-selected':row.selected}">
                   <td><input type="checkbox" v-model="row.selected" :aria-label="'选择 '+row.board_length_mm+' × '+row.board_width_mm+'，'+(row.warehouse_location?.location_name || row.warehouse_location?.name || '位置待核对')" :disabled="busy || !row.selectable || !row.max_stock_quantity" @change="choose(row)"></td>
-                  <td><strong>{{row.board_length_mm}} × {{row.board_width_mm}} mm</strong><details v-if="differences(row) || row.warning_messages?.length" class="manual-sheet-details" :class="{'manual-sheet-review':!!differences(row)}"><summary>{{differences(row)?'需核对：'+differences(row):'查看详情'}}</summary><div>{{row.internal_name || '库存片料'}} · {{row.material_code}} / {{row.flute_type}}</div><p v-for="(warning,index) in row.warning_messages" :key="index">{{warning}}</p></details></td>
-                  <td><b>{{row.available_stock_quantity}}</b> 片</td><td>{{row.warehouse_location?.location_name || row.warehouse_location?.name || '位置待核对'}}</td><td>{{yieldText(row)}}</td>
-                  <td><label><input class="input" type="number" min="1" step="1" :max="row.max_stock_quantity" v-model="row.inputQuantity" :disabled="busy || !row.selected" :aria-label="'本次使用片数，最多 '+row.max_stock_quantity+' 片'"> 片</label></td>
+                  <td><strong>{{row.board_length_mm}} × {{row.board_width_mm}} mm</strong><div>{{row.material_code}} / {{row.flute_type}} · {{row.recommendation_label || '同尺寸'}}</div><details v-if="differences(row) || row.warning_messages?.length" class="manual-sheet-details" :class="{'manual-sheet-review':!!differences(row)}"><summary>{{differences(row)?'需核对：'+differences(row):'查看详情'}}</summary><div>{{row.internal_name || '库存片料'}} · {{row.material_code}} / {{row.flute_type}}</div><p v-for="(warning,index) in row.warning_messages" :key="index">{{warning}}</p></details></td>
+                  <td><b>{{row.available_stock_quantity}}</b> 张</td><td>{{row.warehouse_location?.location_name || row.warehouse_location?.name || '位置待核对'}}</td><td>{{yieldText(row)}}</td>
+                  <td><label><input class="input" type="number" min="1" step="1" :max="row.max_stock_quantity" v-model="row.inputQuantity" :disabled="busy || !row.selected" :aria-label="'本次使用张数，最多 '+row.max_stock_quantity+' 张'"> 张</label></td>
                 </tr>
               </tbody></table></div>
               <div v-else-if="!loading && preview && !uncertain" class="manual-sheet-empty">
-                <p v-if="!preview.remaining_required_piece_qty">当前用料需求已覆盖，无需再报料。</p><p v-else>{{matchMode==='swapped'?'暂无长宽交换后可用的同楞型片料。':'暂无同楞型、同长宽的可用片料。'}}</p>
+                <p v-if="!preview.remaining_required_piece_qty">当前用料需求已覆盖，无需再报料。</p><p v-else>{{matchMode==='swapped'?'暂无长宽交换后可用的同楞型片料。':'暂无符合材质楞型及加工用途的可用片料（已查询同尺寸、大张裁切和交换方向）。'}}</p>
                 <button v-if="matchMode==='exact' && preview.can_further_match" class="btn" type="button" :disabled="busy" @click="load('swapped')">进一步匹配（交换长宽）</button>
               </div>
             </div>
-            <footer class="manual-sheet-foot"><div v-if="selection().length && !uncertain" class="manual-sheet-total"><strong>本次使用 {{totals().stock}} 片</strong><span>{{preview?.is_bom || componentType!=='whole'?'可出 '+totals().pieces+' 片部件':'可做 '+totals().boxes+' '+(preview?.output_unit || '只')}}</span><b :class="{'manual-sheet-covered':totals().remaining===0}">{{totals().remaining?'剩余 '+totals().remaining+' 片仍需报料':'抵扣后无需报料'}}</b><span v-if="totals().valid && totals().excess">理论余量 {{totals().excess}} 片</span><span v-if="!totals().valid" class="manual-sheet-invalid">请核对片数，不能超过库存或剩余需求。</span></div>
-              <div class="manual-sheet-buttons"><button v-if="!uncertain" class="btn" type="button" :disabled="busy || loading" @click="load('exact')">重新匹配</button><button class="btn" type="button" :disabled="busy" @click="close">取消</button><button class="btn primary" type="button" :disabled="busy || loading || uncertain || disabled || !totals().valid" @click="confirmSelection">{{busy?'正在抵扣…':'确认使用并抵扣'}}</button></div>
+            <footer class="manual-sheet-foot"><div v-if="selection().length && !uncertain" class="manual-sheet-total"><strong>本次使用 {{totals().stock}} 张</strong><span>{{preview?.is_bom || componentType!=='whole'?'可出 '+totals().pieces+' 片部件':'可做 '+totals().boxes+' '+(preview?.output_unit || '只')}}</span><b :class="{'manual-sheet-covered':totals().remaining===0}">{{totals().remaining?'剩余 '+totals().remaining+' 片仍需报料':'抵扣后无需报料'}}</b><span v-if="totals().valid && totals().excess">理论余量 {{totals().excess}} 片</span><span v-if="!totals().valid" class="manual-sheet-invalid">请核对片数，不能超过库存或剩余需求。</span></div>
+              <div class="manual-sheet-buttons"><button v-if="!uncertain" class="btn" type="button" :disabled="busy || loading" @click="load('auto')">重新匹配</button><button class="btn" type="button" :disabled="busy" @click="close">取消</button><button class="btn primary" type="button" :disabled="busy || loading || uncertain || disabled || !totals().valid" @click="confirmSelection">{{busy?'正在抵扣…':'确认使用并抵扣'}}</button></div>
             </footer>
           </section>
         </div>

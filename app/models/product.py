@@ -258,6 +258,8 @@ class Product(Base):
     report_length_mm: Mapped[int | float | None] = mapped_column(SheetDimensionColumn, nullable=True)
     report_width_mm: Mapped[int | float | None] = mapped_column(SheetDimensionColumn, nullable=True)
     crease_type: Mapped[str | None] = mapped_column(String(20), nullable=True)   # 毛片 / 净料 / 压线
+    supplier_edge_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    base_supplier_edge_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     crease_left_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     crease_middle_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     crease_right_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)

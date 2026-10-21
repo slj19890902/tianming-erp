@@ -1,6 +1,7 @@
 """Completed semi-stock pieces keep their physical type and a frozen 1:1 identity."""
 import json
 from sqlalchemy import select, update, or_
+from sqlalchemy.orm import selectinload
 from app.core.time_contract import utc_now_naive
 from app.models.warehouse_inventory import InventoryLot, InventoryReservation, WarehouseLocation
 from app.models.warehouse_goods import WarehouseGoodsProfile
@@ -9,9 +10,15 @@ from app.services.finished_stock_identity import matches_stock_identity, compile
 from app.services.warehouse_goods import goods_profile
 from app.services.warehouse_inventory import WarehouseInventoryError, _balances, _movement, _number, inventory_fifo_order_columns
 from app.services.bom_transactions import atomic_bom
+from app.services.inventory_read_scope import summary_read, summary_get
 
 
 def output_identity(db, lot):
+    return summary_read(db, ('processed_output_identity', lot.id if lot else None),
+        lambda: _output_identity(db, lot))
+
+
+def _output_identity(db, lot):
     """Return only explicit complete child-product identity; unknown old stock stays unknown."""
     if lot is None or lot.inventory_type != 'semi_finished' or lot.finished_detail is not None:
         return None
@@ -50,7 +57,7 @@ def eligible_output(db, lot, *, product_id, customer_id, expected_basis):
     """Shared physical/free-stock eligibility, also usable on fully reserved lots."""
     from app.services.fixed_shelf_staging import staging_owner
     from app.services.bom_subkits import active_subkit_order
-    location = db.get(WarehouseLocation, lot.warehouse_location_id) if lot else None
+    location = summary_get(db, WarehouseLocation, lot.warehouse_location_id) if lot else None
     return bool(matches_output(db,lot,product_id=product_id,customer_id=customer_id,
         expected_basis=expected_basis) and lot.status=='active' and location and location.is_active
         and (location.source_version!='V11' or location.warehouse_floor==3)
@@ -58,13 +65,15 @@ def eligible_output(db, lot, *, product_id, customer_id, expected_basis):
 
 
 def available_outputs(db, *, product_id, customer_id, expected_basis):
-    lots = db.scalars(select(InventoryLot).join(WarehouseGoodsProfile, WarehouseGoodsProfile.lot_id==InventoryLot.id)
+    lots = summary_read(db, ('processed_output_lots',), lambda: db.scalars(select(InventoryLot)
+        .options(selectinload(InventoryLot.finished_detail), selectinload(InventoryLot.semi_finished_detail))
+        .join(WarehouseGoodsProfile, WarehouseGoodsProfile.lot_id==InventoryLot.id)
         .join(WarehouseLocation, WarehouseLocation.id==InventoryLot.warehouse_location_id)
         .where(InventoryLot.inventory_type=='semi_finished', InventoryLot.status=='active',
             InventoryLot.quantity_available > 0, WarehouseLocation.is_active.is_(True),
             or_(WarehouseLocation.source_version.is_(None), WarehouseLocation.source_version!='V11',
                 WarehouseLocation.warehouse_floor==3))
-        .order_by(*inventory_fifo_order_columns())).all()
+        .order_by(*inventory_fifo_order_columns())).all())
     return [lot for lot in lots if eligible_output(db,lot,product_id=product_id,customer_id=customer_id,
         expected_basis=expected_basis)]
 

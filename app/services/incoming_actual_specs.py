@@ -9,6 +9,26 @@ from app.models.material import Material
 from app.services.sheet_cutting_contract import SheetCuttingContract
 
 
+def canonical_request(request):
+    if request is None:
+        return None
+    return {k:v for k,v in request.items() if v is not None or k not in
+            {'supplier_edge_type','sync_supplier_defaults','expected_product_version'}}
+
+
+def _product_source(db, key, item):
+    from app.models.product import Product
+    from app.services.incoming_receipts import _stock_item_id, _target
+    if _stock_item_id(key) is not None:
+        pid = item.product_id or item.reference_product_id
+        component = item.component_type or 'whole'
+    else:
+        target = _target(db, key, allow_closed=False)
+        pid = item.product_id or (target.order_item.product_id if target.order_item else None)
+        component = target.component_type
+    return db.get(Product, pid) if pid else None, component
+
+
 def encode(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str)
 
@@ -61,15 +81,23 @@ def catalog(db, key):
             if _material_matches_supplier(m, supplier)]
     raw = getattr(item, 'sheet_cutting_snapshot', None)
     contract = SheetCuttingContract.from_snapshot(json.loads(raw) if isinstance(raw, str) else raw) if raw else None
+    product, component = _product_source(db, key, item)
+    sheet_type = getattr(item, 'sheet_type', None) or (
+        'creased_sheet' if getattr(item, 'crease_type', None) == '压线' else
+        'net_sheet' if getattr(item, 'crease_type', None) in ('净', '净料') else 'raw_board')
     return {'materials': [{'id': m.id, 'code': m.code, 'version': m.version, 'layer_count': m.layer_count,
                            'flute_type': m.flute_type} for m in rows],
             'material_id': mid, 'material_code': code, 'flute_type': flute,
             'length_mm': str(contract.supplier_size_mm[0]) if contract else str(getattr(item, 'report_length_mm', None) or getattr(item, 'cardboard_len', '')),
             'width_mm': str(contract.supplier_size_mm[1]) if contract else str(getattr(item, 'report_width_mm', None) or getattr(item, 'cardboard_width', '')),
-            'cutting_available': contract is not None}
+            'cutting_available': contract is not None, 'sheet_type':sheet_type,
+            'supplier_edge_type':getattr(item,'supplier_edge_type',None) or ('毛片' if sheet_type=='raw_board' else '净料' if sheet_type=='net_sheet' else None),
+            'product_version': product.version if product else None,
+            'product_id': product.id if product else None, 'component_type':component}
 
 
 def preview(db, key, request, user):
+    request = canonical_request(request)
     from app.api.deps import has_permission
     from app.services.supplier_master import resolve_supplier
     from app.services.supplier_receipt_price_facts import _material_matches_supplier
@@ -119,6 +147,14 @@ def preview(db, key, request, user):
             'tax_rate': str(material.purchase_tax_rate)},
         'trim_length_mm': str(length-actual.required_supplier_size_mm[0]),
         'trim_width_mm': str(width-actual.required_supplier_size_mm[1])}
+    if request.get('supplier_edge_type'):
+        edge = request['supplier_edge_type']
+        original_type = catalog(db, key)['sheet_type']
+        value['supplier_edge_type'] = edge
+        value['sheet_type'] = 'creased_sheet' if original_type == 'creased_sheet' else 'raw_board' if edge=='毛片' else 'net_sheet'
+        value['crease_type'] = '压线' if original_type == 'creased_sheet' else edge
+    if request.get('sync_supplier_defaults'):
+        value['supplier_defaults'] = _supplier_default_updates(db, key, item, value, request, user)
     value['fingerprint'] = hashlib.sha256(encode(value).encode()).hexdigest()
     return value
 
@@ -135,8 +171,10 @@ def prepare(db, key, request, user):
 def freeze(db, receipt, value, request, user):
     if value:
         db.add(IncomingActualSpec(receipt_item_id=receipt.id, material_id=value['material_id'],
-            actor_id=user.id, request_json=encode(request), actual_json=encode(value)))
+            actor_id=user.id, request_json=encode(canonical_request(request)), actual_json=encode(value)))
         db.flush()
+        if value.get('supplier_defaults'):
+            _save_supplier_defaults(db, value['supplier_defaults'], user)
         from app.services.audit_log import append_audit_event
         append_audit_event(db,event_category='business',result='success',source='web',module_code='incoming',
             action_code='incoming.actual_spec.confirmed',resource='IncomingReceiptItem',actor=user,
@@ -148,7 +186,7 @@ def freeze(db, receipt, value, request, user):
 
 def replay(db, receipt, request):
     row = db.get(IncomingActualSpec, receipt.id)
-    if (row.request_json if row else None) != (encode(request) if request else None):
+    if (row.request_json if row else None) != (encode(canonical_request(request)) if request else None):
         fail('幂等键已用于不同的实际收料规格')
 
 
@@ -162,6 +200,8 @@ def effective_item(item, value):
         report_length_mm=Decimal(value['length_mm']), report_width_mm=Decimal(value['width_mm']),
             cardboard_len=Decimal(value['length_mm']),cardboard_width=Decimal(value['width_mm']),
         stock_yield_per_sheet=value['yield'], sheet_cutting_snapshot=encode(value['cutting']))
+    if value.get('sheet_type'):
+        fields.update(sheet_type=value['sheet_type'], crease_type=value['crease_type'])
     return SimpleNamespace(**fields)
 
 
@@ -180,6 +220,62 @@ def decorate(db, rows):
             actual_material_code=value['material_code'], material_code=value['material_code'], material=value['material_code'],
             flute_type=value['flute_type'], material_display=value['material_code']+' / '+value['flute_type'],
             actual_material_display=value['material_code']+' / '+value['flute_type'], cutting_mode=str(value['cutting']['cutting_factor']))
+        if value.get('sheet_type'):
+            row.update(sheet_type=value['sheet_type'], crease_type=value['crease_type'], supplier_edge_type=value.get('supplier_edge_type'))
+
+
+def _supplier_default_updates(db, key, item, value, request, user):
+    from copy import deepcopy
+    from app.api.deps import has_permission, require_customer_access
+    from app.services.sheet_cutting_settings import normalize_settings, product_physical_components, apply_contract_to_settings
+    if not has_permission(user, 'products.edit'):
+        fail('本次可按实际规格收料；同步常用箱需要产品编辑权限，请取消同步选项', 403)
+    product, component = _product_source(db, key, item)
+    if not product or product.deleted_at or not product.is_active:
+        fail('对应常用箱不可编辑，请取消同步选项后仅保存本次收料')
+    require_customer_access(product.customer_id, current_user=user, db=db)
+    if request.get('expected_product_version') != product.version:
+        fail('常用箱资料已变化，请重新打开实际规格编辑后收料')
+    prefix = 'base_' if component == 'base' else ''
+    original = SheetCuttingContract.from_snapshot(value['original_cutting'])
+    if (getattr(product,prefix+'report_length_mm'),getattr(product,prefix+'report_width_mm')) != (
+            original.theoretical_length_mm,original.theoretical_width_mm):
+        fail('当前常用箱理论尺寸与本笔冻结报料不同，请取消同步并单独核对常用箱')
+    settings = deepcopy(normalize_settings(product.sheet_cutting_settings))
+    if settings is None:
+        if product_physical_components(product) != ('whole',):
+            fail('盖底开料资料未分开保存，请取消同步并在常用箱完善对应部件')
+        from app.services.sheet_cutting_settings import theoretical_product_yield
+        if theoretical_product_yield(product, component) != original.mold_count:
+            fail('当前常用箱每张出数与本笔冻结理论片不同，请取消同步并核对开料资料')
+        settings = {'schema_version':2, 'whole':{'length_parts':original.length_parts,
+            'width_parts':original.width_parts,'mold_count':original.mold_count,'is_die_cut':original.is_die_cut}}
+    part = settings.get(component)
+    if not part or (part['mold_count'],part['is_die_cut']) != (original.mold_count,original.is_die_cut):
+        fail('常用箱模具出数与本笔冻结报料不同，请取消同步并核对对应模具方案')
+    # Extra supply size is a supplier default; the theoretical blank is untouched.
+    apply_contract_to_settings(settings, component, value['cutting'])
+    updates = {'sheet_cutting_settings':settings}
+    if value.get('supplier_edge_type'):
+        updates[prefix+'supplier_edge_type'] = value['supplier_edge_type']
+        if getattr(product,prefix+'crease_type') != '压线':
+            updates[prefix+'crease_type'] = value['supplier_edge_type']
+    return {'product_id':product.id, 'version':product.version, 'updates':updates}
+
+
+def _save_supplier_defaults(db, plan, user):
+    from app.models.product import Product
+    from app.services.master_data_versioning import preview_versioned_update, _apply_versioned_update
+    from app.services.shared_product_master import prepare_sync, finish_sync
+    product = db.get(Product, plan['product_id'])
+    shared = prepare_sync(db, product, plan['updates'], user)
+    preview = preview_versioned_update(db, object_type='product',entity=product,
+        updates=plan['updates'],expected_version=plan['version'],user=user)
+    _apply_versioned_update(db,object_type='product',entity=product,updates=plan['updates'],
+        expected_version=plan['version'],user=user,reason='按实际送货单同步供应商尺寸与毛净',
+        source='incoming.supplier_defaults',confirmation_token=preview['confirmation_token'])
+    if shared:
+        finish_sync(db,product,shared,user,'按实际送货单同步供应商尺寸与毛净','incoming.supplier_defaults')
 
 
 def receipt_yield(db, receipt_id, default):

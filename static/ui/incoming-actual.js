@@ -7,7 +7,7 @@
         if(!row._actualCatalog){
           const {data}=await axios.get(`/api/incoming/actual-materials/${encodeURIComponent(row.item_id)}`);
           row._actualCatalog=data;
-          row._actualDraft={material_id:Number(data.material_id)||Number(data.materials[0]?.id),length_mm:Number(data.length_mm),width_mm:Number(data.width_mm)};
+          row._actualDraft={material_id:Number(data.material_id)||Number(data.materials[0]?.id),length_mm:Number(data.length_mm),width_mm:Number(data.width_mm),supplier_edge_type:data.supplier_edge_type,sync_supplier_defaults:!!(data.product_version && this.hasPermission?.("products.edit"))};
         }
         row._actualOpen=true;
       }catch(error){this.showToast(this.errorMessage(error),true);}
@@ -16,7 +16,12 @@
       const draft=row._actualDraft;
       const material=row._actualCatalog?.materials.find(m=>Number(m.id)===Number(draft?.material_id));
       if(!draft||!material)throw new Error("请选择材质字典中的实际材质");
-      return {material_id:Number(material.id),material_version:Number(material.version),length_mm:Number(draft.length_mm),width_mm:Number(draft.width_mm)};
+      const request={material_id:Number(material.id),material_version:Number(material.version),length_mm:Number(draft.length_mm),width_mm:Number(draft.width_mm)};
+      if(draft.supplier_edge_type)request.supplier_edge_type=draft.supplier_edge_type;
+      const original=row._actualCatalog;
+      const changed=Number(draft.length_mm)!==Number(original.length_mm)||Number(draft.width_mm)!==Number(original.width_mm)||draft.supplier_edge_type!==original.supplier_edge_type;
+      if(changed && draft.sync_supplier_defaults){request.sync_supplier_defaults=true;request.expected_product_version=original.product_version;}
+      return request;
     },
     async previewIncomingActual(row){
       row._actualPreview=null;row._actualError="";

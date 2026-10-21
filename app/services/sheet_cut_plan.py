@@ -45,9 +45,20 @@ def rectangular_cut_plan(db, lot, product, expected, *, reviewed=False, allow_ro
             "材质不一致，不能抵扣", "替代材质尚未确认适用，不能按尺寸推断强度合格"}]
     if issues:
         return None
+    exact_swap = (detail.board_length_mm, detail.board_width_mm) == (expected.board_width_mm, expected.board_length_mm)
+    # Normal axes always win. Only intact raw rectangles may additionally be
+    # cut after swapping axes; printed/creased/die-cut geometry stays protected.
+    swapped_raw = False
+    if allow_rotation and reviewed and detail.sheet_type == 'raw_board' and detail.stock_yield_per_sheet == 1:
+        try:
+            allowance = 2 * Decimal(str(profile.get('cut_trim_mm', 0)))
+            usable_l, usable_w = Decimal(detail.board_length_mm)-allowance, Decimal(detail.board_width_mm)-allowance
+            swapped_raw = (usable_l >= expected.board_width_mm and usable_w >= expected.board_length_mm
+                and not (usable_l >= expected.board_length_mm and usable_w >= expected.board_width_mm))
+        except (ValueError, ArithmeticError):
+            return None
     rotated = bool(allow_rotation and reviewed
-        and expected.board_length_mm != expected.board_width_mm
-        and (detail.board_length_mm, detail.board_width_mm) == (expected.board_width_mm, expected.board_length_mm))
+        and expected.board_length_mm != expected.board_width_mm and (exact_swap or swapped_raw))
     if (lot_face(db, lot, profile) != product_face(product)
             or detail.flute_type != expected.flute_type
             or detail.component_type != expected.component_type

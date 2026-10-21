@@ -63,3 +63,10 @@ body:has(.home-workbench){min-width:0}
 
 /* The whole customer card is a single native, keyboard-operable action. */
 .home-main button.home-customer-row{width:100%;text-align:left;background:#fff;color:var(--home-ink);font:inherit}.home-main button.home-customer-row.active{background:#edf4ff}.home-main button.home-customer-row:hover{border-color:#bad2fa}.home-main button.home-customer-row:focus-visible{outline:2px solid #175dda;outline-offset:1px}
+
+/* A long delivery state owns its row; it must not cover the product code. */
+.home-workbench .home-task{grid-template-columns:minmax(0,1fr);gap:5px}
+.home-workbench .home-task-meta{flex-direction:row;flex-wrap:wrap;align-items:center;max-width:100%;min-width:0}
+.home-workbench .home-task-meta .home-badge{white-space:normal;overflow-wrap:anywhere;max-width:100%}
+.home-workbench .home-task-main,.home-workbench .home-task-main>div{min-width:0}
+.home-workbench .home-task-main strong{overflow-wrap:anywhere}

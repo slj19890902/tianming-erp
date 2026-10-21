@@ -21,6 +21,9 @@ def clean_supplier_flute_type(
 
     for candidate in (value, fallback):
         normalized = re.sub(r"\s+", "", str(candidate or "").strip().upper())
+        # Confirmed supplier spelling; preserve raw source fields for audit.
+        if normalized == 'BA':
+            normalized = 'AB'
         if not normalized or normalized in MISSING_DISPLAY_TOKENS:
             continue
         if normalized in SUPPLIER_MATERIAL_FLUTES:

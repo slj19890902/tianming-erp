@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.705"
-APP_VERSION_NAME = "共用客户选择与保存修复"
+APP_VERSION = "v0.22.706"
+APP_VERSION_NAME = "片料裁切推荐与收料补库优化"
 APP_BUILD_DATE = "2026-10-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6902,3 +6902,16 @@ APP_VERIFICATION_STEPS = [
     "核对全部/指定产品及独立送货资料；保存客户基本资料与保存共用设置分别显示明确结果。",
 ]
 APP_CHANGELOG = [*(f"v0.22.705：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "使用库存片料按同尺寸、大张裁切模切、交换方向推荐，统一预览、预占与加工消耗；整张裁切产出保留订单外合格成品，材料成本沿原批次继承。",
+    "供应商毛净与压线分开记录；收料可按送货单修改实际规格，尺寸和毛净可同步常用箱及已启用共用资料，实际材质仅记本次。",
+    "欢达BA与AB按相同楞型显示；VCNUV未收料记录继续沿用原报料材质，历史差异不自动回填。",
+    "首页原位连续补库，保存后局部刷新库存提示；减少库存资格重复查询，修正交付状态覆盖产品编码。",
+]
+APP_VERIFICATION_STEPS = [
+    "待报料中打开C82020014使用库存片料，核对805×1950的VIK/B候选及每张30片；选择时按当前剩余需求建议张数。",
+    "收料行点击规格编辑，核对毛净、实际长宽和开料；实际材质只记本批，同步常用箱保留理论尺寸及压线工艺。",
+    "首页连续操作两款库存补库，保存后保留原列表；核对交付安排的大字文字不再覆盖编码。",
+]
+APP_CHANGELOG = [*(f"v0.22.706：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

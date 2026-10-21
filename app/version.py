@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.700"
-APP_VERSION_NAME = "作废订单Excel重新导入"
-APP_BUILD_DATE = "2026-10-20"
+APP_VERSION = "v0.22.701"
+APP_VERSION_NAME = "未印刷模切半成品确认用途抵扣"
+APP_BUILD_DATE = "2026-10-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -6837,3 +6837,15 @@ APP_VERIFICATION_STEPS = [
     "按实际业务需要保存，确认生成新订单号；再次导入同一文件应提示已有新订单。",
 ]
 APP_CHANGELOG = [*(f"v0.22.700：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+# v0.22.701：在订单采用时确认真实批次用途，与预占同事务保存。
+APP_CHANGES = [
+    "同客户未印刷模切半成品，资料兼容但尚未关联当前产品时，可在原库存行确认适用并采用，不再只能查看用途待核。",
+    "保存订单时按选定批次记录具体产品用途和预占；取消、未选及保存失败不建立关联，其他批次和产品不自动套用。",
+    "保留客户、材质楞型、工艺模具、可用数量、版本、幂等与审计校验；不修改历史库存或常用箱资料。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新邮箱收单，打开PO2026100117的21301464半成品库存，核对实物与位置后点击对应批次的确认未印刷且适用并采用。",
+    "按实际需求核对采用数量并保存订单，确认预占和剩余库存正确；再次点击保存不重复扣减。",
+]
+APP_CHANGELOG = [*(f"v0.22.701：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

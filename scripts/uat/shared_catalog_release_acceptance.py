@@ -24,9 +24,10 @@ def main():
     schema=baseline.execute("SELECT type,name,sql FROM sqlite_master WHERE type IN('index','trigger') ORDER BY type,name").fetchall()
     reservations={r[0]:r for r in baseline.execute('SELECT * FROM inventory_reservations')}
     lot_columns=[r[1] for r in baseline.execute('PRAGMA table_info(inventory_lots)')]
-    stable_lot=[c for c in lot_columns if c not in ('version','updated_at','quantity_available','quantity_reserved')]
+    stable_lot=[c for c in lot_columns if c not in ('version','updated_at','last_movement_at','quantity_available','quantity_reserved')]
     lots={r[0]:r for r in baseline.execute('SELECT id,'+','.join('"'+c+'"' for c in stable_lot)+' FROM inventory_lots')}
     totals={r[0]:r[1] for r in baseline.execute('SELECT id,quantity_available+quantity_reserved FROM inventory_lots')}
+    balances={r[0]:r[1:] for r in baseline.execute('SELECT id,quantity_available,quantity_reserved,last_movement_at FROM inventory_lots')}
     baseline.close()
     config=Config('alembic.ini');command.upgrade(config,'head');command.downgrade(config,'ew1020em')
     with sqlite3.connect(path) as db:
@@ -59,6 +60,14 @@ def main():
         after={r[0]:r for r in db.execute('SELECT id,'+','.join('"'+c+'"' for c in stable_lot)+' FROM inventory_lots')}
         assert after==lots,'Original inventory facts/cost/location changed'
         assert {r[0]:r[1] for r in db.execute('SELECT id,quantity_available+quantity_reserved FROM inventory_lots')}==totals
+        allocations={}
+        for row in result['new_reservations']:allocations[row['lot_id']]=allocations.get(row['lot_id'],0)+row['quantity']
+        for identity,available,reserved,last_at in db.execute('SELECT id,quantity_available,quantity_reserved,last_movement_at FROM inventory_lots'):
+            old_available,old_reserved,old_at=balances[identity];delta=allocations.get(identity,0)
+            assert (available,reserved)==(old_available-delta,old_reserved+delta)
+            if last_at!=old_at:assert delta>0,'Unrelated movement timestamp changed'
+        new_reservations={r[0] for r in db.execute('SELECT id FROM inventory_reservations')}-set(reservations)
+        assert new_reservations=={r['reservation_id'] for r in result['new_reservations']}
         assert all(db.execute('SELECT * FROM inventory_reservations WHERE id=?',(key,)).fetchone()==value for key,value in reservations.items())
         assert db.execute('PRAGMA integrity_check').fetchone()==('ok',)
         assert not db.execute('PRAGMA foreign_key_check').fetchall()

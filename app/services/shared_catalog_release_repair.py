@@ -1,7 +1,7 @@
 """Exact, audited release repair over the current database; no old DB restore."""
 from decimal import Decimal
 import json
-from sqlalchemy import select
+from sqlalchemy import select,text
 from app.models.product import Product
 from app.models.material import Material
 from app.models.order import Order,OrderItem
@@ -18,6 +18,28 @@ def _apply_current(db,p,updates,actor,reason):
         user=actor,reason=reason,source='shared_catalog_release_repair',confirmation_token=check['confirmation_token'])
 
 
+def validate_manifest(db,manifest):
+    check={k:v for k,v in manifest.items() if k!='sha256'}
+    if digest(check)!=manifest['sha256']:raise _error('修正清单摘要不一致')
+    for row in manifest['price_changes']:
+        p=db.execute(text('SELECT id,version,product_code,customer_id,is_active,is_internal_component,deleted_at,purged_at,sale_unit_price,sale_unit_price_no_tax FROM products WHERE id=:id'),dict(id=row['product_id'])).mappings().one_or_none()
+        if (not p or p['version']!=row['version'] or p['product_code']!=row['code'] or p['customer_id']!=row['customer_id']
+                or not p['is_active'] or p['is_internal_component'] or p['deleted_at'] or p['purged_at']):raise _error('当前报价资料已变化，未执行本次清单')
+        for field,value in row['before'].items():
+            current=p[field]
+            if (current is None)!=(value is None) or (current is not None and Decimal(str(current))!=Decimal(str(value))):
+                raise _error('当前报价数值变化，未执行本次清单')
+    for row in manifest['groups']:
+        group=db.execute(text('SELECT id,version,enabled FROM shared_finished_groups WHERE id=:id'),dict(id=row['group_id'])).mappings().one_or_none()
+        ids=sorted(db.scalars(select(SharedFinishedMember.product_id).where(SharedFinishedMember.group_id==row['group_id'])))
+        if not group or group['version']!=row['version'] or not group['enabled'] or ids!=row['product_ids']:
+            raise _error('共用范围或版本已变化，未执行本次清单')
+    for identity, version in manifest['product_versions'].items():
+        p=db.execute(text('SELECT version FROM products WHERE id=:id'),dict(id=int(identity))).mappings().one_or_none()
+        if not p or p['version']!=version:
+            raise _error('共用产品或备用模具资料已变化，须刷新审查清单')
+
+
 def apply(db,*,manifest,actor,backup_sha256,operation_key='shared-catalog-20261021-v2'):
     if not actor or actor.role!='admin' or not actor.is_active or len(backup_sha256)!=64:
         raise _error('须由活动管理员绑定本次已验证恢复点执行',403)
@@ -29,26 +51,8 @@ def apply(db,*,manifest,actor,backup_sha256,operation_key='shared-catalog-202610
         if old:
             if old.request_json!=request:raise _error('该修正事务已绑定其它候选或恢复点')
             return dict(json.loads(old.result_json),replayed=True)
-        check={k:v for k,v in manifest.items() if k!='sha256'}
-        if digest(check)!=manifest['sha256']:raise _error('修正清单摘要不一致')
         for cid in (137,138):require_customer_access(cid,current_user=actor,db=db)
-        for row in manifest['price_changes']:
-            p=db.get(Product,row['product_id'])
-            if (not p or p.version!=row['version'] or p.product_code!=row['code'] or p.customer_id!=row['customer_id']
-                    or not p.is_active or p.is_internal_component or p.deleted_at or p.purged_at):raise _error('当前报价资料已变化，未执行本次清单')
-            for field,value in row['before'].items():
-                current=getattr(p,field)
-                if (current is None)!=(value is None) or (current is not None and Decimal(str(current))!=Decimal(str(value))):
-                    raise _error('当前报价数值变化，未执行本次清单')
-        for row in manifest['groups']:
-            group=db.get(SharedFinishedGroup,row['group_id'])
-            ids=sorted(db.scalars(select(SharedFinishedMember.product_id).where(SharedFinishedMember.group_id==row['group_id'])))
-            if not group or group.version!=row['version'] or not group.enabled or ids!=row['product_ids']:
-                raise _error('共用范围或版本已变化，未执行本次清单')
-        for identity, version in manifest['product_versions'].items():
-            p=db.get(Product,int(identity))
-            if not p or p.version!=version:
-                raise _error('共用产品或备用模具资料已变化，须刷新审查清单')
+        validate_manifest(db,manifest)
         price_count=0
         for row in manifest['price_changes']:
             p=db.get(Product,row['product_id']);price=Decimal(row['price'])

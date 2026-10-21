@@ -50,7 +50,16 @@ def preview(db,parent_id,peer_id,default_child_id):
     updates={key:getattr(default,key) for key in PHYSICAL_FIELDS if key not in ('die_cut_path','production_variants')}
     updates.update(is_composite=False,is_internal_component=False,is_virtual_composite_parent=False,
         unit=peer.unit,production_variants=variants,combination_mode='parent_priced_set',composite_fulfillment_mode='parent_delivery')
+    from app.models.shared_finished_stock import SharedFinishedLot
+    from app.models.warehouse_inventory import InventoryLot
+    unresolved=[]
+    for fact in db.scalars(select(SharedFinishedLot).where(SharedFinishedLot.group_id==members[0].group_id)):
+        lot=db.get(InventoryLot,fact.lot_id)
+        if master.shared.lot_identity(lot)!=fact.identity_json:
+            unresolved.append(dict(lot_id=lot.id,version=lot.version,current_identity=master.shared.lot_identity(lot),
+                original_identity=fact.identity_json,quantity_available=lot.quantity_available,quantity_reserved=lot.quantity_reserved))
     result=dict(parent_id=parent_id,peer_id=peer_id,default_child_id=default_child_id,
+        unresolved_legacy_lots=unresolved,
         group_id=members[0].group_id,parent_version=parent.version,peer_version=peer.version,
         children=[dict(id=p.id,version=p.version,basis=master.shared.product_basis(p)) for p in children],
         current_edges=[dict(id=e.id,child=e.component_product_id,quantity=str(e.quantity_per_set)) for e in edges],
@@ -84,6 +93,20 @@ def apply(db,*,plan,actor,operation_key,evidence):
         parent=db.get(Product,plan['parent_id'])
         _replace_product_bom(db,parent_product_id=parent.id,components=[],expected_version=parent.version,user=actor,
             change_reason=evidence,inventory_mode='manufactured',material_mode='expand_children',delivery_mode='parent',preserve_parent_unit=True)
+        # The ordinary BOM editor deliberately retains an empty manufactured
+        # profile. This reviewed correction is explicitly to a normal product;
+        # remove only that now-empty current template, never frozen order graphs.
+        empty=db.get(ProductBomProfile,parent.id)
+        if (not empty or empty.source!='manufactured' or db.scalar(select(ProductBomComponent.id).where(
+                ProductBomComponent.parent_product_id==parent.id).limit(1))):
+            raise _error('当前BOM模板未安全清空，未转换为普通成品')
+        from app.services.audit_log import append_audit_event
+        append_audit_event(db,event_category='business',result='success',source='script',module_code='warehouse',
+            action_code='correct_reviewed_alternative_mold_template',resource='products',actor=actor,
+            entity_type='product',entity_id=parent.id,details=dict(evidence=evidence,original_plan_sha256=plan['sha256'],
+                removed_empty_current_profile=dict(source=empty.source,material_mode=empty.material_mode,delivery_mode=empty.delivery_mode),
+                historical_order_graphs_preserved=True))
+        db.delete(empty);db.flush()
         # Legacy product IDs remain available to their frozen order graphs.
         for row in plan['children']:
             child=db.get(Product,row['id'])
@@ -91,8 +114,11 @@ def apply(db,*,plan,actor,operation_key,evidence):
                 check=preview_versioned_update(db,object_type='product',entity=child,updates={'is_internal_component':True},expected_version=child.version,user=actor)
                 _apply_versioned_update(db,object_type='product',entity=child,updates={'is_internal_component':True},expected_version=child.version,user=actor,
                     reason='保留历史子件身份，仅停用错误的未来必需组套关系',source='reviewed_alternative_molds',confirmation_token=check['confirmation_token'])
-        policy=master.preview_reconcile(db,parent.id)
-        master.reconcile(db,product_id=parent.id,preview_hash=policy['sha256'],operation_key=operation_key+'-stock',evidence=evidence,actor=actor)
-        result=dict(parent_id=parent.id,peer_id=plan['peer_id'],variants=plan['updates']['production_variants'],stock_quantity_writes=False)
+        excluded=[r['lot_id'] for r in plan['unresolved_legacy_lots']]
+        policy=master.preview_reconcile(db,parent.id,excluded_legacy_lot_ids=excluded)
+        master.reconcile(db,product_id=parent.id,preview_hash=policy['sha256'],operation_key=operation_key+'-stock',evidence=evidence,
+            actor=actor,excluded_legacy_lot_ids=excluded)
+        result=dict(parent_id=parent.id,peer_id=plan['peer_id'],variants=plan['updates']['production_variants'],
+            stock_quantity_writes=False,unresolved_legacy_lots=plan['unresolved_legacy_lots'])
         db.add(SharedFinishedMutation(group_id=plan['group_id'],operation_key=operation_key,request_json=request,result_json=canonical(result)))
         db.flush();return result

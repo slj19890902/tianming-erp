@@ -173,3 +173,14 @@ def test_verified_retained_plaintext_defers_cleanup_without_losing_backup(local_
     with scene.manager.lock(),pytest.raises(ValueError,match='previous retained backup work'):
         local.backup_locked(scene.manager,PASSWORD)
     assert scene.events==[]
+
+def test_release_preserves_exact_existing_backups_without_deleting_unreferenced_success(local_case):
+    scene=local_case;root=scene.manager.root
+    old=root/'backups'/'20260101-040404-eeeeeeee.tmbackup'
+    old.write_bytes(b'owner explicitly preserves this existing recovery point');old.chmod(0o600)
+    state=scene.manager.state;state['owner_preserved_backup_sha256']=[sha(old)];write_json(root/'state.json',state)
+    proof=cutover(scene)
+    result=local.finalize_local_update(scene.manager)
+    assert result['retention']['status']=='one_complete'
+    assert result['retention']['protected']==[{'name':old.name,'reasons':['owner_preserved_release']}]
+    assert old.exists() and (root/'backups'/proof['backup_filename']).exists()

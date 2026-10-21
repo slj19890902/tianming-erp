@@ -147,6 +147,10 @@ def _retention(manager,keep,context,*,allow_retained_proof=None):
     """Delete ordinary predecessors while preserving explicitly referenced sources."""
     from .cleanup import assert_idle
     state=manager.state
+    owner_preserved=state.get('owner_preserved_backup_sha256',[])
+    require(isinstance(owner_preserved,list) and len(owner_preserved)<=128
+        and all(isinstance(v,str) and re.fullmatch('[a-f0-9]{64}',v) for v in owner_preserved),
+        'owner backup preservation record is invalid')
     require(not state.get('onboarding_pending')
         and state.get('operation')!='migration_running' and 'failed' not in (state.get('operation') or ''),
         'pending maintenance protects previous recovery points')
@@ -179,6 +183,8 @@ def _retention(manager,keep,context,*,allow_retained_proof=None):
                 if old_sha==state.get('migration_backup_sha256'):reasons.append('migration_source')
                 if old_sha in RELEASE_20261015_PRESERVED_CIPHERS:
                     reasons.append('owner_preserved_20261015')
+                if old_sha in owner_preserved:
+                    reasons.append('owner_preserved_release')
                 if (old_sha in active_hashes
                         or any(_comparison_key(str(path))==_comparison_key(name) for name in active_paths)):
                     reasons.append('active_task_source')

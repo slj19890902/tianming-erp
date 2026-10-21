@@ -150,7 +150,7 @@ def _same_role(products):
                  p.is_internal_component,unit(p),p.pieces_per_box,p.splice_mode) for p in products}) == 1
 
 
-def preview_reconcile(db, product_id):
+def preview_reconcile(db, product_id, *, excluded_legacy_lot_ids=()):
     product = db.get(Product, product_id)
     pair = _pair(db, product) if product else None
     if not pair:
@@ -163,9 +163,16 @@ def preview_reconcile(db, product_id):
     from app.models.warehouse_inventory import InventoryLot
     facts = list(db.scalars(select(SharedFinishedLot).where(SharedFinishedLot.group_id == gid)))
     members = {str(p.id): dict(identity_json=shared.member_identity(p), product_basis_json=shared.product_basis(p)) for p in products}
-    lots = {}
+    lots = {};unresolved=[]
+    excluded=set(excluded_legacy_lot_ids)
+    if not excluded.issubset({f.lot_id for f in facts}):
+        raise shared._error('保留冲突的批次不属于原共用组')
     for fact in facts:
         lot = db.get(InventoryLot, fact.lot_id)
+        if lot.id in excluded:
+            unresolved.append(dict(lot_id=lot.id,version=lot.version,identity_json=shared.lot_identity(lot),
+                original_approved_identity_json=fact.identity_json,reason='历史冻结身份冲突保留，未重新授予共用资格'))
+            continue
         if shared.lot_identity(lot) != fact.identity_json:
             raise shared._error(f'批次{lot.id}的冻结身份已变化，须核对原始凭据')
         lots[str(lot.id)] = dict(identity_json=fact.identity_json,
@@ -209,27 +216,28 @@ def preview_reconcile(db, product_id):
         added.append(dict(lot_id=lot.id,version=lot.version))
     group = db.get(SharedFinishedGroup, gid)
     result = dict(group_id=gid, version=group.version, enabled=group.enabled,
-                  added_lots=added, skipped_lots=skipped,
+                  added_lots=added, skipped_lots=skipped,unresolved_legacy_lots=unresolved,
                   products=[dict(id=p.id, version=p.version, code=p.product_code) for p in products],
                   members=members, lots=lots, legacy_lot_ids=sorted(f.lot_id for f in facts))
     result['sha256'] = hashlib.sha256(shared._json(result).encode()).hexdigest()
     return result
 
 
-def reconcile(db, *, product_id, preview_hash, operation_key, evidence, actor):
+def reconcile(db, *, product_id, preview_hash, operation_key, evidence, actor, excluded_legacy_lot_ids=()):
     """Explicit, reviewed clerical correction; does not alter a stock row."""
     if actor is None or not actor.is_active or actor.role != 'admin' or not evidence.strip():
         raise shared._error('仅活动管理员可按已核实事实修复共用关系', 403)
     from app.services.bom_transactions import atomic_bom
     from app.services.audit_log import append_audit_event
     from app.api.deps import require_customer_access
-    request = shared._json(dict(product_id=product_id, preview_hash=preview_hash, evidence=evidence, actor_id=actor.id))
+    request = shared._json(dict(product_id=product_id, preview_hash=preview_hash, evidence=evidence, actor_id=actor.id,
+        excluded_legacy_lot_ids=sorted(excluded_legacy_lot_ids)))
     with atomic_bom(db):
         old = db.scalar(select(SharedFinishedMutation).where(SharedFinishedMutation.operation_key == operation_key))
         if old:
             if old.request_json != request: raise shared._error('操作标识已用于其他修复')
             return dict(replayed=True, group_id=old.group_id)
-        plan = preview_reconcile(db, product_id)
+        plan = preview_reconcile(db, product_id,excluded_legacy_lot_ids=excluded_legacy_lot_ids)
         if plan['sha256'] != preview_hash: raise shared._error('产品或共用资料已变化，请重新核对')
         gid = plan['group_id']
         for row in plan['products']:

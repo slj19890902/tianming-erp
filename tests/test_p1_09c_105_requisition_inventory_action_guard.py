@@ -16,7 +16,7 @@ def _method_body(name: str) -> str:
     match = re.search(pattern, INDEX)
     assert match is not None, f"missing Vue method: {name}"
     next_method = re.search(
-        r"\n\s{10,}(?:async\s+)?[A-Za-z_$][\w$]*\([^)]*\)\s*\{",
+        r"\n {10}(?:async\s+)?[A-Za-z_$][\w$]*\([^)]*\)\s*\{",
         INDEX[match.end() :],
     )
     assert next_method is not None, f"cannot delimit Vue method: {name}"
@@ -116,7 +116,7 @@ def test_reconcile_unlocks_only_after_authoritative_refresh(tmp_path: Path) -> N
     body = _method_contents("refreshRequisitionInventoryState")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
-function context(ok){{const messages=[];return {{messages,modal:null,requisitionInventoryActionState:{{action:'',committed:true,outcomeUncertain:false,context:'pending',orderItemId:19,bomSnapshotId:null,targetKey:'19',result:{{}}}},async loadRequisition(){{if(!ok) throw new Error('refresh failed');}},resetRequisitionInventoryActionState(){{this.requisitionInventoryActionState={{action:'',committed:false,outcomeUncertain:false,context:'',orderItemId:null,bomSnapshotId:null,targetKey:'',result:null}};}},showToast(message,danger=false){{messages.push({{message,danger}});}},errorMessage(error){{return error?.message||String(error);}}}};}}
+function context(ok){{const messages=[];return {{messages,modal:null,requisitionInventoryActionState:{{action:'',committed:true,outcomeUncertain:false,context:'pending',orderItemId:19,bomSnapshotId:null,targetKey:'19',result:{{}}}},manualSheetParentControlsBlocked(){{return false;}},async loadRequisition(){{if(!ok) throw new Error('refresh failed');}},resetRequisitionInventoryActionState(){{this.requisitionInventoryActionState={{action:'',committed:false,outcomeUncertain:false,context:'',orderItemId:null,bomSnapshotId:null,targetKey:'',result:null}};}},showToast(message,danger=false){{messages.push({{message,danger}});}},errorMessage(error){{return error?.message||String(error);}}}};}}
 const fn=new AsyncFunction({json.dumps(body, ensure_ascii=False)});
 (async()=>{{const failed=context(false);if(await fn.call(failed)!==false||!failed.requisitionInventoryActionState.committed||failed.requisitionInventoryActionState.action) throw new Error('failed reconcile unlocked');const passed=context(true);if(await fn.call(passed)!==true||passed.requisitionInventoryActionState.committed||!passed.messages.some(row=>row.message.includes('已核对'))) throw new Error('successful reconcile did not unlock');}})().catch(error=>{{console.error(error);process.exit(1);}});
 """

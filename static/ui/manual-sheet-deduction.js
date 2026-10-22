@@ -2,6 +2,16 @@
   'use strict';
   // Preserve an uncertain operation when its parent list/draft is reopened.
   const pending = new Map();
+  function pendingForActor(actorId) {
+    return [...pending.entries()].filter(([identity])=>identity.startsWith(`${Number(actorId)||0}:`));
+  }
+  async function reconcileForActor(actorId) {
+    const entries=pendingForActor(actorId);
+    if(entries.some(([,held])=>held.inFlight))return {complete:false,busy:true,outcomes:[]};
+    const outcomes=[];
+    for(const [,held] of entries)outcomes.push(await held.resume());
+    return {complete:pendingForActor(actorId).length===0,busy:false,outcomes};
+  }
   const differenceNames = {customer:'通用／客户归属', board_length_mm:'长度', board_width_mm:'宽度',
     material_code:'材质', flute:'楞型', component:'组件', pieces_per_box:'每只耗片数', stock_yield_per_sheet:'每张产出'};
   function chosenQuantity(row) {
@@ -74,13 +84,26 @@
     line._manual_sheet_refresh_error=children.some(child=>child._manual_sheet_refresh_error);
   }
   const component = {
-    props:{actorId:{type:Number,default:0},snapshotId:{type:Number,default:0},orderItemId:{type:Number,default:0}, componentType:{type:String,default:'whole'},disabled:{type:Boolean,default:false}},
+    props:{actorId:{type:Number,default:0},snapshotId:{type:Number,default:0},orderItemId:{type:Number,default:0}, componentType:{type:String,default:'whole'},disabled:{type:Boolean,default:false},operationReporter:{type:Function,default:null}},
     emits:['reserved','operation-state'],
     data() {return {opened:false,loading:false,busy:false,error:'',message:'',preview:null,rows:[],uncertain:false,matchMode:'auto',readSequence:0,mapLocation:null,useScrap:false,scrapQuantity:''};},
     created() {this.uncertain=pending.has(this.identity);},
+    beforeUnmount() {this.disposed=true;this.readSequence++;},
     computed:{identity() {return `${this.actorId || 0}:${this.snapshotId?'bom':'order'}:${this.snapshotId || this.orderItemId}:${this.componentType}`;}},
     watch:{identity() {this.readSequence++;this.loading=false;this.busy=false;this.opened=false;this.preview=null;this.rows=[];this.error='';this.message='';this.mapLocation=null;this.useScrap=false;this.scrapQuantity='';this.uncertain=pending.has(this.identity);}},
     methods:{
+      reportOperation(state) {
+        // Vue drops emitted events after unmount; the owner must still settle
+        // its lock when a successful reservation removes this pending row.
+        if(this.operationReporter)this.operationReporter(state);
+        else this.$emit('operation-state',state);
+      },
+      hold(payload,batch=false) {
+        const identity=this.identity;
+        pending.set(identity,{preview:this.preview,rows:this.rows,payload,matchMode:this.matchMode,batch,
+          endpoint:this.endpoint()+(batch?'/manual-reserve-batch':'/manual-reserve'),inFlight:false,
+          resume:()=>this.resumeHeld(identity)});
+      },
       locationName(row) {return row.warehouse_location?.location_name || row.warehouse_location?.name || row.warehouse_location?.location_code || '位置待核对';},
       openMap(row) {
         const id=Number(row.warehouse_location?.id);
@@ -151,7 +174,7 @@
         if(this.busy || (this.disabled && !this.uncertain))return;
         this.opened=true;this.error='';this.message='';
         this.focusDialog();
-        const held=pending.get(this.identity);
+        const held=pending.get(this.identity);this.uncertain=Boolean(held);
         if(held) {this.preview=held.preview;this.rows=held.rows;this.matchMode=held.matchMode || 'exact';this.uncertain=true;return;}
         await this.load('auto');
       },
@@ -162,7 +185,7 @@
         this.useScrap=false;this.scrapQuantity='';
         const identity=this.identity,sequence=++this.readSequence;
         try {
-          const {data}=await root.axios.get(this.endpoint()+'/manual-inventory',{params:{component_type:this.componentType,match_mode:mode}});
+          const {data}=await root.axios.get(this.endpoint()+'/manual-inventory',{params:{component_type:this.componentType,match_mode:mode},timeout:15000});
           if(this.identity!==identity || sequence!==this.readSequence)return;
           this.preview=data;this.rows=(data.items || []).map(row=>({...row,inputQuantity:'',selected:false}));this.uncertain=false;
           this.$nextTick?.(()=>this.$refs?.dialog?.focus());
@@ -200,18 +223,18 @@
         if(this.useScrap) {
           const now=new Date(),stockDate=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
           const identity=this.identity,quantity=this.scrapCount();
-          this.busy=true;this.error='';this.$emit('operation-state',{identity,blocked:true});
+          this.busy=true;this.error='';this.reportOperation({identity,blocked:true});
           try {
             const {data}=await root.axios.post('/api/production/scrap-production/preview',{
               action:'finish_now',product_id:this.preview.product_id,order_item_id:this.orderItemId,
               quantity,stock_date:stockDate,location_id:null,variant_id:null,remarks:'库料短缺，已用废料补足',
-              preview_hash:'',operation_key:'sheet-scrap-preview'});
-            if(this.identity!==identity)return;
+              preview_hash:'',operation_key:'sheet-scrap-preview'},{timeout:15000});
+            if(this.disposed || this.identity!==identity)return;
             payload.scrap_completion={quantity,stock_date:stockDate,preview_hash:data.preview_hash};
           } catch(error) {this.error=this.errorText(error);return;}
-          finally {if(this.identity===identity)this.busy=false;this.$emit('operation-state',{identity,blocked:false});}
+          finally {if(this.identity===identity)this.busy=false;this.reportOperation({identity,blocked:false});}
         }
-        pending.set(this.identity,{preview:this.preview,rows:this.rows,payload,matchMode:this.matchMode,batch:true});
+        this.hold(payload,true);
         await this.submitHeld();
       },
       async reserve(row) {
@@ -219,36 +242,54 @@
         if(!pending.has(this.identity)) {
           const quantity=chosenQuantity(row);
           if(!row.selectable || !quantity) {this.error='请填写不超过可用库存及需求上限的正整数片数';return;}
-          pending.set(this.identity,{preview:this.preview,rows:this.rows,matchMode:this.matchMode,payload:{component_type:this.componentType,
+          this.hold({component_type:this.componentType,
             match_mode:this.matchMode,lot_id:row.lot_id,stock_quantity:quantity,expected_version:row.version,
             expected_order_item_revision:this.preview.expected_order_item_revision,review_hash:row.review_hash,
-            warning_acknowledged_codes:row.warning_codes || [],idempotency_key:operationKey()}});
+            warning_acknowledged_codes:row.warning_codes || [],idempotency_key:operationKey()});
         }
         await this.submitHeld();
       },
       async submitHeld() {
-        const identity=this.identity,held=pending.get(identity);
-        if(!held || this.busy)return;
-        this.busy=true;this.error='';this.message='';this.$emit('operation-state',{identity,blocked:true});
+        return this.resumeHeld(this.identity);
+      },
+      async resumeHeld(identity) {
+        const held=pending.get(identity);
+        if(!held) {
+          if(!this.disposed && this.identity===identity){this.uncertain=false;await this.load('auto');}
+          return {outcome:'settled'};
+        }
+        if(held.inFlight || this.busy)return {outcome:'busy'};
+        held.inFlight=true;
+        this.busy=true;this.error='';this.message='';this.reportOperation({identity,blocked:true});
+        let committed=false;
         try {
-          const {data}=await root.axios.post(this.endpoint()+(held.batch?'/manual-reserve-batch':'/manual-reserve'),held.payload);
+          const {data}=await root.axios.post(held.endpoint,held.payload,{timeout:45000});
+          committed=true;
           pending.delete(identity);
-          if(this.identity!==identity)return;
+          this.reportOperation({identity,blocked:false});
+          if(this.disposed || this.identity!==identity)return {outcome:'success'};
           this.uncertain=false;this.message=data.message;this.preview={...this.preview,...data};this.rows=[];this.opened=false;
           this.$nextTick?.(()=>{if(this.returnFocus?.isConnected)this.returnFocus.focus();});
           this.$emit('reserved',data);
           try {
-            const {data:fresh}=await root.axios.get(this.endpoint()+'/manual-inventory',{params:{component_type:this.componentType,match_mode:'auto'}});
-            if(this.identity!==identity)return;
+            const {data:fresh}=await root.axios.get(this.endpoint()+'/manual-inventory',{params:{component_type:this.componentType,match_mode:'auto'},timeout:15000});
+            if(this.disposed || this.identity!==identity)return {outcome:'success'};
             this.preview=fresh;this.rows=(fresh.items || []).map(item=>({...item,inputQuantity:'',selected:false}));this.matchMode='auto';this.$emit('reserved',fresh);
           } catch(error) {if(this.identity===identity)this.error='抵扣已成功；库存列表刷新失败，请点击重新查看，不要重复抵扣。';}
+          return {outcome:'success'};
         } catch(error) {
+          if(committed) {
+            if(!this.disposed && this.identity===identity)this.error='抵扣已成功；页面刷新失败，请重新查看库存，不要重复抵扣。';
+            return {outcome:'success'};
+          }
           const status=error.response?.status;
           if(status && status<500)pending.delete(identity);
-          if(this.identity!==identity)return;
-          if(status && status<500) {this.uncertain=false;this.rows=[];this.error=this.errorText(error)+'；请重新查看库存。';}
-          else {this.uncertain=true;this.error='抵扣结果暂未确认，请核对上次抵扣结果。';}
-        } finally {if(this.identity===identity)this.busy=false;this.$emit('operation-state',{identity,blocked:pending.has(identity)});}
+          if(!this.disposed && this.identity===identity) {
+            if(status && status<500) {this.uncertain=false;this.rows=[];this.error=this.errorText(error)+'；请重新查看库存。';}
+            else {this.uncertain=true;this.error='抵扣结果暂未确认，请核对上次抵扣结果。';}
+          }
+          return {outcome:status && status<500?'rejected':'unknown',message:this.errorText(error)};
+        } finally {held.inFlight=false;if(this.identity===identity)this.busy=false;this.reportOperation({identity,blocked:pending.has(identity)});}
       }
     },
     template:`<section class="manual-sheet-deduction">
@@ -290,6 +331,6 @@
       </teleport>
     </section>`
   };
-  root.TMManualSheetDeduction={component,chosenQuantity,pending,physicalComponents,orderTargets,reportedTargets,refreshDraftGroup};
+  root.TMManualSheetDeduction={component,chosenQuantity,pending,pendingForActor,reconcileForActor,physicalComponents,orderTargets,reportedTargets,refreshDraftGroup};
   if (typeof module !== 'undefined') module.exports=root.TMManualSheetDeduction;
 })(typeof window !== 'undefined'?window:globalThis);

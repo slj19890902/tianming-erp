@@ -9,7 +9,10 @@ INDEX = (Path(__file__).parents[1] / "static" / "index.html").read_text(
 def test_waiting_receipt_delivery_uses_controlled_edit_entry() -> None:
     assert "编辑待回单送货单" in INDEX
     assert "row.return_receipt_status==='cancelled'" in INDEX
-    assert "@click=\"correctDeliveryActualDate(row)\">更正实际日期</button>" not in INDEX
+    # Date-only correction must also work for an existing confirmed receipt,
+    # without cancelling it or revising delivery quantities.
+    assert 'data-action="correct-delivery-actual-date"' in INDEX
+    assert '@click="correctDeliveryActualDate(row)">更正实际日期</button>' in INDEX
 
 
 def test_dispatched_edit_uses_revision_endpoint_and_reprint_prompt() -> None:

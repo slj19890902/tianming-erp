@@ -5162,6 +5162,7 @@
                           <button v-if="hasPermission('orders.view')" class="btn small" data-action="print-product-labels" :disabled="deliveryLabelOpenState.busy" @click="openDeliveryProductLabels(row)">{{ deliveryLabelOpenState.busy && Number(deliveryLabelOpenState.deliveryId)===Number(row.id) ? '核验标签中…' : (row.status==='voided' ? '补打产品标签' : '打印产品标签') }}</button>
                           <a v-if="deliveryLabelRecoveryUrl && Number(deliveryLabelOpenState.deliveryId)===Number(row.id)" class="btn small" :href="deliveryLabelRecoveryUrl" target="_blank" rel="noopener">重新打开标签页</a>
                           <button v-if="canDelivery && (row.status==='pending' || (row.status==='dispatched' && (!row.return_receipt_status || row.return_receipt_status==='cancelled')))" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="editDelivery(row)">{{ row.status==='dispatched' ? '编辑待回单送货单' : '编辑' }}</button>
+                          <button v-if="canDelivery && canAdjustReconciliationPeriod && ['pending','dispatched'].includes(row.status)" class="btn small" data-action="correct-delivery-actual-date" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="correctDeliveryActualDate(row)">更正实际日期</button>
                           <button v-if="canDelivery && row.status==='pending'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
                           <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="cancelReceipt(row)">{{ receiptOperationState.action==='cancel' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消回单' }}</button>
                           <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="cancelDelivery(row)">{{ deliveryOperationState.action==='cancel' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '撤回中…' : '撤回发货' }}</button>
@@ -7088,7 +7089,8 @@
                   <div class="sheet-cutting-inputs" :data-supplier-sheet-default="part.key">
                     <label>供应商报料长 <input class="input" type="number" min="1" step="0.01" :value="productSupplierDimension(part.key,'length')" @input="setProductSupplierDimension(part.key,'length',$event.target.value)" /></label>
                     <label>供应商报料宽 <input class="input" type="number" min="1" step="0.01" :value="productSupplierDimension(part.key,'width')" @input="setProductSupplierDimension(part.key,'width',$event.target.value)" /></label>
-                    <label>供应商纸板要求 <select class="select" aria-label="供应商纸板要求" v-model="productForm[part.key==='base'?'base_supplier_edge_type':'supplier_edge_type']" @change="syncProductSupplierEdge(part.key)"><option :value="null">未设置</option><option v-for="creaseType in ['毛片','净料']" :key="creaseType" :value="creaseType">{{ creaseType }}</option></select></label>
+                    <label v-if="productForm[part.key==='base'?'base_crease_type':'crease_type']==='压线'">供应商纸板要求 <output aria-label="供应商纸板要求">{{ productSupplierCreaseRequirement(part.key) }}</output></label>
+                    <label>供应商毛净 <select class="select" aria-label="供应商毛净" v-model="productForm[part.key==='base'?'base_supplier_edge_type':'supplier_edge_type']" @change="syncProductSupplierEdge(part.key)"><option :value="null">未指定毛净</option><option v-for="creaseType in ['毛片','净料']" :key="creaseType" :value="creaseType">{{ creaseType }}</option></select></label>
                     <button v-if="part.value.actual_supplier_length_mm!=null" class="btn small" type="button" @click="resetProductSupplierDimensions(part.key)">恢复按开料计算</button>
                   </div>
                   <small class="muted">随常用箱保存，作为以后新报料的默认值。含修边余量请选择毛片；理论尺寸与每张产出不变。</small>
@@ -7270,6 +7272,7 @@
                 <div v-if="productForm.supply_mode!=='external_purchase' && productForm.box_style!=='BOM组合'" class="product-printing-direct-workbench" :class="{'has-direct-colors':productUsesDirectPrinting(productForm)}">
                   <div class="field product-print-status-field"><label>印刷情况</label>
                     <select class="select" v-model="productForm._printing_situation" @change="onProductPrintingSituationChanged">
+                      <option v-if="productForm.id" value="">未确认</option>
                       <option value="无印刷">无印刷</option>
                       <option value="单色印刷">单色印刷</option>
                       <option value="双色印刷">双色印刷</option>
@@ -13556,7 +13559,6 @@
               payload.production_label_units_per_label = null;
             }
             if (payload.sale_unit_price === "") payload.sale_unit_price = null;
-            payload.print_content = payload.print_content || "无印刷";
             return this.attachMasterUpdateMetadata("product",payload,options);
           },
           async prepareProductOneClickSave() {
@@ -30085,7 +30087,7 @@
             const plateCount = mode === "plate" ? this.productPrintingPlateCount(form) : 0;
             const printContent = mode === "plate"
               ? (plateCount===3 ? "三色印刷" : (plateCount===2 ? "双色印刷" : "单色印刷"))
-              : (this.productHasPrinting(form) ? (form.print_content || "单色印刷") : "无印刷");
+              : (this.productHasPrinting(form) ? (form.print_content || "单色印刷") : (form._printing_situation === "" ? null : "无印刷"));
             return {
               print_content: printContent,
               printing_colors: mode === "plate" || !this.productHasPrinting(form) ? null : (this.productPrintingColorSummary(form) || null),
@@ -30180,7 +30182,7 @@
           },
           onProductPrintingSituationChanged() {
             const form = this.productForm;
-            const situation = String(form._printing_situation || "无印刷");
+            const situation = String(form._printing_situation ?? "无印刷");
             const wasPlate = form.printing_plate_mode === "plate";
             form._printing_colors_touched = true;
             if (situation === "挂板印刷") {
@@ -30196,7 +30198,7 @@
               }
               return;
             }
-            form.print_content = situation;
+            form.print_content = situation || null;
             form.printing_plate_mode = "no_plate";
             form._printing_plate_count = 0;
             [1,2,3].forEach(index=>form[`printing_plate_${index}_id`]=null);
@@ -30311,6 +30313,15 @@
               return `${snapshot.supplier_length_mm} × ${snapshot.supplier_width_mm} mm`;
             } catch(error) { return error.message; }
           },
+          productSupplierCreaseRequirement(key) {
+            const prefix=key==='base'?'base_':'';
+            const form=this.productForm;
+            if(form[prefix+'crease_type']!=='压线') return '';
+            const segments=['left','middle','right'].map(side=>form[prefix+'crease_'+side+'_mm']);
+            const missing=value=>value==null || String(value).trim()==='';
+            const dimensions=segments.map(value=>missing(value)?'待填写':value).join('＋');
+            return `压线：${dimensions} mm${segments.some(missing)?'（请补全压线尺寸）':''}`;
+          },
           syncProductSupplierEdge(key) {
             const prefix=key==='base'?'base_':'';
             if(this.productForm[prefix+'crease_type']!=='压线')this.productForm[prefix+'crease_type']=this.productForm[prefix+'supplier_edge_type'];
@@ -30396,13 +30407,15 @@
             this.mergePrintingPlateOptions(detail?.printing_plates || [],form.customer_id);
             form._corner_reference_quantity = 1000;
             form.box_style = this.normalizeBoxTypeDisplay(form.box_style || "");
-            form.print_content = form.print_content || "无印刷";
+            // Existing empty values are unknown facts; only new products get the default.
+            if (!form.id) form.print_content = form.print_content || "无印刷";
             form.printing_plate_mode = form.printing_plate_mode === "plate" ? "plate" : "no_plate";
             const parsedPrintingColors = this.parseProductPrintingColors(form.printing_colors);
             form._printing_colors_original_count = parsedPrintingColors.length;
             form._printing_colors_touched = false;
             form._printing_colors = parsedPrintingColors;
             if (form.printing_plate_mode === "plate") form._printing_situation = "挂板印刷";
+            else if (form.id && !form.print_content) form._printing_situation = "";
             else if (["单色印刷","双色印刷","三色印刷"].includes(form.print_content)) form._printing_situation = form.print_content;
             else if (String(form.print_content || "").includes("双色")) form._printing_situation = "双色印刷";
             else if (["三色印刷","多色印刷"].some(value=>String(form.print_content || "").includes(value.replace("印刷","")))) form._printing_situation = "三色印刷";
@@ -41809,7 +41822,7 @@
             }
           },
           async correctDeliveryActualDate(row) {
-            if (!this.canDelivery || !this.canAdjustReconciliationPeriod || this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
+            if (!this.canDelivery || !this.canAdjustReconciliationPeriod || !['pending','dispatched'].includes(row?.status) || this.deliveryOperationState.action || this.receiptOperationState?.action || this.deliveryInlineEdit) return false;
             const deliveryId = Number(row?.id || 0);
             if (!deliveryId) return false;
             const targetDate = prompt("填写真实实际送货日期（YYYY-MM-DD）。ERP录入时间不会改变；已进入对账或开票后系统会拒绝直接更正。", row.delivery_date || "");

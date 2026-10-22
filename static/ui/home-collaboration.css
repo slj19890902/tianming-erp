@@ -14,3 +14,15 @@
 .hc-icon{width:16px;height:16px;vertical-align:middle;display:inline-block}.hc-file-icon .hc-icon{width:23px;height:23px}.hc-add .hc-icon{width:19px;height:19px}
 
 .hc-memos,.hc-files{flex:1}
+
+/* Compact summaries; full lists and history open in the same-system dialog. */
+.home-dashboard-shell .hc-grid{grid-template-columns:minmax(0,1fr) minmax(0,1.06fr);margin:0}
+.home-dashboard-shell .hc-panel{min-height:0;padding:12px}
+.home-dashboard-shell .hc-memos,.home-dashboard-shell .hc-files{min-height:0}
+.home-dashboard-shell .hc-panel header{margin-bottom:8px}
+.home-dashboard-shell .hc-panel footer{flex-wrap:wrap;gap:4px}
+.home-dashboard-shell .hc-panel h2{font-size:16px}
+.home-dashboard-shell .hc-panel .hc-empty{padding:14px 0}
+@media(max-height:850px){.home-dashboard-shell .hc-panel{padding:9px 11px}.home-dashboard-shell .hc-panel header{margin-bottom:6px}.home-dashboard-shell .hc-memo{min-height:34px}.home-dashboard-shell .hc-file-row{min-height:45px}.home-dashboard-shell .hc-hint{margin:0}}
+@media(max-width:680px){.home-dashboard-shell .hc-grid{grid-template-columns:1fr}.home-dashboard-shell .hc-panel h2 small{margin-left:4px}}
+.home-dashboard-shell .hc-compact .hc-panel{padding:10px 12px}.home-dashboard-shell .hc-compact .hc-panel header{margin:0}.home-dashboard-shell .hc-compact .hc-panel h2 small{display:none}

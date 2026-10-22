@@ -7,11 +7,11 @@
     <link rel="icon" type="image/png" href="/static/assets/tianming-brand-symbol.png" />
     <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260926-cost-column" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
-    <link rel="stylesheet" href="/static/ui/home-workbench.css?v=f21488411581" />
-    <script src="/static/ui/home-workbench.js?v=6d2515c71712"></script>
-    <link rel="stylesheet" href="/static/ui/home-collaboration.css?v=67f9fe0b72b8" />
+    <link rel="stylesheet" href="/static/ui/home-workbench.css?v=2a585f7ebfed" />
+    <script src="/static/ui/home-workbench.js?v=4557c6b3e1db"></script>
+    <link rel="stylesheet" href="/static/ui/home-collaboration.css?v=a7c8d76c9fff" />
     <script src="/static/vendor/element-plus-icons-vue-2.3.2.min.js"></script>
-    <script src="/static/ui/home-collaboration.js?v=fc84bd7d1d48"></script>
+    <script src="/static/ui/home-collaboration.js?v=9b9da0e92092"></script>
     <link rel="stylesheet" href="/static/ui/product-workbench.css?v=085b188293c9" />
     <link rel="stylesheet" href="/static/ui/stock-origins.css?v=20261019origins02" />
     <script src="/static/ui/stock-origins.js?v=20261019origins02"></script>
@@ -3452,9 +3452,8 @@
             </section>
 
             <keep-alive :key="Number(user?.id || 0)">
-              <home-workbench v-if="activePage === 'dashboard'"></home-workbench>
-            </keep-alive>
-            <template v-if="activePage === 'dashboard'">
+              <home-workbench v-if="activePage === 'dashboard'">
+                <template #analytics>
               <section v-if="canViewDeliveryMargin && homeAnalyticsOpen" id="desktopDeliveryMarginSection" class="dashboard-delivery-margin-shell">
                 <div id="desktopDeliveryMarginRoot" class="panel">
                   <div class="dashboard-delivery-margin-head">
@@ -3483,8 +3482,10 @@
                   <div id="desktopDeliveryMarginGaps" class="dashboard-delivery-margin-gaps"></div>
                 </div>
               </section>
-            </template>
-            <template v-else-if="activePage === 'customers'">
+                </template>
+              </home-workbench>
+            </keep-alive>
+            <template v-if="activePage === 'customers'">
               <page-head title="客户管理" desc="维护客户编号、账期、信用额度、联系人和开票资料。"></page-head>
               <div class="toolbar">
                 <div class="toolbar-group"><button v-if="canCreateCustomers" class="btn primary" @click="openCustomer()">新增客户</button></div>

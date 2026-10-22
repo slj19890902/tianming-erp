@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.715"
-APP_VERSION_NAME = "ERP 3.0 系统基础信息修复"
+APP_VERSION = "v0.22.716"
+APP_VERSION_NAME = "常用箱结构与外购资料保存修复"
 APP_BUILD_DATE = "2026-10-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -7037,3 +7037,14 @@ APP_VERIFICATION_STEPS = [
     "返回首页并切换订单或常用箱查询，确认原有筛选、分页与返回体验保持正常。",
 ]
 APP_CHANGELOG = [*(f"v0.22.715：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "常用箱修改材质、报料或印刷时保留原有未确认结构，支持逐项核对或恢复未确认。",
+    "修复全面共用产品切换外购时供货资料同步不完整导致的保存失败，逐客户核验规格、供应商和采购比例。",
+    "保存失败按实际数据约束给出提示；保留权限、版本、事务与历史冻结事实，无数据库迁移或自动历史修数。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新常用箱编辑，核对未确认结构与已确认材质、报料、印刷资料；正常修改后预览应仅显示本次明确变更。",
+    "按真实业务编辑全面共用护角的外购资料，核对各方资料与版本；若范围或资料不符，应拒绝保存并保留原事实。",
+]
+APP_CHANGELOG = [*(f"v0.22.716：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

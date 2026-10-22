@@ -49,6 +49,29 @@ def new_order_issue(product) -> str | None:
     return None
 
 
+def new_order_issue_condition():
+    """SQL counterpart of the existing save guard, for candidate pagination.
+
+    This only removes rows that ``new_order_issue`` already refuses. Requisition
+    readiness is a different task: missing board fields must not automatically
+    hide an otherwise valid manually entered or stock-supplied order product.
+    """
+    from sqlalchemy import and_, func, or_
+    from app.models.product import Product
+
+    # Match Python str.strip() used by classification(), including tabs and
+    # full-width spaces in legacy names. NULL is an empty legacy name.
+    whitespace = " \t\n\r\v\f\x1c\x1d\x1e\x1f\x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+    style = func.trim(func.coalesce(Product.box_style, ""), whitespace)
+    mode = func.coalesce(Product.supply_mode, "")
+    explicit_external = and_(mode == "external_purchase",
+                             func.coalesce(Product.external_packaging_category_code, "") != "")
+    return or_(
+        and_(style.in_(EXPENSE_ALIASES), ~explicit_external),
+        and_(style.in_(tuple(EXTERNAL_ALIASES)), mode != "external_purchase"),
+    )
+
+
 def box_style_search_values(keyword: str) -> list[str]:
     """Expand current and legacy names without changing the stored product."""
     token = "".join(keyword.upper().split())

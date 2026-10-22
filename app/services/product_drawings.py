@@ -46,6 +46,25 @@ def shared_product_drawings(product):
         .order_by(ProductDrawing.uploaded_at.desc(), ProductDrawing.id.desc())))
 
 
+def list_product_drawings(db, products):
+    """Resolve drawing lists for this page without probing absent memberships.
+
+    Shared products retain the original policy and member-state checks. This
+    request-local fast path only proves which rows have no sharing membership;
+    it does not introduce a cache or grant sharing based on a matching code.
+    """
+    from sqlalchemy import select
+    from app.models.shared_finished_stock import SharedFinishedMember
+
+    ids = [product.id for product in products]
+    member_ids = set()
+    for offset in range(0, len(ids), 800):
+        member_ids.update(db.scalars(select(SharedFinishedMember.product_id).where(
+            SharedFinishedMember.product_id.in_(ids[offset:offset + 800]))))
+    return {product.id: (shared_product_drawings(product) if product.id in member_ids
+                         else product.drawings) for product in products}
+
+
 class DrawingValidationError(ValueError):
     pass
 

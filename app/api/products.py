@@ -51,7 +51,7 @@ from app.models.mold_tool import MoldTool, MoldToolCustomer
 from app.models.printing_plate import PrintingPlate
 from app.models.product import Product
 from app.models.product_drawing import ProductDrawing
-from app.services.product_drawings import shared_product_drawings
+from app.services.product_drawings import shared_product_drawings, list_product_drawings
 from app.models.supplier import ExternalPackagingProduct, Supplier
 from app.models.user import User
 from app.services.flute_mapping import (
@@ -1513,7 +1513,8 @@ def _product_or_404(db: Session, product_id: int) -> Product:
     return product
 
 
-def _response(product: Product, user: User, *, bom_profiles: dict | None = None) -> dict:
+def _response(product: Product, user: User, *, bom_profiles: dict | None = None,
+              drawings_by_product: dict | None = None) -> dict:
     from app.services.order_parent_stock import parent_inventory_eligible
     from app.services.product_unit_labels import product_unit_info
     from app.services.legacy_product_classification import classification
@@ -1550,7 +1551,8 @@ def _response(product: Product, user: User, *, bom_profiles: dict | None = None)
         ),
         "drawings": [
             _drawing_response(drawing)
-            for drawing in shared_product_drawings(product)
+            for drawing in (shared_product_drawings(product) if drawings_by_product is None
+                            else drawings_by_product[product.id])
         ],
     }
     # v0.19.2-B: 注入材质快照，供订单自动带出用
@@ -2131,7 +2133,13 @@ def list_products(
     if not include_inactive:
         query = query.where(Product.is_active.is_(True))
     if selection_context == "order":
-        query = query.where(order_selectable_product_condition())
+        from app.services.legacy_product_classification import new_order_issue_condition
+        query = query.where(
+            order_selectable_product_condition(),
+            Product.is_active.is_(True),
+            Product.customer.has(and_(Customer.is_active.is_(True), Customer.status == "active")),
+            ~new_order_issue_condition(),
+        )
     from app.services.customer_document_fields import review_entries
     from app.services.legacy_product_classification import box_style_search_values, external_category_search_values
     for token in keyword.split():
@@ -2207,6 +2215,9 @@ def list_products(
             [
                 selectinload(Product.drawings),
                 selectinload(Product.mold_tool),
+                selectinload(Product.printing_plate_1),
+                selectinload(Product.printing_plate_2),
+                selectinload(Product.printing_plate_3),
             ]
         )
     from app.models.multilevel_bom import ProductBomProfile
@@ -2219,6 +2230,7 @@ def list_products(
     ).all()
     items = [product for product, _profile in rows]
     bom_profiles = {product.id: profile for product, profile in rows}
+    drawings_by_product = list_product_drawings(db, items) if not is_summary else None
     inventory = {}
     inventory_errors = {}
     if include_inventory and has_permission(user, "warehouse.view"):
@@ -2242,7 +2254,8 @@ def list_products(
         "total_pages": (total + page_size - 1) // page_size if total else 0,
         "items": [
             {**(_summary_response(item, user, bom_profiles=bom_profiles)
-                if is_summary else _response(item, user, bom_profiles=bom_profiles)),
+                if is_summary else _response(item, user, bom_profiles=bom_profiles,
+                                              drawings_by_product=drawings_by_product)),
              **({"available_finished_quantity": inventory[item.id]} if item.id in inventory else {}),
              **({"inventory_error": inventory_errors[item.id]} if item.id in inventory_errors else {})}
             for item in items

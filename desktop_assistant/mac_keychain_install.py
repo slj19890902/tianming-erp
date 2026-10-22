@@ -36,7 +36,9 @@ FILES = ('app/__init__.py', 'app/core/__init__.py', 'app/core/mac_keychain.py',
          'desktop_assistant/mac_factory_activation_install.py', 'desktop_assistant/home_process.py',
          'desktop_assistant/mac_smb_stream_contract.py',
          'desktop_assistant/mac_smb_stream_runtime_contract.py',
-         'desktop_assistant/mac_smb_stream_setup.py')
+         'desktop_assistant/mac_smb_stream_setup.py',
+         'desktop_assistant/uat_export_contract.py', 'desktop_assistant/uat_export_sanitize.py',
+         'desktop_assistant/mac_uat_export.py')
 
 
 def canonical(value):
@@ -602,7 +604,8 @@ def _finish_initialization(raw, approved_sha, value, report):
 def main():
     parser = argparse.ArgumentParser(description='专用服务身份、程序和系统监护安装；工厂接管另行授权')
     parser.add_argument('action', choices=('plan', 'install', 'resume-empty', '_worker', 'publish', '_publish_worker',
-                                         'service-plan', 'service-apply', 'archive-plan', 'archive-apply', 'manage', 'factory-request', 'factory-activate'))
+                                         'service-plan', 'service-apply', 'archive-plan', 'archive-apply', 'manage', 'factory-request', 'factory-activate',
+                                         'uat-export-plan', 'uat-export-apply'))
     parser.add_argument('--identity-plan', type=Path)
     parser.add_argument('--observer-uid', type=int)
     parser.add_argument('--file', type=Path)
@@ -621,9 +624,20 @@ def main():
     parser.add_argument('--authorization-sha256')
     parser.add_argument('--factory-cutover-authorized', action='store_true')
     parser.add_argument('--source-isolated-confirmed', action='store_true')
+    parser.add_argument('--export-attempt')
     args = parser.parse_args()
     try:
-        if args.action == 'factory-activate':
+        if args.action in {'uat-export-plan','uat-export-apply'}:
+            # No ignored generic path, UID or network inputs on this action.
+            allowed = {'action','package_sha256'} if args.action == 'uat-export-plan' else {
+                'action','export_attempt','approved_sha256'}
+            if any(value is not None and value is not False for name,value in vars(args).items() if name not in allowed):
+                raise ValueError('固定导出入口不接受其他参数')
+            verify_code(); modules()
+            from desktop_assistant import mac_uat_export as export
+            result = (export.make_plan(args.package_sha256) if args.action == 'uat-export-plan'
+                      else export.apply(args.export_attempt,args.approved_sha256))
+        elif args.action == 'factory-activate':
             verify_code(); modules()
             from desktop_assistant import mac_factory_activation_install as activation
             result = activation.activate(args.package_sha256,args.request_id,args.input_attempt,

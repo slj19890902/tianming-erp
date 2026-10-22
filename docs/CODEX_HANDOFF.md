@@ -1,3 +1,5 @@
+2026-10-22 ERP3-NEXT：v0.22.714 首页按需读取、导航/列表统一、有效下单候选及三项操作修复已技术发布并完成原生收尾（源码 c6af8688 / 包 83407ead），完整承接手机 v713 与 PDF v712；revision ez1022hc 不变，healthy=true、manual_stop=false、backup_work_retained=false。正式备份及隔离恢复通过，人工验收待反馈，无历史数据清理；详见 `docs/release_reports/ERP3_NEXT_20261022.md`。继续任务须实时核验安装身份，不重跑旧 v713/v714 事务。
+
 2026-10-22 SHEET-OPERATION-RECOVERY：v0.22.711片料抵扣后锁页与原请求核对已技术发布（7236cf0a / 5479c6e1），承接v710；revision ez1022hc不变，停服377.317918秒。真实Mac恢复、正式只读及原生收尾完成，6份原备份与新恢复点保留，人工验收待反馈。见 `docs/release_reports/SHEET_OPERATION_RECOVERY_V711_20261022.md`；继续任务须实时核对正式状态。
 
 2026-10-22 HOME-DIALOGS：v0.22.709 首页六类功能弹窗与免滚动布局已技术发布（662267fd / 05046587），承接v708，revision ez1022hc不变；真实停服427.018秒。真实Mac失败恢复、正式只读及原生收尾完成，四份原备份保留，人工验收待反馈。见 `docs/release_reports/HOME_DIALOGS_V709_20261022.md`；继续任务须实时核对正式状态。

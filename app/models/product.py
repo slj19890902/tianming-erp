@@ -19,6 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -36,11 +37,14 @@ if TYPE_CHECKING:
 class Product(Base):
     __tablename__ = "products"
     __table_args__ = (
-        UniqueConstraint(
+        Index(
+            "uq_products_customer_material_code_name",
             "customer_id",
             "customer_material_code",
             "product_name",
-            name="uq_products_customer_material_code_name",
+            unique=True,
+            sqlite_where=text("customer_material_code <> ''"),
+            postgresql_where=text("customer_material_code <> ''"),
         ),
         UniqueConstraint(
             "customer_id",

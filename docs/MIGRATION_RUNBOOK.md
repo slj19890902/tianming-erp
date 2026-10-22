@@ -939,3 +939,7 @@ es1019ra→et1019fl只新增独立finished_product_label_print_jobs空表及冻�
 ex1021cp→ey1021se仅追加products的supplier_edge_type/base_supplier_edge_type及两类正式报料行各一列supplier_edge_type，全部可空，不回填历史；两类报料毛净快照不可更新。毛净与压线分别保存，实际材质留在收料事实，供应商尺寸/毛净按版本、权限及共用主档协议同步。VCNUV未收料行继续原报料材质。新的auto片料预占冻结full_sheet_output_v1，单组件整张生产保留订单外合格成品及原批次成本，旧预占语义保持。
 
 有新列非NULL或新整张产出合同即在任何DDL前拒绝有损降级。首次启动失败仅当新列均NULL、无新合同、原事实/schema/原件与签名演练证明一致时允许原签名downgrade恢复ex1021cp，不恢复旧数据库。正式前需原Manager完整备份、最新副本迁移及真实Mac正常/失败恢复；不新增NAS备份、不重装未变监督程序。具体运行与人工验收状态见SUPPLIER_SHEET_HOME_20261021任务回执。
+
+## 2026-10-23 可选客户料号 fa1023oc（仅隔离验证）
+
+仅用scripts/uat/run_task.py包装scripts/validation/rehearse_optional_customer_code.py --output <新回执路径>。脚本强制有效UAT身份，在runner拥有副本上演练ez1022hc→fa1023oc→ez1022hc→fa1023oc，比较全部原业务字段、其他products原定义、所有FK与原显式对象。只接受专用FK-off迁移连接，未知结构拒绝，普通应用连接不得关闭保护。新允许的空码同名事实存在时禁止降级；正式需新时点备份和精确签名包的真实恢复验证，保留现库向前修复，不恢复旧库覆盖新事实。当前未正式迁移/停服。

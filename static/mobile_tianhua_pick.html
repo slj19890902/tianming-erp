@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes,viewport-fit=cover">
     <title>天华预送货拿货</title>
     <style>
       :root {
@@ -45,8 +45,8 @@
       .empty { padding: 36px 12px; color: var(--muted); text-align: center; }
       .toast { position: fixed; left: 50%; bottom: 20px; z-index: 10; transform: translateX(-50%); padding: 12px 18px; color: white; background: #17211be8; border-radius: 10px; }
     </style>
-  </head>
-  <body>
+  <link rel="stylesheet" href="/static/ui/mobile-shell.css?v=20261022-3"><script defer src="/static/ui/mobile-shell.js?v=20261022-3"></script></head>
+  <body data-mobile-page="more" data-mobile-title="天华预送货拿货">
     <div id="loading" class="message">正在加载拿货明细...</div>
     <div id="error" class="message" hidden><div id="errorText"></div><button id="retry" class="retry" type="button">重新加载</button></div>
     <div id="app" hidden>
@@ -61,6 +61,7 @@
       let loadGeneration = 0;
       let loadController = null;
       const busyItems = new Set();
+      window.addEventListener("tm-mobile-shell-navigate",event=>{if(busyItems.size)event.preventDefault()});
       const statusOf = (item) => item.mobile_pick_status || "pending";
       const filters = [
         ["open","未完成",item => statusOf(item) !== "picked"],

@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes,viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
   <meta name="robots" content="noindex,nofollow">
   <title>模具实时信息 - 天明ERP</title>
@@ -10,8 +10,8 @@
     :root{--blue:#1d4ed8;--green:#15803d;--orange:#9a4d00;--red:#b91c1c;--line:#dbe3ef;--bg:#f3f6fb;--text:#172033;--muted:#64748b}
     *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 Arial,"Microsoft YaHei",sans-serif}header{position:sticky;top:0;z-index:3;background:#fff;border-bottom:1px solid var(--line);padding:12px 14px}.head{max-width:780px;margin:auto;display:flex;align-items:center;justify-content:space-between;gap:10px}h1{font-size:20px;margin:0}.refresh,.scan-button{border:0;border-radius:9px;background:var(--blue);color:#fff;padding:9px 14px;font-weight:800}.refresh:disabled,.scan-button:disabled{opacity:.5}main{max-width:780px;margin:auto;padding:12px}.message,.card{background:#fff;border:1px solid var(--line);border-radius:12px;margin-bottom:12px}.message{padding:14px}.error{background:#fee2e2;color:#991b1b}.success{border:2px solid var(--green);background:#f0fdf4;color:#14532d}.repair-alert{margin-top:10px;border:3px solid var(--red);border-radius:10px;background:#fee2e2;color:#7f1d1d;padding:12px;font-size:20px;font-weight:900;text-align:center}.muted{color:var(--muted);font-size:13px}.card-head{padding:13px 14px;border-bottom:1px solid var(--line)}.identity{font-size:24px;font-weight:900;overflow-wrap:anywhere}.location{margin-top:6px;font-size:18px;font-weight:800;color:var(--orange)}.body{padding:12px 14px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px}.field{min-width:0}.key{display:block;color:var(--muted);font-size:12px}.value{font-weight:800;overflow-wrap:anywhere}.binding,.task,.history-item{border-top:1px dashed var(--line);padding:10px 0}.binding:first-child,.task:first-child,.history-item:first-child{border-top:0}.row{display:flex;align-items:center;justify-content:space-between;gap:8px}.title{font-size:18px;font-weight:900}.task-overview{margin-top:8px;padding:10px;border-radius:10px;background:#f8fafc}.task-overview .field:last-child{grid-column:1/-1}.tag{flex:0 0 auto;border-radius:99px;padding:2px 8px;background:#e8efff;color:var(--blue);font-size:12px;font-weight:800}.tag.green{background:#dcfce7;color:var(--green)}.tag.orange{background:#fff7dc;color:var(--orange)}.material{margin-top:8px;border-radius:9px;background:#f8fafc;padding:9px}.location-item{margin-top:6px;padding:7px;border-left:3px solid var(--blue);background:#fff}.warning{border-left:4px solid #f59e0b;background:#fffbeb;padding:9px;margin-top:8px}.empty{text-align:center;color:var(--muted);padding:14px}.task-actions{margin-top:10px;display:flex;justify-content:flex-end}.task-detail{margin-top:9px;border:1px solid var(--line);border-radius:9px;background:#fbfdff}.task-detail summary{cursor:pointer;padding:9px 11px;font-weight:800}.task-detail .grid{padding:0 11px 11px}.search{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font:inherit}.hidden{display:none!important}@media(max-width:520px){.grid{grid-template-columns:1fr}.task-overview .field:last-child{grid-column:auto}.identity{font-size:21px}.row{align-items:flex-start}.task-actions{justify-content:stretch}.scan-button{width:100%}}
   </style>
-<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script></head>
-<body>
+<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script><link rel="stylesheet" href="/static/ui/mobile-shell.css?v=20261022-3"><script defer src="/static/ui/mobile-shell.js?v=20261022-3"></script></head>
+<body data-mobile-page="more" data-mobile-return-control="returnLink" data-mobile-title="模具实时资料">
   <header><div class="head"><h1>模具实时信息</h1><a id="returnLink" href="/mobile_mold_lookup.html">返回</a><button id="refresh" class="refresh" type="button">刷新</button></div></header>
   <main><div id="message" class="message">正在从 ERP 读取最新信息…</div><div id="content"></div></main>
   <script>
@@ -23,6 +23,7 @@
     const requestedTaskText=new URLSearchParams(location.search).get("production_task_id")||"";
     const requestedTaskId=/^\d+$/.test(requestedTaskText)&&Number(requestedTaskText)>0?Number(requestedTaskText):null;
     const scanSessionKey=`mold-scan-${globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+    let loadGeneration=0,loadController=null;
     let latestData=null;
     let scanEvent=null;
     let scanPending=false;
@@ -48,10 +49,12 @@
       let response;
       try{
         response=await fetch(url,{...options,credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json",...(options.headers||{})}});
-      }catch{throw new Error("连接 ERP 失败，请检查网络后重试")}
+      }catch(error){if(error.name==="AbortError")throw error;throw new Error("连接 ERP 失败，请检查网络后重试")}
+      if(options.signal?.aborted)throw Object.assign(new Error("读取已取消"),{name:"AbortError"});
       let body={};try{body=await response.json()}catch{}
-      if(response.status===401){loginNext();throw new Error("登录已失效")}
-      if(!response.ok)throw new Error(typeof body.detail==="string"?body.detail:`操作失败（HTTP ${response.status}）`);
+      if(options.signal?.aborted)throw Object.assign(new Error("读取已取消"),{name:"AbortError"});
+      if(response.status===401){latestData=null;$("content").replaceChildren();loginNext();throw Object.assign(new Error("登录已失效"),{status:401})}
+      if(!response.ok)throw Object.assign(new Error(typeof body.detail==="string"?body.detail:`操作失败（HTTP ${response.status}）`),{status:response.status});
       return body;
     }
     function field(key,value){const shown=value===null||value===undefined||value===""?"待完善":value;return `<div class="field"><span class="key">${h(key)}</span><span class="value">${h(shown)}</span></div>`}
@@ -118,7 +121,7 @@
     }
     async function recordScan(productionTaskId){
       if(scanEvent||scanPending)return;
-      scanPending=true;if(latestData)render(latestData);
+      loadGeneration++;loadController?.abort();scanPending=true;$("refresh").disabled=true;if(latestData)render(latestData);
       let failure=null,refreshFailure=null;
       try{
         const result=await api(`/api/warehouse/molds/live/${moldId}/scan-events`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({production_task_id:productionTaskId,expected_mold_location_version:latestData.mold.location_version,idempotency_key:scanSessionKey})});
@@ -127,23 +130,27 @@
         if(latestData)latestData=focusTaskData(latestData,scanEvent);
         const pageUrl=new URL(location.href);pageUrl.searchParams.set("production_task_id",String(selectedTaskId));history.replaceState(null,"",pageUrl);
         try{latestData=await api(liveDataUrl())}catch{refreshFailure="扫码记录已经写入；定向信息刷新失败，当前页已只保留本次任务，请稍后刷新。"}
-      }catch(error){failure=error.message}
-      finally{scanPending=false;if(latestData)render(latestData);if(failure){$("message").className="message error";$("message").textContent=failure}else if(refreshFailure){$("message").className="message warning";$("message").textContent=refreshFailure}}
+      }catch(error){failure=error.message;if([401,403].includes(error.status)){latestData=null;$("content").replaceChildren()}}
+      finally{scanPending=false;$("refresh").disabled=false;if(latestData)render(latestData);if(failure){$("message").className="message error";$("message").textContent=failure}else if(refreshFailure){$("message").className="message warning";$("message").textContent=refreshFailure}}
     }
     async function load(){
+      if(scanPending)return;
       if(!moldId){$("message").className="message error";$("message").textContent="二维码中的模具身份无效";return}
-      $("refresh").disabled=true;
+      const generation=++loadGeneration;loadController?.abort();const controller=new AbortController();loadController=controller;
+      $("refresh").disabled=true;$("message").className="message";$("message").textContent="正在核对最新模具资料…";
       try{
-        const auth=await api("/api/auth/me");
-        if(!(auth.permissions||[]).includes("warehouse.view"))throw new Error("当前账号无模具查看权限");
-        const data=await api(liveDataUrl());
+        const auth=await api("/api/auth/me",{signal:controller.signal});if(generation!==loadGeneration)return;
+        if(!(auth.permissions||[]).includes("warehouse.view"))throw Object.assign(new Error("当前账号无模具查看权限"),{status:403});
+        const data=await api(liveDataUrl(),{signal:controller.signal});if(generation!==loadGeneration)return;
         if(data.task_context)selectedTaskId=Number(data.task_context.production_task_id);
-        render(data);
+        $("content").classList.remove("tm-stale-data");render(data);
         const orders=data.current_orders?.items||[];
         if(data.scan_recording_allowed&&orders.length===1&&!scanEvent)await recordScan(orders[0].production_task_id);
-      }catch(error){if(error.message!=="登录已失效"){$("message").className="message error";$("message").textContent=error.message}}
-      finally{$("refresh").disabled=false}
+      }catch(error){if(error.name==="AbortError"||generation!==loadGeneration)return;if([401,403].includes(error.status)){latestData=null;$("content").replaceChildren()}else if(latestData)$("content").classList.add("tm-stale-data");if(error.status!==401){$("message").className="message error";$("message").textContent=error.message+(latestData?"；下方是上次读取的资料，尚未刷新，请点刷新重试。":"；请点刷新重试。")}}
+      finally{if(generation===loadGeneration){loadController=null;$("refresh").disabled=false}}
     }
+    window.addEventListener("pagehide",()=>{loadGeneration++;loadController?.abort()});
+    window.addEventListener("tm-mobile-shell-navigate",event=>{if(scanPending)event.preventDefault()});
     $("refresh").onclick=load;
     window.addEventListener("pageshow",event=>{if(event.persisted)load()});
     document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")load()});

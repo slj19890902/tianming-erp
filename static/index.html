@@ -17,7 +17,7 @@
     <script src="/static/ui/stock-origins.js?v=20261019origins02"></script>
     <script src="/static/ui/product-workbench.js?v=3e4d54873f6f"></script>
     <script src="/static/ui/order-context.js?v=round-experience-d1b"></script>
-    <script src="/static/ui/workspace.js?v=71e4c13edadc"></script>
+    <script src="/static/ui/workspace.js?v=3567a9f2a551"></script>
     <script src="/static/ui/delivery-editor-layout.js?v=3ce1f96d2bfa"></script>
     <script src="/static/ui/workflow-continuity.js?v=7ef70dee3ee7"></script>
     <link rel="stylesheet" href="/static/ui/workflow-continuity.css?v=431e9b0f41d3" />
@@ -3243,6 +3243,20 @@
       .order-entry-header .input,.order-entry-header .select {min-height:34px;height:36px;padding:6px 10px;}
       .order-common-box-modal .common-picker-sticky-select,.order-common-box-modal .common-picker-sticky-quantity {left:auto!important;}
       .product-material-details>summary {grid-column:1/-1;font-weight:600;cursor:pointer;padding:6px 0;}
+      /* ERP 3.0: size the embedded document to its actual workspace, not the monitor. */
+      html.frontend-shell-layout body { min-width:0; width:100%; max-width:100vw; }
+      .product-list-status { padding:8px 11px; color:var(--muted); font-size:13px; }
+      .product-list-table .product-list-actions { position:sticky; right:0; width:130px; min-width:130px; background:var(--panel); vertical-align:middle; }
+      .product-list-table th:last-child { position:sticky; right:0; z-index:2; min-width:130px; }
+      .product-row-actions { display:flex; align-items:center; gap:6px; flex-wrap:nowrap; }
+      .product-row-more { position:relative; }
+      .product-row-more > summary { list-style:none; display:inline-flex; align-items:center; }
+      .product-row-more > summary::-webkit-details-marker { display:none; }
+      .product-row-more[open] { z-index:4; }
+      .product-list-actions:has(.product-row-more[open]) { z-index:5; }
+      .product-row-menu { position:fixed; z-index:40; max-height:calc(100vh - 24px); overflow-y:auto; display:flex; flex-direction:column; align-items:stretch; gap:6px; min-width:152px; padding:8px; background:var(--panel); border:1px solid var(--line-strong); border-radius:8px; box-shadow:var(--shadow-modal); }
+      .product-row-menu .btn { text-align:left; justify-content:flex-start; }
+      .product-list-table td { vertical-align:middle; }
 </style>
     <link rel="stylesheet" href="/static/warehouse-workspace-shell.css?v=20260928">
     <link rel="stylesheet" href="/static/product-editor-compact.css?v=20261008-cutting-v2" />
@@ -3250,9 +3264,9 @@
     <link rel="stylesheet" href="/static/ui/order-reference.css?v=423" />
     <script src="/static/ui/incoming-actual.js?v=e251f82faeb0"></script>
 <script src="/static/ui/order-reference.js?v=423"></script>
-    <script src="/static/js/unified-navigation.js?v=20261008-inventory-flow"></script>
+    <script src="/static/js/unified-navigation.js?v=9ac4627ab6c7"></script>
     <script src="/static/js/frontend-reliability.js?v=20261009"></script>
-    <script src="/static/js/frontend-shell-bridge.js?v=20261009-reliability"></script>
+    <script src="/static/js/frontend-shell-bridge.js?v=bd6de3a55961"></script>
     <link rel="stylesheet" href="/static/ui/delivery-editor-layout.css?v=dbfe53eae3e9" />
   </head>
   <body>
@@ -3671,10 +3685,10 @@
                     <pager :page="pages.products" :total="productsTotal" :page-size="productListPageSize()" :always="true" :compact="true" @change="pages.products=$event; runExplicitPageListLoad('products')"></pager>
                   </div>
   
-                  <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
-                  <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="runExplicitPageListLoad('products')">重试</button></div>
-                  <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table data-viewport-page="products"><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>单位</th><th>分类</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td>{{ productUnitLabel(row) }}<span v-if="row.unit_needs_review" class="status orange">单位待完善</span></td><td :title="row.classification?.legacy_name" style="white-space:nowrap">{{ row.classification?.label || "待核对" }}</td><td style="min-width:160px;max-width:320px;white-space:pre-wrap;overflow-wrap:anywhere">{{ row.customer_specification == null ? spec(row) : row.customer_specification }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '报料资料完整' : '报料资料待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="(canRequisition || canEditStockAlerts) && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
+                  <div v-if="productsLoading" class="product-list-status" role="status">{{ products.length ? '正在更新，以下保留上次结果…' : '正在读取该客户的常用箱…' }}</div>
+                  <div v-if="productsError" class="notice error" role="alert">{{ products.length ? '更新失败，以下保留上次结果：' : '读取失败：' }}{{ productsError }} <button class="btn small" @click="runExplicitPageListLoad('products')">重试</button></div>
+                  <div v-if="!productsLoading && !productsError && !products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
+                  <div v-if="products.length" class="table-wrap product-list-wrap" :aria-busy="productsLoading"><table class="product-list-table" data-viewport-page="products"><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>单位</th><th>分类</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td>{{ productUnitLabel(row) }}<span v-if="row.unit_needs_review" class="status orange">单位待完善</span></td><td :title="row.classification?.legacy_name" style="white-space:nowrap">{{ row.classification?.label || "待核对" }}</td><td style="min-width:160px;max-width:320px;white-space:pre-wrap;overflow-wrap:anywhere">{{ row.customer_specification == null ? spec(row) : row.customer_specification }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '报料资料完整' : '报料资料待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="product-list-actions"><div class="product-row-actions"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><details class="product-row-more" @toggle="positionProductRowActions($event)" @keydown.esc.stop="closeProductRowActions($event)" @focusout="leaveProductRowActions($event)"><summary class="btn small" :aria-label="plainProductText(row.product_code) + ' 更多操作'">更多</summary><div class="product-row-menu" @click="closeProductRowActions($event)"><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="(canRequisition || canEditStockAlerts) && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></div></details></div></td></tr></tbody></table></div>
                 </template>
               </div>
               <data-panel v-else-if="productTab === 'suppliers'" :empty="false">
@@ -10466,13 +10480,46 @@
 
       axios.defaults.withCredentials = true;
       const erpRequestIdentity = () => window.erpRequestIdentity?.() || {actor:null, generation:null};
+      const pendingMutationRequests = new Set();
+      const pendingPageReadRequests = new Map();
+      window.erpMutationPending = () => pendingMutationRequests.size > 0;
+      window.erpCancelPageReads = () => { for (const read of pendingPageReadRequests.values()) read.controller.abort(); };
+      const finishErpRequest = config => {
+        pendingMutationRequests.delete(config?._erpMutationToken);
+        const read = pendingPageReadRequests.get(config?._erpPageReadToken);
+        if (read) { read.originalSignal?.removeEventListener('abort', read.cancel); pendingPageReadRequests.delete(config._erpPageReadToken); }
+      };
       axios.interceptors.request.use(config => {
         config._erpRequestIdentity = {...erpRequestIdentity()};
+        const method = String(config.method || 'get').toLowerCase();
+        if (!['get','head','options'].includes(method)) {
+          config._erpMutationToken = {};
+          pendingMutationRequests.add(config._erpMutationToken);
+        } else if (window.erpPageReadIdentity?.().reading) {
+          config._erpPageReadIdentity = {...window.erpPageReadIdentity()};
+          const controller = new AbortController(), originalSignal = config.signal;
+          const cancel = () => controller.abort();
+          if (originalSignal?.aborted) controller.abort();
+          else originalSignal?.addEventListener('abort', cancel, {once:true});
+          config._erpPageReadToken = {};
+          pendingPageReadRequests.set(config._erpPageReadToken, {controller,originalSignal,cancel});
+          config.signal = controller.signal;
+        }
         return config;
       }, undefined, {synchronous:true});
       axios.interceptors.response.use(
-        (response) => response,
+        (response) => {
+          finishErpRequest(response.config);
+          const sent = response.config?._erpPageReadIdentity, now = window.erpPageReadIdentity?.();
+          const actor = response.config?._erpRequestIdentity, currentActor = erpRequestIdentity();
+          if (sent && (!now || sent.page !== now.page || sent.sequence !== now.sequence
+            || actor?.actor !== currentActor.actor || actor?.generation !== currentActor.generation)) {
+            throw new axios.CanceledError('页面已切换，忽略旧读取结果');
+          }
+          return response;
+        },
         (error) => {
+          finishErpRequest(error?.config);
           const status = error?.response?.status;
           const sent = error?.config?._erpRequestIdentity;
           const now = erpRequestIdentity();
@@ -10822,7 +10869,7 @@
         data() {
           return {
             pendingAssemblies: [], assemblyLocations: [], assemblyLoading: false, assemblyError: '', assemblyPage: 1, assemblyTotal: 0,
-            user: null, loading: false, loginError: "", sessionRestoring:true, sessionUnavailable:false, activePage: "dashboard", uiModeSaving: false, authGeneration: 0, loginAttemptSequence: 0, pageLoadSequence: 0,
+            user: null, loading: false, pageLoading: false, loginError: "", sessionRestoring:true, sessionUnavailable:false, activePage: "dashboard", uiModeSaving: false, authGeneration: 0, loginAttemptSequence: 0, pageLoadSequence: 0,
             uiLayoutEffective:null, uiLayoutAdminBusy:"", uiLayoutAdminPreview:false, uiLayoutAdminDirty:false, uiLayoutAdminLoadGeneration:0,
             uiLayoutAdmin:{role_code:"admin",display_mode:"standard",catalog:null,draft:{version:0,base_release_version:0,layout:{catalog_version:"",menus:[],dashboard_cards:[],quick_actions:[]}},published:{version:0,layout:{catalog_version:"",menus:[],dashboard_cards:[],quick_actions:[]}},history:[],can_rollback:false},
             orderNextStepGuide: {visible:false, orderNo:"", count:0, source:""},
@@ -11156,7 +11203,7 @@
             masterVersionConflict: null,
             masterVersionHistory: blankMasterVersionHistory(),
             selectedProductCustomer: null, productCustomerSearch: "",
-            productsLoading: false, productsError: "",
+            productsLoading: false, productsError: "", productsListIdentity: "",
             showProductMoreFilters: false,
             productTrashOpen: false, productTrashItems: [], productTrashLoading:false, productTrashError:"", productLifecycleAction:{action:"",productId:null}, customerLifecycleAction:{action:"",customerId:null}, materialLifecycleAction:{action:"",materialId:null},
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderNumber:"", orderCustomerPo:"", orderProductCode:"", orderProductName:"", orderSpecification:"", orderDateFrom:"", orderDateTo:"", orderDeliveryDateFrom:"", orderDeliveryDateTo:"", orderScope:"active", orderStage:"", orderStatus:"business", orderView:"customer_po", orderSortBy:"", orderSortDirection:"desc" },
@@ -12558,6 +12605,7 @@
         },
         async mounted() {
           window.erpRequestIdentity = () => ({actor:this.user?.id ?? null, generation:this.authGeneration});
+          window.erpPageReadIdentity = () => ({page:this.activePage, sequence:this.pageLoadSequence, reading:this.pageLoading});
           window.erpAuthRequired = () => {
             this.finishOriginalBusinessConfirmation(false);
             window.TmDesktopDeliveryMargin?.destroy?.();
@@ -16525,6 +16573,9 @@
               this.requisitionWorkspace = this.initialRequisitionWorkspaceFromLocation(this.activePage);
               this.incomingWorkspace = this.initialIncomingWorkspaceFromLocation(this.activePage);
               this.applyInitialMaterialPriceRoute();
+              // Authentication and navigation are ready; page data has its own loading state.
+              window.erpCheckingSession = false;
+              this.sessionRestoring = false;
               if (!await this.loadInitialPageResources()) return;
               await this.openEmailAttachmentFromLocation();
               if (this.user?.must_change_password) this.openChangePassword(true);
@@ -16582,6 +16633,7 @@
               this.requisitionWorkspace = this.initialRequisitionWorkspaceFromLocation(this.activePage);
               this.incomingWorkspace = this.initialIncomingWorkspaceFromLocation(this.activePage);
               this.applyInitialMaterialPriceRoute();
+              this.loading = false;
               const initialResourcesReady = await this.loadInitialPageResources();
               if (!requestIsCurrent() || !initialResourcesReady) return;
               await this.openEmailAttachmentFromLocation();
@@ -16634,6 +16686,8 @@
             this.expandedDeliveryRows = {};
             this.expandedOrders = {};
             this.loading = false;
+            this.pageLoading = false;
+            this.productsListIdentity = "";
             this.customerPhoneGovernanceExporting = false;
             this.pageCacheUpdatedAt = {};
             for (const controller of latestRequestControllers.values()) controller.abort();
@@ -17040,6 +17094,11 @@
               }
             }
             if (productAction && !productAction.arrive(page)) return;
+            if (!load) {
+              window.erpCancelPageReads?.();
+              this.pageLoadSequence += 1;
+              this.pageLoading = false;
+            }
             this.activePage = page;
             if (leavingWarehouse) this.leaveWarehouseWorkspaceUrl(page);
             if (load) await this.loadPage(page);
@@ -17270,21 +17329,23 @@
           async loadInitialPageResources() {
             const requestAuthGeneration = this.authGeneration;
             const requestUserId = this.user?.id ?? null;
+            const requestPage = this.activePage;
             const supplierPromise = this.loadSuppliers();
-            const pagePromise = this.loadPage(this.activePage, {
+            const pagePromise = this.loadPage(requestPage, {
               force:true,
               supplierPromise,
             });
-            await Promise.all([supplierPromise, pagePromise]);
-            if (requestAuthGeneration === this.authGeneration && requestUserId === (this.user?.id ?? null)) {
-              await window.TMManualReplenishment.openFromLocation(this);
-            }
-            return (
-              requestAuthGeneration === this.authGeneration
+            const requestSequence = this.pageLoadSequence;
+            const isCurrent = () => requestAuthGeneration === this.authGeneration
               && requestUserId === (this.user?.id ?? null)
-            );
+              && requestPage === this.activePage && requestSequence === this.pageLoadSequence;
+            await Promise.all([supplierPromise, pagePromise]);
+            if (!isCurrent()) return false;
+            await window.TMManualReplenishment.openFromLocation(this);
+            return isCurrent();
           },
           async loadPage(page, { force=false, supplierPromise=null } = {}) {
+            window.erpCancelPageReads?.();
             const requestSequence = ++this.pageLoadSequence;
             const requestAuthGeneration = this.authGeneration;
             const requestUserId = this.user?.id ?? null;
@@ -17300,16 +17361,17 @@
               requestSequence === this.pageLoadSequence
               && requestAuthGeneration === this.authGeneration
               && requestUserId === (this.user?.id ?? null)
+              && this.activePage === page
             );
             const searchGenerationIsCurrent = () => (
               requestSearchGeneration === (this.currentPageSearchGeneration?.(page) ?? 0)
             );
             if (!force && this.pageCacheFresh(resourceCacheKey)) {
-              if (requestIsCurrent()) this.loading = false;
+              if (requestIsCurrent()) this.pageLoading = false;
               return true;
             }
             if (requestIsCurrent()) this.invalidatePageCache(resourceCacheKey);
-            this.loading = true;
+            this.pageLoading = true;
             let pageSucceeded = true;
             const requirePageLoad = async promise => {
               if (await promise === false) pageSucceeded = false;
@@ -17319,6 +17381,7 @@
               if (page === "customers") await requirePageLoad(this.loadCustomers());
               if (page === "quotations") {
                 await requirePageLoad(this.loadCustomerOptions(force));
+                if (!requestIsCurrent()) return false;
                 if (this.quotationCustomer) await requirePageLoad(this.loadQuotationHistory());
               }
               if (page === "contracts" && this.contractCustomer) await Promise.all([
@@ -17327,6 +17390,7 @@
               ]);
               if (page === "products") {
                 await requirePageLoad(this.loadCustomerOptions(force));
+                if (!requestIsCurrent()) return false;
                 if (this.productTab === "products" && this.selectedProductCustomer) await requirePageLoad(this.loadProducts());
                 if (this.productTab === "materials") await requirePageLoad(this.loadMaterials());
                 if (this.productTab === "suppliers" && this.canAdmin) {
@@ -17370,11 +17434,11 @@
               if (requestIsCurrent() && searchGenerationIsCurrent() && pageSucceeded) this.markPageCache(resourceCacheKey);
               return requestIsCurrent() && searchGenerationIsCurrent() && pageSucceeded;
             } catch (error) {
-              if (requestIsCurrent()) this.showToast(this.errorMessage(error), true);
+              if (requestIsCurrent() && !this.isCancelledRequest(error)) this.showToast(this.errorMessage(error), true);
               return false;
             }
             finally {
-              if (requestIsCurrent()) this.loading = false;
+              if (requestIsCurrent()) this.pageLoading = false;
             }
           },
           refreshCurrent() {
@@ -17670,6 +17734,12 @@
             if (this.activePage === "products" && this.productTab === "products" && !this.selectedProductCustomer) {
               this.products = []; this.productsTotal = 0; this.productsLoading = false; this.productsError = ""; return true;
             }
+            const customerId = this.selectedProductCustomer?.id ?? this.filters.productCustomer ?? '';
+            const identity = `${this.user?.id ?? 'anonymous'}:${this.authGeneration}:${customerId}`;
+            if (this.productsListIdentity !== identity) {
+              this.products = []; this.productsTotal = 0; this.productsListIdentity = identity;
+            }
+            const requestPage = this.activePage, requestTab = this.productTab;
             const params = {
               keyword: this.filters.productKeyword,
               product_code: this.filters.productCode,
@@ -17685,23 +17755,25 @@
             else if (this.filters.productCustomer) params.customer_id = this.filters.productCustomer;
             const requestKey = "products:list";
             const controller = this.beginLatestRequest(requestKey);
+            const ownsLoading = () => latestRequestControllers.get(requestKey) === controller
+              && identity === `${this.user?.id ?? 'anonymous'}:${this.authGeneration}:${this.selectedProductCustomer?.id ?? this.filters.productCustomer ?? ''}`;
+            const isCurrent = () => ownsLoading() && !controller.signal.aborted
+              && this.activePage === requestPage && this.productTab === requestTab;
             this.productsLoading = true;
             this.productsError = "";
             try {
               const { data } = await axios.get("/api/master/products", { params, signal:controller.signal });
-              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              if (!isCurrent()) return false;
               this.products = data.items; this.productsTotal = data.total;
               return true;
             } catch (error) {
               if (this.isCancelledRequest(error)) return false;
-              if (latestRequestControllers.get(requestKey) === controller) {
-                this.products = [];
-                this.productsTotal = 0;
+              if (isCurrent()) {
                 this.productsError = this.errorMessage(error) || "常用箱读取失败，请重试";
               }
               return false;
             } finally {
-              if (latestRequestControllers.get(requestKey) === controller) this.productsLoading = false;
+              if (ownsLoading()) this.productsLoading = false;
               this.finishLatestRequest(requestKey, controller);
             }
           },
@@ -30565,8 +30637,28 @@
               this.showToast("产品图片/图纸记录已删除");
             } catch(error) { this.showToast(this.errorMessage(error), true); }
           },
+          positionProductRowActions(event) {
+            const details = event.currentTarget;
+            if (!details.open) return;
+            const summary = details.querySelector('summary').getBoundingClientRect();
+            const menu = details.querySelector('.product-row-menu');
+            const bounds = menu.getBoundingClientRect();
+            menu.style.left = `${Math.max(8, Math.min(summary.right - bounds.width, window.innerWidth - bounds.width - 8))}px`;
+            menu.style.top = `${Math.max(8, summary.bottom + bounds.height + 8 > window.innerHeight ? summary.top - bounds.height - 4 : summary.bottom + 4)}px`;
+          },
+          closeProductRowActions(event) {
+            const menu = event.currentTarget.closest('details');
+            if (!menu) return;
+            menu.open = false;
+            if (event.type === 'keydown') menu.querySelector('summary')?.focus();
+          },
+          leaveProductRowActions(event) {
+            if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
+          },
           async selectProductCustomer(row) {
+            this.cancelLatestRequest("products:list");
             this.selectedProductCustomer = row;
+            this.productsListIdentity = "";
             this.filters.productCustomer = row.id;
             this.filters.productKeyword = "";
             this.filters.productCode = "";
@@ -30598,7 +30690,9 @@
           },
           backToProductCustomers() {
             this.cancelQueuedPageSearch("products");
+            this.cancelLatestRequest("products:list");
             this.selectedProductCustomer = null;
+            this.productsListIdentity = "";
             this.pages.productCustomers = 1;
             this.filters.productCustomer = "";
             this.filters.productKeyword = "";
@@ -32035,6 +32129,7 @@
               th,td{border:1px solid #999;padding:4px 6px}
               th{background:#f0f0f0}
               @media print{body{margin:0}}
+
 
 
 

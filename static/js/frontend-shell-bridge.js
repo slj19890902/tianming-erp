@@ -38,7 +38,7 @@
         const active = (vm.menus || []).find(item => vm.isMenuActive(item.key))?.key || '';
         document.documentElement.classList.add('frontend-shell-connected');
         document.documentElement.classList.toggle('frontend-shell-unified', unified);
-        const draftState = window.ERPFrontendReliability?.state?.();
+        const draftState = (window.ERPUnifiedNavigation?.protectionState?.(vm) || window.ERPFrontendReliability?.state?.());
         const draftOpen = draftState ? !!(draftState.dirty || draftState.saving || draftState.uncertain) : !!(vm.modal?.type || vm.productionEntry);
         const shellUi = unified ? window.ERPUnifiedNavigation.describe(vm) : null;
         notify({type:'tianming-formal-navigation-v1',menus,active,page:vm.activePage,ready:true,draftOpen,shellUi});
@@ -88,10 +88,11 @@
         if (commandBusy) {reply('busy');return;}
         const attempt = {key,status:null}; commands.set(requestId,attempt);
         if (commands.size > 100) commands.delete(commands.keys().next().value);
-        commandBusy = true;
+        const exclusive = !window.ERPUnifiedNavigation.isReadCommand(key);
+        if (exclusive) commandBusy = true;
         try { attempt.status = await window.ERPUnifiedNavigation.execute(vm,key); }
         catch { attempt.status = 'failed'; }
-        finally { commandBusy = false; reply(attempt.status); publish(); }
+        finally { if (exclusive) commandBusy = false; reply(attempt.status); publish(); }
       };
       const receive = event => {
         if (event.source !== window.parent || event.origin !== location.origin) return;
@@ -128,19 +129,19 @@
       });
       const stop = vm.$watch(() => JSON.stringify({
         menus:(vm.menus || []).map(item => ({key:item.key,label:item.label})),
-        page:vm.activePage, user:!!vm.user, forced:!!vm.user?.must_change_password,modal:vm.modal?.type
+        page:vm.activePage, user:!!vm.user, forced:!!vm.user?.must_change_password,modal:vm.modal?.type,sessionRestoring:vm.sessionRestoring,pageLoading:vm.pageLoading,loading:vm.loading
       }), publish, {flush:'post'});
       let lastDraft = '';
       const publishDraft = () => {
         if (!connected || !ready()) return;
-        const state = window.ERPFrontendReliability?.state?.();
+        const state = (window.ERPUnifiedNavigation?.protectionState?.(vm) || window.ERPFrontendReliability?.state?.());
         if (!state) return;
         const message = {type:'tianming-formal-draft-state-v1',actorId:vm.user.id,generation:vm.authGeneration,...state};
         const snapshot = JSON.stringify(message);
         if (snapshot === lastDraft) return;
         lastDraft = snapshot; window.parent.postMessage(message,location.origin);
       };
-      const stopDraft = vm.$watch(() => JSON.stringify(window.ERPFrontendReliability?.state?.()),publishDraft,{flush:'post'});
+      const stopDraft = vm.$watch(() => JSON.stringify((window.ERPUnifiedNavigation?.protectionState?.(vm) || window.ERPFrontendReliability?.state?.())),publishDraft,{flush:'post'});
       const timer = window.setInterval(publish, 1000);
       const visible = () => {if (!document.hidden && activeSurface) {lastNavigation='';publish();vm.refreshEmailQueueCount?.();}};
       document.addEventListener?.('visibilitychange',visible);

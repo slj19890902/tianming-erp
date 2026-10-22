@@ -27,7 +27,7 @@
               || window.innerWidth < 1000 || document.querySelector('.workspace-dialog')) return;
           // Cached iframe pages remain mounted. Hidden frames cannot supply layout facts.
           if (window.frameElement && !window.frameElement.getClientRects().length) return;
-          if ((target === 'products' && this.productsLoading) || (target === 'incomingHistory' && this.incomingHistoryLoading)) return;
+          if ((target === 'products' && (this.productsLoading || this.productsError)) || (target === 'incomingHistory' && this.incomingHistoryLoading)) return;
           const table = document.querySelector(`[data-viewport-page="${target}"]`), main = table?.closest('.main');
           if (!main || !table.getBoundingClientRect().height || !table.getBoundingClientRect().width) return;
           const cards = target === 'productCustomers';
@@ -50,11 +50,12 @@
           }
           const headHeight = cards ? 0 : (table.tHead?.getBoundingClientRect().height || 36);
           const id = fitKey(this);
-          const layout = [top, bottom, tableRect.width, footer, headHeight].map(Math.round).join(':');
+          const layout = [top, bottom, window.innerWidth, window.innerHeight, footer, headHeight].map(Math.round).join(':');
           const prior = this._viewportPageMeasurements?.[id];
-          const measuredRow = Math.max(...rows.map(row => row.getBoundingClientRect().height));
-          // A short last page cannot enlarge the limit. New geometry/mode can.
-          const rowHeight = prior?.layout === layout ? Math.max(prior.rowHeight, measuredRow) : measuredRow;
+          // Query content, a short last page, or an open row menu is not a resize.
+          // Reusing the viewport capacity also prevents measure -> fetch -> measure loops.
+          if (prior?.layout === layout) return;
+          const rowHeight = Math.max(...rows.map(row => row.getBoundingClientRect().height));
           const next = capacity({height:bottom, top, rowHeight, footer, headHeight});
           const current = ['customers','productCustomers'].includes(target) ? this.desktopListPageSize()
             : target === 'products' ? this.productListPageSize() : this.incomingListPageSize();

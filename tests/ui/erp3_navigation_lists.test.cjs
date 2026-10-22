@@ -136,3 +136,10 @@ test('workspace layout rules are in the actual document head and stay out of the
  const printStart=html.indexOf('w.document.write(`<html><head><title>供应商报料单');
  assert.ok(printStart>0);assert.doesNotMatch(html.slice(printStart,html.indexOf('w.document.close();',printStart)),/product-row-actions|frontend-shell-layout/);
 });
+test('session reset synchronously removes old customer/product snapshots before new option reads',async()=>{
+ const f=list(),s=f.state,load=s.loadProducts();s.customers=[{id:7,name:'old actor customer'}];s.customersTotal=1;s.resetFinanceCostForm=()=>{};
+ Object.assign(s,methods(['resetPagePerformanceState'],{latestRequestControllers:f.controllers,searchDebounceTimers:new Map(),pageSearchGenerations:new Map(),pinyinSearchTextCache:new Map(),requisitionAutoReleaseFlight:null,
+  blankFinanceProcessingSettings:()=>({}),blankFinanceProcessingProfile:()=>({}),blankReceiptReminderEditor:()=>({}),month:()=> '2026-10',today:()=> '2026-10-22',plusDays:()=> '2026-10-23',clearTimeout}));
+ s.resetPagePerformanceState();assert.equal(s.customers.length,0);assert.equal(s.products.length,0);assert.equal(s.selectedProductCustomer,null);assert.equal(s.productsTotal,0);assert.equal(s.customersTotal,0);assert.equal(s.productsLoading,false);assert.equal(s.productsError,'');
+ f.pending[0].reject(Object.assign(new Error('cancelled'),{code:'ERR_CANCELED'}));await load;assert.equal(s.productsLoading,false);assert.equal(s.products.length,0);
+});

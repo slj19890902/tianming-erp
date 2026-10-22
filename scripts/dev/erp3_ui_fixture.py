@@ -31,7 +31,7 @@ PRODUCTS = [{
 } for i in range(24)]
 
 
-def fixture_html(mode: str) -> bytes:
+def fixture_html(mode: str, page: str) -> bytes:
     html = (ROOT / "static/index.html").read_text()
     startup = "        async mounted() {"
     mount = 'const formalWorkspaceInstance = app.mount("#app");'
@@ -39,13 +39,13 @@ def fixture_html(mode: str) -> bytes:
         raise RuntimeError("Root lifecycle fixture anchors changed; review before use")
     html = html.replace(startup, "        async fixtureDisabledMounted() {")
     fixture = {"user": {**USER, "ui_mode": mode, "permissions": PERMISSIONS, "unrestricted_customer_access": True},
-               "customer": CUSTOMER, "customers": [CUSTOMER, EMPTY_CUSTOMER], "products": PRODUCTS[:2], "mode": mode}
+               "customer": CUSTOMER, "customers": [CUSTOMER, EMPTY_CUSTOMER], "products": PRODUCTS[:2], "mode": mode, "page": page}
     injection = """
       const isolatedFixture = __DATA__;
       app.mixin({beforeMount() {
         if (this.$parent) return;
         this.user=isolatedFixture.user;
-        this.activePage='products'; this.productTab='products';
+        this.activePage=isolatedFixture.page; this.productTab='products';
         this.selectedProductCustomer=isolatedFixture.customer;
         this.customerOptions=isolatedFixture.customers; this.allCustomers=isolatedFixture.customers;
         this.products=isolatedFixture.products; this.productsTotal=24;
@@ -56,6 +56,7 @@ def fixture_html(mode: str) -> bytes:
         window.erpPageReadIdentity=()=>({page:this.activePage,sequence:this.pageLoadSequence,reading:this.pageLoading});
       }});
       const formalWorkspaceInstance = app.mount("#app");
+      if(isolatedFixture.page!=='products')formalWorkspaceInstance.loadPage();
       document.title='ERP 3.0 隔离布局验证（合成数据）';
     """.replace("__DATA__", json.dumps(fixture, ensure_ascii=False))
     return html.replace(mount, injection).encode()
@@ -91,7 +92,7 @@ class Handler(BaseHTTPRequestHandler):
         query = parse_qs(url.query)
         path = unquote(url.path)
         if path == "/frontend-v2/formal-workspace":
-            return self.send_body(fixture_html(self.server.fixture_mode), "text/html; charset=utf-8")
+            return self.send_body(fixture_html(self.server.fixture_mode, self.server.fixture_page), "text/html; charset=utf-8")
         if path == "/api/auth/me":
             return self.json({"user": {**USER, "ui_mode": self.server.fixture_mode}, "permissions": PERMISSIONS, "customer_scope": [], "unrestricted_customer_access": True})
         if path == "/api/master/products":
@@ -111,9 +112,33 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"items": [CUSTOMER, EMPTY_CUSTOMER], "total": 2, "page": 1, "page_size": 20})
         if path == "/api/products/box-type-rules":
             return self.json({"rules": [{"code": "A1/0201", "display_name": "普通开槽箱"}]})
-        if path == "/api/dashboard/overview":
-            return self.json({"as_of": "2026-10-22T16:00:00+08:00", "cards": [], "todos": [], "kpi": {},
-                              "low_stock_warnings": [], "workbench": {"tasks": [], "counts": {}, "warnings": []}})
+        if path in ("/api/dashboard/overview", "/api/dashboard/sections"):
+            group = query.get("group", [""])[0]
+            summary = path.endswith("overview")
+            if not summary and self.server.section_behavior == "slow":
+                time.sleep(3)
+            if not summary and self.server.section_behavior == "fail":
+                return self.json({"detail": "隔离模拟：工作清单读取失败"}, 503)
+            card = {"key": "pending_material", "title": "待报料", "count": None if summary else 1,
+                    "count_unit": "项", "target": "requisition", "button_label": "去报料", "target_filter": {}}
+            task = {"id": "pending_material:source:990001", "key": "pending_material", "type": "待报料",
+                    "target": "requisition", "customer_id": CUSTOMER["id"], "customer_ids": [CUSTOMER["id"]],
+                    "customer_name": CUSTOMER["name"], "customer_label": "隔离演示客户", "product_code": "DEMO-0001",
+                    "product_name": "合成纸箱资料", "order_id": 990001, "customer_po": "DEMO-PO-001",
+                    "order_number": "DEMO-ORDER-001", "due_date": "2026-10-22", "urgency": "today",
+                    "urgency_label": "今日交期", "message": "合成演示：订单100只 · 待安排报料",
+                    "action_text": "去报料", "target_filter": {}, "attention_state": "active", "source_hash": "fixture-only"}
+            workbench = {"today": "2026-10-22", "customers": [{"id": CUSTOMER["id"], "name": CUSTOMER["name"], "label": "隔离演示客户"}],
+                         "tasks": [task] if group == "production" else [], "counts": {}, "warnings": [],
+                         "can_review": True, "can_view_approvals": True, "can_manage_team_reminders": True, "attention_reasons": []}
+            value = {"as_of": "2026-10-22T17:00:00+08:00", "cards": [card] if summary or group == "production" else [],
+                     "workbench": workbench, "month": "2026-10", "timezone": "Asia/Shanghai"}
+            value.update({"mode": "summary", "available_groups": ["stock", "production", "delivery", "finance", "approval"]}
+                         if summary else {"group": group, "low_stock_warnings": []})
+            return self.json(value)
+        if path == "/api/home-tools/memos":
+            return self.json({"items": [{"id": "fixture-memo", "text": "隔离演示：核对今天的待办安排", "version": 1, "completed": False}],
+                              "total": 1, "active_count": 1, "completed_count": 0})
         if path.startswith("/api/"):
             return self.json({"items": [], "total": 0, "counts": {}, "permissions": [], "layout": {}})
         if path.startswith("/static/"):
@@ -134,11 +159,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=18486)
     parser.add_argument("--mode", choices=["standard", "large"], default="standard")
+    parser.add_argument("--page", choices=["products", "dashboard", "customers", "orders"], default="products")
+    parser.add_argument("--section-behavior", choices=["normal", "slow", "fail"], default="normal")
     args = parser.parse_args()
     if not 18001 <= args.port <= 19999:
         parser.error("Use an isolated port in 18001..19999")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.fixture_mode = args.mode
+    server.fixture_page = args.page
+    server.section_behavior = args.section_behavior
     print(f"Synthetic UI only: http://127.0.0.1:{args.port}/frontend-v2/", flush=True)
     try:
         server.serve_forever()

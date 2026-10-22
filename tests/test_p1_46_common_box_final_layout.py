@@ -35,7 +35,7 @@ def _run_node(tmp_path: Path, source: str) -> None:
     target = tmp_path / "p1-46-product-printing-compat.js"
     target.write_text(source, encoding="utf-8")
     result = subprocess.run(
-        [node, str(target)],
+        [node, "--require", str(ROOT / "static/js/product-structure-edit.js"), str(target)],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -185,6 +185,7 @@ const base={{
   _external_selected_ids:[],_external_default_product_id:null,_external_specification:{{}},
   production_label_enabled:false
 }};
+ERPProductStructure.initialize(base,base);
 vm.productForm=JSON.parse(JSON.stringify(base));
 const platePayload=vm.buildProductWritePayload();
 if (platePayload.print_content!=="多色印刷" || platePayload.printing_colors!=="黑色,红色/蓝色") throw new Error("legacy plate raw text changed");

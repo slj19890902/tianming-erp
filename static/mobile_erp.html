@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes,viewport-fit=cover">
   <title>天明 ERP 手机版</title>
   <link rel="stylesheet" href="/static/ui/mobile-delivery-margin.css?v=20260913-mobilemargin001">
   <link rel="stylesheet" href="/static/ui/mobile-product-drawings.css?v=20261010-all">
@@ -253,8 +253,8 @@
     .warehouse-label-operation { background:#edf9f5; padding:10px; border:1px solid #cce9df; border-radius:8px; }
     .warehouse-label-operation .warehouse-empty-search { margin:6px 0 0; background:transparent; }
   </style>
-<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script></head>
-<body>
+<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script><link rel="stylesheet" href="/static/ui/mobile-shell.css?v=20261022-3"><script defer src="/static/ui/mobile-shell.js?v=20261022-3"></script></head>
+<body data-mobile-page="home" data-mobile-title="天明 ERP 手机端" data-mobile-portal="1">
   <div class="app">
     <header class="topbar">
       <div class="brand"><strong>天明 ERP 手机版</strong><span id="userText">正在核对账号…</span></div>
@@ -539,6 +539,8 @@
         query: "",
         candidates: [],
         searchMeta: null,
+        searchLoading: false,
+        searchIncludeZero: false,
         selectedProductId: null,
         selectedInventory: null,
         searchTimer: null,
@@ -904,6 +906,7 @@
         if (page !== "warehouse" && page !== "lookup") state.fieldSourceActive = false;
         if (state.activePage && state.activePage !== "incoming") state.scrollByPage.set(state.activePage, window.scrollY);
         state.activePage = page;
+        window.TmMobileShell?.setPage(page);
         window.TmMobileDeliveryMargin?.onPageChange?.(page);
         const isHome = page === "home";
         const isLookup = page === "lookup";
@@ -1452,7 +1455,13 @@
           byId("fieldNearbyPrev").disabled = data.page <= 1; byId("fieldNearbyNext").disabled = !data.has_more;
           byId("fieldNearbyPager").hidden = data.page <= 1 && !data.has_more;
         } catch (error) {
-          if (generation === state.fieldNearbyGeneration) host.append(node("p", "card status error", error.message || "尺寸候选查询失败"));
+          if (generation === state.fieldNearbyGeneration && actor === state.shell?.user?.id && state.fieldIntent === "board" && state.activePage === "lookup") {
+            byId("fieldNearbyDetails").hidden = false; byId("fieldNearbyDetails").open = true; byId("fieldNearbyDetails").dataset.available = "1";
+            byId("fieldNearbyPager").hidden = true;
+            host.append(node("p", "card status error", error.message || "尺寸候选查询失败"));
+            const retry = node("button", "small-btn", "重新查询尺寸候选"); retry.type = "button";
+            retry.addEventListener("click", () => runFieldNearby(dimensions, page)); host.append(retry);
+          }
         }
       }
 
@@ -1601,6 +1610,9 @@
         state.detailGeneration += 1;
         window.clearTimeout(state.searchTimer);
         const query = byId("searchInput").value.trim();
+        state.searchLoading = false;
+        state.candidates = []; state.searchMeta = null; byId("candidateList").replaceChildren(); byId("candidateList").hidden = true;
+        byId("productResult").hidden = true;
         if (!query) {
           state.query = "";
           state.candidates = [];
@@ -1615,39 +1627,38 @@
       }
 
       async function runSearch(options = {}) {
-        if (!options.restoring) fieldIntent();
+        const append = options.append === true;
+        if (append && state.searchLoading) return false;
+        if (!options.restoring && !append) fieldIntent();
         if (state.warehouseAuthPending || state.activePage !== "warehouse") return false;
-        const actor = warehouseActor(), current = () => actor === warehouseActor() && state.activePage === "warehouse" && !state.warehouseAuthPending && (!options.current || options.current());
-        window.TmProductDrawings?.disposeWithin(byId("candidateList"));
-        window.TmProductDrawings?.disposeWithin(byId("productResult"));
-        state.detailController?.abort();
-        state.detailGeneration += 1;
         const query = byId("searchInput").value.trim();
         if (!query) return queueSearch();
-        state.searchController?.abort();
-        state.searchController = new AbortController();
+        const includeZero = state.shell?.user?.role === "admin" && byId("includeZeroStock").checked;
+        if (append && (query !== state.query || includeZero !== state.searchIncludeZero)) return runSearch();
+        const offset = append ? Number(state.searchMeta?.next_offset) : 0;
+        if (append && (!state.searchMeta?.has_more || !Number.isSafeInteger(offset) || offset <= 0)) return false;
+        const actor = warehouseActor(), current = () => actor === warehouseActor() && state.activePage === "warehouse" && !state.warehouseAuthPending && byId("searchInput").value.trim() === query && (!options.current || options.current());
+        state.searchController?.abort();const controller = new AbortController();state.searchController = controller;
         const generation = ++state.searchGeneration;
-        state.query = query;
-        state.selectedProductId = null;
-        state.selectedInventory = null;
-        byId("candidateList").hidden = true;
-        byId("productResult").hidden = true;
-        showStatus("searchState", "正在查找产品…", "");
+        state.searchLoading = true;state.query = query;state.searchIncludeZero = includeZero;
+        if (!append) {
+          window.TmProductDrawings?.disposeWithin(byId("candidateList"));window.TmProductDrawings?.disposeWithin(byId("productResult"));
+          state.detailController?.abort();state.detailGeneration += 1;state.selectedProductId = null;state.selectedInventory = null;
+          state.candidates = [];state.searchMeta = null;byId("candidateList").replaceChildren();byId("candidateList").hidden = true;byId("productResult").hidden = true;
+          showStatus("searchState", "正在查找产品…", "");
+        } else { const more = byId("loadMoreProducts");if(more){more.disabled=true;more.textContent="正在读取更多…";} }
         try {
-          const includeZero = state.shell?.user?.role === "admin" && byId("includeZeroStock").checked;
-          const data = await apiGet(`/api/mobile/erp/products?q=${encodeURIComponent(query)}&limit=20&include_zero=${includeZero}`, {
-            signal: state.searchController.signal,
-            isCurrent: () => generation === state.searchGeneration && current(),
+          const data = await apiGet(`/api/mobile/erp/products?q=${encodeURIComponent(query)}&limit=20&offset=${offset}&include_zero=${includeZero}`, {
+            signal: controller.signal, isCurrent: () => generation === state.searchGeneration && current(),
           });
           if (generation !== state.searchGeneration || !current()) return false;
-          state.candidates = Array.isArray(data.items) ? data.items : [];
-          state.searchMeta = data;
-          renderCandidates(data);
-          return true;
+          if (!Array.isArray(data.items)) throw new Error("产品查询回执不完整，请重新查询");
+          const seen = new Set();state.candidates = [...(append ? state.candidates : []), ...data.items].filter(item => {const key=String(item.id);if(seen.has(key))return false;seen.add(key);return true;});
+          state.searchMeta = data;state.searchLoading = false;renderCandidates(data);return true;
         } catch (error) {
-          if (error.name === "AbortError" || generation !== state.searchGeneration || !current()) return;
-          showStatus("searchState", error.message || "产品查找失败", "error", runSearch);
-        }
+          if (error.name === "AbortError" || generation !== state.searchGeneration || !current()) return false;
+          showStatus("searchState", error.message || "产品查找失败", "error", () => runSearch({append}));return false;
+        } finally { if(generation === state.searchGeneration){state.searchLoading=false;const more=byId("loadMoreProducts");if(more){more.disabled=false;more.textContent="继续加载产品";}} }
       }
 
       function renderCandidates(data) {
@@ -1666,7 +1677,7 @@
         const note = node(
           "div",
           "card muted",
-          data.requires_selection === true ? `找到 ${state.candidates.length} 款，请点选正确产品。` : "找到 1 款，请点开查看库存。"
+          `已显示 ${state.candidates.length} / ${Number(data.total ?? state.candidates.length)} 款，请点选正确产品。`
         );
         container.append(note);
         state.candidates.forEach(product => {
@@ -1697,6 +1708,10 @@
           window.TmProductDrawings?.append(group, product);
           container.append(group);
         });
+        if (data.has_more && Number.isSafeInteger(data.next_offset) && data.next_offset > 0) {
+          const more = node("button", "tm-load-more", "继续加载产品");more.id="loadMoreProducts";more.type="button";
+          more.addEventListener("click",()=>runSearch({append:true}));container.append(more);
+        }
         byId("searchState").hidden = true;
         container.hidden = false;
       }
@@ -3257,6 +3272,12 @@
         // Production cards and scroll position remain untouched behind the overlay.
       }
 
+      window.addEventListener("tm-mobile-shell-navigate", event => {
+        if(state.warehouseMapMoveRequestKey){event.preventDefault();window.alert("当前移库结果尚未确认，请先在原操作中核对。");return;}
+        const frame=state.activePage==="incoming"?byId("incomingFrame"):state.activePage==="pre_delivery"?byId("preDeliveryFrame"):null;
+        if(frame?.contentWindow){try{if(!frame.contentWindow.dispatchEvent(new CustomEvent("tm-mobile-shell-navigate",{cancelable:true})))event.preventDefault();}catch(_error){event.preventDefault();}}
+      });
+      window.addEventListener("tm-mobile-shell-ready", () => { window.TmMobileShell?.update(state.shell); window.TmMobileShell?.setPage(state.activePage || "home"); });
       async function initialize(options = {}) {
         if (state.initializing) return;
         state.initializing = true;
@@ -3266,6 +3287,7 @@
         if (requestedIncoming) startIncomingPerformance();
         try {
           state.shell = options.verifiedShell || await apiGet("/api/mobile/erp/shell");
+          window.TmMobileShell?.update(state.shell);
           if (state.incomingPerformanceActive) markIncomingPerformance("shell-ready");
           const user = state.shell.user || {};
           if ((state.shell.search_categories || []).includes("orders")) await loadDimensionSettings();

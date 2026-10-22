@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes,viewport-fit=cover">
   <title>模具位置查询 - 天明ERP</title>
   <style>
     :root{--blue:#2563eb;--green:#15803d;--line:#dbe3ef;--bg:#f3f6fb;--text:#172033;--muted:#64748b;--orange:#9a4d00}
@@ -13,10 +13,10 @@
     .products{padding:0 14px 12px}.product{border-top:1px dashed var(--line);padding:10px 0}.product:first-child{border-top:0}.product-name{font-weight:800;font-size:17px}.product-code{font-size:13px;color:var(--muted)}.meta{font-size:14px;margin-top:3px}.direction{margin-top:5px;background:#fff3cd;color:#7c4a03;border-radius:6px;padding:6px 8px}.toolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px}.tag{font-size:12px;border-radius:99px;padding:2px 8px;background:#e8efff;color:#1d4ed8}.label-link{font-size:13px;color:var(--blue);text-decoration:none}
     .move-panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}.move-panel h2{font-size:18px;margin:0 0 5px}.muted{color:var(--muted);font-size:13px}.move-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.field label{display:block;font-size:13px;font-weight:700;margin-bottom:4px}.field input,.field select{width:100%;border:1px solid #b8c5d8;border-radius:9px;padding:11px;font-size:16px;background:#fff}.one-floor-builder{margin-top:10px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:10px;padding:10px}.one-floor-grid{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:8px}.builder-hint{margin-top:6px;color:#1e3a8a;font-size:13px;font-weight:700}.move-actions{display:flex;gap:8px;margin-top:10px}.move-actions button{flex:1;border:0;border-radius:9px;padding:11px;font-size:16px;font-weight:800;color:#fff;background:var(--blue)}.move-actions .confirm{background:var(--green)}.move-actions button:disabled{background:#94a3b8}.preview{margin-top:12px;border:1px solid var(--line);border-radius:10px;padding:11px}.preview-line{display:grid;grid-template-columns:90px 1fr;gap:8px;margin:5px 0}.preview-code{font-weight:900;word-break:break-all}.conflict{color:#991b1b;font-weight:700}@media(max-width:520px){.move-grid,.one-floor-grid{grid-template-columns:1fr}.preview-line{grid-template-columns:76px 1fr}}
   </style>
-</head>
-<body>
+<link rel="stylesheet" href="/static/ui/mobile-shell.css?v=20261022-3"><script defer src="/static/ui/mobile-shell.js?v=20261022-3"></script></head>
+<body data-mobile-page="more" data-mobile-title="模具位置查询">
   <header>
-    <div class="header-row"><h1>模具位置查询</h1><nav class="quick-links"><a id="warehouseLink" href="/warehouse.html">返回仓库</a><a id="productionLink" href="/production">生产确认</a></nav></div>
+    <div class="header-row"><h1>模具位置查询</h1><nav class="quick-links"><a id="warehouseLink" href="/frontend-v2/mobile/warehouse">返回仓库</a><a id="productionLink" href="/mobile/?mobile_page=production#production">生产查询</a></nav></div>
     <div class="search"><input id="keyword" inputmode="search" placeholder="输入客户、标签名称、存货编码或产品名称"><button id="searchButton" type="button">查询</button></div>
   </header>
   <main>
@@ -46,7 +46,8 @@
     const h=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char]);
     const readOnly=new URLSearchParams(location.search).get("readonly")==="1";
     let canMove=false,movePreview=null,moveIdempotencyKey=null,moveSource="manual_input",oneFloorLocationOptions=[],visibleMolds=[],customerReferences=null,moldPinyinRuntimePromise=null;
-    let searchRequestId=0,movePreviewRequestId=0;
+    let searchRequestId=0,movePreviewRequestId=0,moveSubmitting=false;
+    window.addEventListener("tm-mobile-shell-navigate",event=>{if(moveSubmitting)event.preventDefault()});
     function errorMessage(body,status){const detail=body?.detail;if(typeof detail==="string"&&detail.trim())return detail;if(detail&&typeof detail==="object"&&!Array.isArray(detail)){const message=detail.message||detail.detail||detail.msg,code=detail.code;if(typeof message==="string"&&message.trim())return code?`${message}（${code}）`:message}if(Array.isArray(detail)&&detail[0]?.msg)return detail[0].msg;if(typeof body?.message==="string"&&body.message.trim())return body.message;return `请求失败（HTTP ${status}）`}
     async function api(url,options={}){let response;try{response=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options})}catch{const error=new Error("连接 ERP 失败，请检查网络后重试");error.code="NETWORK_ERROR";throw error}let body={};try{body=await response.json()}catch{}if(!response.ok){const error=new Error(errorMessage(body,response.status));error.status=response.status;error.code=body?.detail?.code||body?.code||null;throw error}return body}
     function createIdempotencyKey(){if(globalThis.crypto?.randomUUID)return crypto.randomUUID();if(globalThis.crypto?.getRandomValues){const bytes=new Uint8Array(16);crypto.getRandomValues(bytes);return [...bytes].map(value=>value.toString(16).padStart(2,"0")).join("")}return `${Date.now()}-${Math.random().toString(16).slice(2)}`}
@@ -111,9 +112,10 @@
       try{const preview=await api("/api/warehouse/molds/location-movement/preview",{method:"POST",body:JSON.stringify({mold_code:moldCode,target_location:targetLocation})});if(requestId!==movePreviewRequestId)return;movePreview=preview;moveIdempotencyKey=createIdempotencyKey();renderMovePreview()}catch(error){if(requestId!==movePreviewRequestId)return;movePreview=null;moveIdempotencyKey=null;renderMovePreview();if(error.status===401){loginNext();return}$("moveMessage").innerHTML=`<div class="error">${h(error.message)}</div>`}finally{if(requestId===movePreviewRequestId)$("previewButton").disabled=false}
     }
     async function confirmMove(){
-      if(!canMove||!movePreview||!moveIdempotencyKey)return;
+      if(!canMove||!movePreview||!moveIdempotencyKey||moveSubmitting)return;
+      moveSubmitting=true;
       $("confirmButton").disabled=true;$("previewButton").disabled=true;$("moveMessage").innerHTML="";
-      try{const data=await api("/api/warehouse/molds/location-movement/confirm",{method:"POST",body:JSON.stringify({mold_code:movePreview.mold.mold_code,target_location:movePreview.target_location,expected_version:movePreview.expected_version,idempotency_key:moveIdempotencyKey,source:moveSource,note:$("moveNote").value.trim()||null})});$("moveMessage").innerHTML=`<div class="success">${h(data.message)}：${h(data.mold.location_guide?.prompt||"位置待完善")}${data.idempotent_replay?"（幂等重放）":""}</div>`;const originalId=new URLSearchParams(location.search).get("mold_id");if(originalId)await loadMoldById(originalId);else await search();movePreview=null;moveIdempotencyKey=null;renderMovePreview()}catch(error){if(error.status===401){loginNext();return}if(error.status===409){movePreview=null;moveIdempotencyKey=null;renderMovePreview()}$("moveMessage").innerHTML=`<div class="error">${h(error.message)}${error.status===409?" 请重新预览。":""}</div>`}finally{$("previewButton").disabled=false;if(movePreview)renderMovePreview()}
+      try{const data=await api("/api/warehouse/molds/location-movement/confirm",{method:"POST",body:JSON.stringify({mold_code:movePreview.mold.mold_code,target_location:movePreview.target_location,expected_version:movePreview.expected_version,idempotency_key:moveIdempotencyKey,source:moveSource,note:$("moveNote").value.trim()||null})});$("moveMessage").innerHTML=`<div class="success">${h(data.message)}：${h(data.mold.location_guide?.prompt||"位置待完善")}${data.idempotent_replay?"（幂等重放）":""}</div>`;const originalId=new URLSearchParams(location.search).get("mold_id");if(originalId)await loadMoldById(originalId);else await search();movePreview=null;moveIdempotencyKey=null;renderMovePreview()}catch(error){if(error.status===401){loginNext();return}if(error.status===409){movePreview=null;moveIdempotencyKey=null;renderMovePreview()}$("moveMessage").innerHTML=`<div class="error">${h(error.message)}${error.status===409?" 请重新预览。":""}</div>`}finally{moveSubmitting=false;$("previewButton").disabled=false;if(movePreview)renderMovePreview()}
     }
     async function init(){
       let auth;try{auth=await api("/api/auth/me")}catch(error){if(error.status===401){loginNext();return}$("message").innerHTML=`<div class="error">${h(error.message)}</div>`;return}

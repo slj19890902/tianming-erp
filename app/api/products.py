@@ -23,7 +23,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 from sqlalchemy import String, and_, case, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
@@ -108,6 +108,7 @@ from app.services.composite_bom import (
     replace_product_bom,
 )
 from app.services.box_type_rules import (
+    canonical_box_style,
     BOX_TYPE_RULES,
     get_box_type_rule,
     BoxTypeRuleError,
@@ -814,7 +815,31 @@ class ProductMutationPayload(BaseModel):
         return reason or None
 
 
-class ProductUpdatePayload(ProductPayload):
+ProductStructureField = Literal[
+    "box_style", "splice_mode", "pieces_per_box", "flap_mm", "production_process"
+]
+_PRODUCT_STRUCTURE_FIELDS = (
+    "box_style", "splice_mode", "pieces_per_box", "flap_mm", "production_process"
+)
+
+
+class ProductStructureUpdatePayload(ProductPayload):
+    # An edit is not a new product: defaults are not evidence about old structure.
+    # Only the normal editor's explicit controls add entries to this mask.
+    structure_edit_fields: list[ProductStructureField] | None = None
+    _structure_input: dict = PrivateAttr(default_factory=dict)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def capture_structure_input(cls, value, handler):
+        raw = {key: value[key] for key in _PRODUCT_STRUCTURE_FIELDS if key in value} if isinstance(value, dict) else None
+        result = handler(value)
+        if raw is not None:
+            result._structure_input = raw
+        return result
+
+
+class ProductUpdatePayload(ProductStructureUpdatePayload):
     expected_version: int = Field(ge=1)
     change_reason: str | None = Field(default=None, max_length=500)
     confirmation_token: str | None = None
@@ -838,7 +863,7 @@ class ProductWithBOMUpdatePayload(BaseModel):
     bom: ProductBOMUpdatePayload
 
 
-class ProductUpdatePreviewPayload(ProductPayload):
+class ProductUpdatePreviewPayload(ProductStructureUpdatePayload):
     expected_version: int = Field(ge=1)
 
 
@@ -1372,6 +1397,63 @@ def _product_write_data(payload: ProductPayload, user: User) -> dict:
     return data
 
 
+def _restore_product_structure_edit_intent(product: Product, payload: ProductPayload) -> bool:
+    """Resolve update intent before reference/process validation; never write the DB here.
+
+    Full-form Pydantic normalization is still used for creates and explicitly
+    chosen values. For ordinary edits, retain the stored structure, including
+    unknowns and compatible legacy names. A marked null is an explicit correction
+    to 'unconfirmed', not a request for a new-product default.
+    """
+    if not isinstance(payload, ProductStructureUpdatePayload):
+        return False
+    if any((row.supply_mode == "external_purchase" or row.is_virtual_composite_parent
+            or row.box_style == "BOM组合") for row in (product, payload)):
+        return False
+    raw = payload._structure_input
+    mask = payload.structure_edit_fields
+    if mask is None:
+        # Compatibility for older clients: retain values that a full-form
+        # normalizer would otherwise invent. Non-default explicit changes keep
+        # their old behavior; the current editor always sends an explicit mask.
+        if canonical_box_style(raw.get("box_style", product.box_style)) != canonical_box_style(product.box_style):
+            return False
+        defaults = {"splice_mode": "single", "pieces_per_box": 1, "flap_mm": 30}
+        for field in _PRODUCT_STRUCTURE_FIELDS:
+            current = getattr(product, field)
+            submitted = raw.get(field)
+            if submitted is None or (current is None and submitted == defaults.get(field) and field in defaults):
+                setattr(payload, field, current)
+            elif field == "box_style" and canonical_box_style(submitted) == canonical_box_style(current):
+                payload.box_style = current
+        return False
+    selected = set(mask)
+    if any(field not in raw for field in selected):
+        raise HTTPException(422, "明确修改的结构字段必须同时提交字段值；未确认请填写空值")
+    if (raw.get("box_style") is not None
+            and canonical_box_style(raw["box_style"]) != canonical_box_style(product.box_style)):
+        if selected != set(_PRODUCT_STRUCTURE_FIELDS):
+            raise HTTPException(422, "切换箱型时必须明确核对箱型、拼箱、片数、舌宽及结合工艺")
+    splice_fields = {"splice_mode", "pieces_per_box"}
+    if selected & splice_fields:
+        if not splice_fields <= selected:
+            raise HTTPException(422, "拼箱方式与每箱片数必须一同明确修改")
+        splice, pieces = raw["splice_mode"], raw["pieces_per_box"]
+        if (splice is None) != (pieces is None):
+            raise HTTPException(422, "未确认的拼箱方式与每箱片数必须一同留空")
+        if splice is not None and Decimal(str(pieces)) != (2 if str(splice).strip().lower() == "double" else 1):
+            raise HTTPException(422, "每箱片数与明确选择的拼箱方式不一致")
+    for field in _PRODUCT_STRUCTURE_FIELDS:
+        if field not in selected:
+            setattr(payload, field, getattr(product, field))
+        elif raw[field] is None:
+            setattr(payload, field, None)
+        elif field == "box_style":
+            # A registry alias is a valid name, not proof that someone renamed it.
+            payload.box_style = str(raw[field]).strip() or None
+    return "production_process" not in selected or raw["production_process"] is None
+
+
 def _validated_product_versioned_updates(
     db: Session,
     *,
@@ -1379,6 +1461,7 @@ def _validated_product_versioned_updates(
     payload: ProductPayload,
     user: User,
 ) -> dict:
+    preserve_process_input = _restore_product_structure_edit_intent(product, payload)
     from app.services.production_variants import validate_references as validate_variants
     validate_variants(db, payload.customer_id, payload.production_variants)
     if product.sheet_cutting_settings and "sheet_cutting_settings" not in payload.model_fields_set:
@@ -1418,8 +1501,17 @@ def _validated_product_versioned_updates(
     if not (
         product.supply_mode == "external_purchase"
         and not _external_supply_requested(payload)
-    ) and not preserve_unknown_joining:
+    ) and not preserve_unknown_joining and not preserve_process_input:
         _normalize_product_joining_method(payload)
+    # The effective stored fields may differ from a full-form client's input;
+    # recheck applicability after intent restoration, not only in Pydantic.
+    secondary_error = _secondary_gluing_error(
+        production_process=payload.production_process,
+        box_style=payload.box_style,
+        box_category=payload.box_category,
+    )
+    if secondary_error:
+        raise HTTPException(400, secondary_error)
     _normalize_product_mold_binding(payload)
     _validate_product_sheet_cutting(payload)
     printing_configuration_unchanged = _product_printing_configuration_unchanged(

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.711"
-APP_VERSION_NAME = "片料抵扣结果核对与页面解锁"
+APP_VERSION = "v0.22.712"
+APP_VERSION_NAME = "聚晟达采购单识别与原单核对保护"
 APP_BUILD_DATE = "2026-10-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6982,3 +6982,16 @@ APP_VERIFICATION_STEPS = [
     "若网络异常提示结果待核对，点击核对原请求；确认恢复后库存只记一次，未确认前不要重新抵扣。",
 ]
 APP_CHANGELOG = [*(f"v0.22.711：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "新增聚晟达JSD采购单识别，区分买方与供应商，保留原单规格、数量、含税单价、金额、日期和送货备注。",
+    "料号或总计不明确时进入人工核对，规格和价格只提供常用箱建议；错金额、漏行、粘行、重复序号及异常日期明确提示。",
+    "人工核对保留识别明细和备注，单个建议也可明确选择；核对后修改关键订单事实须重新核对，防止旧确认继续保存。",
+    "无数据库迁移，不创建测试订单，不修改客户主档、历史订单或库存；原客户识别和文件防重复保护保留。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新后在订单PDF导入上传聚晟达采购单，核对客户、JSD单号、日期、数量及原单金额。",
+    "点击按原PDF人工录入，核对保留的明细和备注，选择正确常用箱后点击核对并匹配常用箱；仅按真实业务保存。",
+    "核对后如修改数量、单价、产品、日期或备注，应提示重新核对；重复提交同文件不得重复建单。",
+]
+APP_CHANGELOG = [*(f"v0.22.712：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

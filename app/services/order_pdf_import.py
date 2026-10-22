@@ -1967,6 +1967,12 @@ def parse_purchase_order_text(
             "ocr_required" if ocr_available() else "ocr_unavailable",
         )
     route = dict(customer_route or resolve_pdf_customer_route(text, template_rules))
+    from app.services.pdf_jushengda import parse_jushengda_order
+    jushengda = parse_jushengda_order(text, source_name, route)
+    if jushengda is not None:
+        return _finish_customer_route(
+            _apply_quantity_review_flags(jushengda), jushengda["customer_route"]
+        )
     if route.get("status") == "needs_confirmation":
         return _finish_customer_route({
             "source_name": source_name or "uploaded.pdf",
@@ -2898,6 +2904,25 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
             item['match_evidence'].update(policy='weekly_exact_customer_code',
                 decision='matched' if selected else 'needs_confirmation',
                 reasons=[] if selected else ['存货编码必须在当前客户内唯一精确匹配，请核对'])
+        if draft.get("template") == "jushengda_purchase_v1":
+            # Text extraction cannot distinguish an empty code cell from remarks.
+            # Preserve suggestions, but price/specification alone never select a SKU.
+            code = str(item.get("raw_product_code") or "").strip()
+            exact = [product for product in products if code and code in {
+                str(product.product_code or "").strip(),
+                str(product.customer_material_code or "").strip(),
+            }]
+            selected = exact[0] if len(exact) == 1 else None
+            if draft.get("manual_entry") and item.get("manual_selected_product_id") is not None:
+                # This explicit choice still resolves only within the current
+                # customer's active, order-selectable products loaded above.
+                selected = next((product for product in products
+                                 if str(product.id) == str(item["manual_selected_product_id"])), None)
+            item["match_evidence"].update(
+                policy="jushengda_exact_customer_code",
+                decision="matched" if selected else "needs_confirmation",
+                reasons=[] if selected else ["原单料号未确定，请对照原单选择常用箱；规格和单价仅供参考"],
+            )
         item["matched_product_id"] = selected.id if selected is not None else None
         item["match_status"] = "matched" if selected is not None else "unmatched"
         item["matched_material_id"] = selected.material_id if selected else None
@@ -2943,7 +2968,7 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
         item["product_drawing_file"] = drawing.image_path if drawing is not None else None
         matched_items.append(item)
     # 合并相同存货编码（同单价/同交期/同常用箱）
-    merged_items = matched_items if draft.get("customer_type") in {"simair", "sat_contract"} or draft.get('source_format') == 'weekly_demand' or draft.get('template') in {'yg_gy_location_order_v1', 'yg_gy_shortage_order_v1'} else _merge_same_product_code(matched_items)
+    merged_items = matched_items if draft.get("customer_type") in {"simair", "sat_contract", "jushengda"} or draft.get('source_format') == 'weekly_demand' or draft.get('template') in {'yg_gy_location_order_v1', 'yg_gy_shortage_order_v1'} else _merge_same_product_code(matched_items)
     return {**draft, "matched_customer_id": customer_id, "items": merged_items}
 
 

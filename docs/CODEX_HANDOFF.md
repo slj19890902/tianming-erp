@@ -1,3 +1,5 @@
+2026-10-22 SHEET-OPERATION-RECOVERY：v0.22.711片料抵扣后锁页与原请求核对已技术发布（7236cf0a / 5479c6e1），承接v710；revision ez1022hc不变，停服377.317918秒。真实Mac恢复、正式只读及原生收尾完成，6份原备份与新恢复点保留，人工验收待反馈。见 `docs/release_reports/SHEET_OPERATION_RECOVERY_V711_20261022.md`；继续任务须实时核对正式状态。
+
 2026-10-22 HOME-DIALOGS：v0.22.709 首页六类功能弹窗与免滚动布局已技术发布（662267fd / 05046587），承接v708，revision ez1022hc不变；真实停服427.018秒。真实Mac失败恢复、正式只读及原生收尾完成，四份原备份保留，人工验收待反馈。见 `docs/release_reports/HOME_DIALOGS_V709_20261022.md`；继续任务须实时核对正式状态。
 
 2026-10-21 MAIL-SEMI-USAGE：v0.22.702 半成品逐批用途确认与采用已技术发布（b53e9ee9 / 7c9b63b2，revision ew1020em），停服373.181秒，待人工验收。保留v701邮件库存刷新。见 `docs/release_reports/MAIL_SEMI_USAGE_20261021.md`；后续任务仍实时核对正式状态。

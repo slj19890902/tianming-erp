@@ -2911,6 +2911,9 @@ def _consume_completion_semi_reservations(
                 available_stock,
                 ceil(min(remaining_pieces, available_credit) / yield_factor),
             )
+            sheet_plan = json.loads(reservation.cut_plan_json) if reservation.cut_plan_json else {}
+            if sheet_plan.get('actual_sheet_input_v1') is True:
+                stock_quantity = available_stock
             if stock_quantity <= 0:
                 continue
             lot = db.get(InventoryLot, reservation.inventory_lot_id)
@@ -2933,7 +2936,8 @@ def _consume_completion_semi_reservations(
                 int(mutation.reservation.consumed_requirement_quantity or 0)
                 - before_credit
             )
-            remaining_pieces -= consumed_credit
+            remaining_pieces -= (stock_quantity * yield_factor
+                if sheet_plan.get('full_sheet_output_v1') is True else consumed_credit)
         if (
             require_full
             and requirement.component_type in expected_components

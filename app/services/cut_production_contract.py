@@ -31,11 +31,16 @@ def completion_contract(db, task, item, planned_output, *, require_cost=True):
                 continue
             take_credit = min(remaining, credit)
             take = min(stock, ceil(take_credit / reservation.yield_factor))
+            frozen = json.loads(reservation.cut_plan_json) if reservation.cut_plan_json else None
+            if frozen and frozen.get('actual_sheet_input_v1') is True:
+                if len(requirements) != 1 or requirement.component_type != 'whole':
+                    raise WarehouseInventoryError('自定片料投入必须是独立整片加工批次', 409)
+                take = stock
             if take * reservation.yield_factor < take_credit:
                 raise WarehouseInventoryError('预占片料数量与裁切换算不一致，请刷新核对', 409)
             has_cut = has_cut or bool(reservation.cut_plan_json)
             allocations.append(dict(reservation_id=reservation.id, lot_id=reservation.inventory_lot_id,
-                quantity=take, credit=take_credit, cut_plan=json.loads(reservation.cut_plan_json) if reservation.cut_plan_json else None))
+                quantity=take, credit=take_credit, cut_plan=frozen))
             physical_output += take * reservation.yield_factor
             remaining -= take_credit
         missing += remaining

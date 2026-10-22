@@ -2414,6 +2414,7 @@ def reserve_semi_finished_inventory(
     admin_reverse_crease_override: bool = False,
     reverse_crease_override_reason: str | None = None,
     allow_rotation: bool = False,
+    explicit_stock_quantity: int | None = None,
 ) -> SemiFinishedReservationBatch:
     if not confirmed:
         raise WarehouseInventoryError("半成品库存抵扣必须人工确认", 409)
@@ -2428,9 +2429,16 @@ def reserve_semi_finished_inventory(
         requested_requirement_quantity=requested_requirement_quantity,
     )
     if existing is not None:
+        if explicit_stock_quantity is not None and (
+            len(existing.reservations) != 1
+            or existing.reservations[0].reserved_stock_quantity != explicit_stock_quantity
+        ):
+            raise WarehouseInventoryError('同一片料凭证不能更改实际投入张数', 409)
         return existing
     if not lots:
         raise WarehouseInventoryError("至少选择一个半成品库存批次")
+    if explicit_stock_quantity is not None and (len(lots) != 1 or type(explicit_stock_quantity) is not int or explicit_stock_quantity <= 0):
+        raise WarehouseInventoryError('自定投入必须绑定一个真实批次和正整数张数', 409)
     expected_versions = {row.lot_id: row.expected_version for row in lots}
     if len(expected_versions) != len(lots):
         raise WarehouseInventoryError("同一库存批次不能重复选择")
@@ -2463,6 +2471,13 @@ def reserve_semi_finished_inventory(
         )
         if requirement is None:
             raise WarehouseInventoryError("半成品需求已被删除，请刷新后重试", 409)
+
+        if explicit_stock_quantity is not None and db.scalar(select(OrderItemSemiRequirement.id).where(
+            OrderItemSemiRequirement.order_item_id == requirement.order_item_id,
+            OrderItemSemiRequirement.sales_order_item_bom_component_id == requirement.sales_order_item_bom_component_id,
+            OrderItemSemiRequirement.component_type != 'whole',
+        ).limit(1)) is not None:
+            raise WarehouseInventoryError('本项还有独立盖／底用料，不能按单一整片方案增加备库产量', 409)
 
         if has_production_completion_facts(db, [requirement.order_item_id]):
             raise WarehouseInventoryError(
@@ -2540,6 +2555,13 @@ def reserve_semi_finished_inventory(
             if credited <= 0:
                 break
             stock_quantity = ceil(credited / allocation_yield)
+            if explicit_stock_quantity is not None:
+                if (not cut_plan or requirement.component_type != 'whole'
+                        or explicit_stock_quantity < stock_quantity or explicit_stock_quantity > lot.quantity_available):
+                    raise WarehouseInventoryError('本批不具备完整裁切依据，或实际张数超过可用库存，请重新匹配', 409)
+                stock_quantity = explicit_stock_quantity
+                cut_plan['actual_sheet_input_v1'] = True
+                cut_plan['full_sheet_output_v1'] = True
             before = _balances(lot)
             now = utc_now()
             result = db.execute(
@@ -2962,7 +2984,7 @@ def consume_semi_finished_reservation(
                 current_plan = rectangular_cut_plan(db, lot, db.get(Product, requirement_product_id),
                     requirement_signature(requirement), reviewed=True, allow_rotation=frozen_plan.get('rotated') is True)
                 if current_plan != {key: value for key, value in frozen_plan.items()
-                        if key not in {'review_contract','full_sheet_output_v1'}}:
+                        if key not in {'review_contract','full_sheet_output_v1','actual_sheet_input_v1'}}:
                     raise WarehouseInventoryError("当前原板裁切条件与已确认方案不一致，请重新核对", 409)
         from app.services.raw_purchase_plans import validate_reservation
         from app.services.order_replenishment_supply import validate_material_output_reservation

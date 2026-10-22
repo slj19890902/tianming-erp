@@ -6,7 +6,7 @@
     material_code:'材质', flute:'楞型', component:'组件', pieces_per_box:'每只耗片数', stock_yield_per_sheet:'每张产出'};
   function chosenQuantity(row) {
     const quantity = Number(row.inputQuantity);
-    if (!Number.isSafeInteger(quantity) || quantity <= 0 || quantity > row.max_stock_quantity) return 0;
+    if (!Number.isSafeInteger(quantity) || quantity <= 0 || quantity > (row.actual_max_stock_quantity ?? row.max_stock_quantity)) return 0;
     return quantity;
   }
   function operationKey() {
@@ -76,11 +76,38 @@
   const component = {
     props:{actorId:{type:Number,default:0},snapshotId:{type:Number,default:0},orderItemId:{type:Number,default:0}, componentType:{type:String,default:'whole'},disabled:{type:Boolean,default:false}},
     emits:['reserved','operation-state'],
-    data() {return {opened:false,loading:false,busy:false,error:'',message:'',preview:null,rows:[],uncertain:false,matchMode:'auto',readSequence:0};},
+    data() {return {opened:false,loading:false,busy:false,error:'',message:'',preview:null,rows:[],uncertain:false,matchMode:'auto',readSequence:0,mapLocation:null,useScrap:false,scrapQuantity:''};},
     created() {this.uncertain=pending.has(this.identity);},
     computed:{identity() {return `${this.actorId || 0}:${this.snapshotId?'bom':'order'}:${this.snapshotId || this.orderItemId}:${this.componentType}`;}},
-    watch:{identity() {this.readSequence++;this.loading=false;this.busy=false;this.opened=false;this.preview=null;this.rows=[];this.error='';this.message='';this.uncertain=pending.has(this.identity);}},
+    watch:{identity() {this.readSequence++;this.loading=false;this.busy=false;this.opened=false;this.preview=null;this.rows=[];this.error='';this.message='';this.mapLocation=null;this.useScrap=false;this.scrapQuantity='';this.uncertain=pending.has(this.identity);}},
     methods:{
+      locationName(row) {return row.warehouse_location?.location_name || row.warehouse_location?.name || row.warehouse_location?.location_code || '位置待核对';},
+      openMap(row) {
+        const id=Number(row.warehouse_location?.id);
+        if(this.busy || !Number.isSafeInteger(id) || id<=0)return;
+        this.mapReturnFocus=root.document?.activeElement;
+        this.mapLocation={name:this.locationName(row),url:'/warehouse.html?'+new URLSearchParams({
+          embedded:'1',readonly:'1',tab:'map',mode:'lookup',view:'2d',location_id:String(id),
+          lot_id:String(row.lot_id),floor:String(row.warehouse_location?.warehouse_floor || '')})};
+        this.$nextTick?.(()=>this.$refs?.mapBack?.focus());
+      },
+      closeMap() {
+        this.mapLocation=null;
+        this.$nextTick?.(()=>{if(this.mapReturnFocus?.isConnected)this.mapReturnFocus.focus();});
+      },
+      wasteText(row) {
+        return row.waste_basis==='rectangular_nesting'
+          ? `每张预计裁余 ${row.waste_area_cm2} cm²（${row.waste_percent}%）`
+          : '每张裁余待核算（无可验证排版）';
+      },
+      scrapCount() {
+        if(!this.useScrap)return 0;
+        const n=Number(this.scrapQuantity);
+        return Number.isSafeInteger(n) && n>0 ? n : 0;
+      },
+      selectScrap() {
+        if(this.useScrap)this.scrapQuantity=Math.floor(this.totals().uncovered/Math.max(Number(this.preview?.pieces_per_box || 1),1));
+      },
       endpoint() {return `/api/warehouse/semi-finished/${this.snapshotId ? 'bom-components/'+this.snapshotId : 'order-items/'+this.orderItemId}`;},
       quantity:chosenQuantity,
       differences(row) {return (row.signature_differences || []).filter(name=>!['board_length_mm','board_width_mm'].includes(name)).map(name=>differenceNames[name] || name).join('、');},
@@ -90,15 +117,20 @@
         const selected=this.selection(),need=Number(this.preview?.remaining_required_piece_qty || 0);
         const pieces=selected.reduce((sum,row)=>sum+chosenQuantity(row)*Number(row.stock_yield_per_sheet),0);
         const stock=selected.reduce((sum,row)=>sum+chosenQuantity(row),0);
-        let remaining=need;
+        let remaining=need,extra=false;
         const valid=selected.length>0 && selected.every(row=>{
           const quantity=chosenQuantity(row),output=Number(row.stock_yield_per_sheet);
           const credit=Math.min(quantity*output,remaining);remaining-=credit;
-          return row.selectable && quantity>0 && output>0 && Math.ceil(credit/output)===quantity;
+          const over=Math.ceil(credit/output)<quantity;
+          extra=extra || over;
+          return row.selectable && quantity>0 && output>0 && credit>0 &&
+            (!over || Number(row.actual_max_stock_quantity)>Number(row.max_stock_quantity));
         });
         const perBox=Math.max(Number(this.preview?.pieces_per_box || 1),1);
-        return {stock,pieces,credit:Math.min(pieces,need),remaining:Math.max(need-pieces,0),
-          boxes:Math.floor(pieces/perBox),excess:Math.max(pieces-need,0),valid};
+        const uncovered=Math.max(need-pieces,0),scrap=this.scrapCount()*perBox;
+        const scrapValid=!this.useScrap || (this.preview?.scrap_completion_allowed && scrap>0 && scrap<=uncovered);
+        return {stock,pieces,credit:Math.min(pieces,need),remaining:Math.max(uncovered-scrap,0),uncovered,
+          boxes:Math.floor(pieces/perBox),excess:Math.max(pieces-need,0),extra,valid:valid && scrapValid};
       },
       choose(row) {
         if(this.busy || this.uncertain)return;
@@ -127,6 +159,7 @@
         if(this.busy || this.uncertain)return;
         if(mode==='swapped' && (!this.preview?.can_further_match || this.matchMode!=='exact' || this.rows.length))return;
         this.loading=true;this.error='';this.rows=[];this.matchMode=mode;
+        this.useScrap=false;this.scrapQuantity='';
         const identity=this.identity,sequence=++this.readSequence;
         try {
           const {data}=await root.axios.get(this.endpoint()+'/manual-inventory',{params:{component_type:this.componentType,match_mode:mode}});
@@ -142,13 +175,14 @@
       },
       close() {
         if(this.busy)return;
+        if(this.mapLocation){this.closeMap();return;}
         this.opened=false;this.readSequence++;this.loading=false;
         this.$nextTick?.(()=>{if(this.returnFocus?.isConnected)this.returnFocus.focus();});
       },
       keydown(event) {
         if(event.key==='Escape') {event.preventDefault();event.stopPropagation();this.close();return;}
         if(event.key!=='Tab')return;
-        const panel=this.$refs?.dialog;
+        const panel=this.mapLocation?this.$refs?.mapDialog:this.$refs?.dialog;
         const controls=Array.from(panel?.querySelectorAll('button:not([disabled]),input:not([disabled]),summary,[href]') || []).filter(el=>el.getClientRects().length);
         const first=controls[0],last=controls.at(-1),active=root.document?.activeElement;
         if(!first) {event.preventDefault();panel?.focus();}
@@ -162,6 +196,21 @@
           expected_order_item_revision:this.preview.expected_order_item_revision,idempotency_key:operationKey(),
           items:this.selection().map(row=>({lot_id:row.lot_id,stock_quantity:chosenQuantity(row),expected_version:row.version,
             review_hash:row.review_hash,warning_acknowledged_codes:row.warning_codes || []}))};
+        if(this.totals().extra)payload.produce_extra_stock=true;
+        if(this.useScrap) {
+          const now=new Date(),stockDate=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+          const identity=this.identity,quantity=this.scrapCount();
+          this.busy=true;this.error='';this.$emit('operation-state',{identity,blocked:true});
+          try {
+            const {data}=await root.axios.post('/api/production/scrap-production/preview',{
+              action:'finish_now',product_id:this.preview.product_id,order_item_id:this.orderItemId,
+              quantity,stock_date:stockDate,location_id:null,variant_id:null,remarks:'库料短缺，已用废料补足',
+              preview_hash:'',operation_key:'sheet-scrap-preview'});
+            if(this.identity!==identity)return;
+            payload.scrap_completion={quantity,stock_date:stockDate,preview_hash:data.preview_hash};
+          } catch(error) {this.error=this.errorText(error);return;}
+          finally {if(this.identity===identity)this.busy=false;this.$emit('operation-state',{identity,blocked:false});}
+        }
         pending.set(this.identity,{preview:this.preview,rows:this.rows,payload,matchMode:this.matchMode,batch:true});
         await this.submitHeld();
       },
@@ -206,7 +255,7 @@
       <button ref="trigger" type="button" class="btn small" :disabled="busy || (disabled && !uncertain)" @click="open">{{uncertain?'查看上次抵扣':'使用库存片料'}}</button>
       <teleport to="body">
         <div v-if="opened" class="manual-sheet-backdrop" @click.self="close" @keydown="keydown">
-          <section ref="dialog" class="manual-sheet-dialog" role="dialog" aria-modal="true" :aria-labelledby="'sheet-title-'+identity" tabindex="-1">
+          <section v-show="!mapLocation" ref="dialog" class="manual-sheet-dialog" role="dialog" aria-modal="true" :aria-labelledby="'sheet-title-'+identity" tabindex="-1">
             <header class="manual-sheet-head"><h3 :id="'sheet-title-'+identity">使用库存片料<span v-if="componentType!=='whole'"> · {{componentType==='cover'?'盖片':'底片'}}</span></h3><button class="btn small" type="button" aria-label="关闭使用库存片料" :disabled="busy" @click="close">关闭</button></header>
             <div class="manual-sheet-body" :aria-busy="loading || busy">
               <div v-if="preview" class="manual-sheet-demand"><strong>{{preview.product_code}} · {{preview.product_name}}</strong><span>所需箱片 {{preview.board_length_mm}} × {{preview.board_width_mm}} mm · {{preview.flute_type==='NONE'?'卡纸':preview.flute_type+' 瓦'}} · {{preview.material_code}}</span><b>待用箱片 {{preview.remaining_required_piece_qty}} 片</b></div>
@@ -218,18 +267,24 @@
                 <tr v-for="row in rows" :key="row.lot_id" :class="{'manual-sheet-selected':row.selected}">
                   <td><input type="checkbox" v-model="row.selected" :aria-label="'选择 '+row.board_length_mm+' × '+row.board_width_mm+'，'+(row.warehouse_location?.location_name || row.warehouse_location?.name || '位置待核对')" :disabled="busy || !row.selectable || !row.max_stock_quantity" @change="choose(row)"></td>
                   <td><strong>{{row.board_length_mm}} × {{row.board_width_mm}} mm</strong><div>{{row.material_code}} / {{row.flute_type}} · {{row.recommendation_label || '同尺寸'}}</div><details v-if="differences(row) || row.warning_messages?.length" class="manual-sheet-details" :class="{'manual-sheet-review':!!differences(row)}"><summary>{{differences(row)?'需核对：'+differences(row):'查看详情'}}</summary><div>{{row.internal_name || '库存片料'}} · {{row.material_code}} / {{row.flute_type}}</div><p v-for="(warning,index) in row.warning_messages" :key="index">{{warning}}</p></details></td>
-                  <td><b>{{row.available_stock_quantity}}</b> 张</td><td>{{row.warehouse_location?.location_name || row.warehouse_location?.name || '位置待核对'}}</td><td>{{yieldText(row)}}</td>
-                  <td><label><input class="input" type="number" min="1" step="1" :max="row.max_stock_quantity" v-model="row.inputQuantity" :disabled="busy || !row.selected" :aria-label="'本次使用张数，最多 '+row.max_stock_quantity+' 张'"> 张</label></td>
+                  <td><b>{{row.available_stock_quantity}}</b> 张</td><td><button v-if="row.warehouse_location?.id" type="button" class="manual-sheet-location" :disabled="busy" :title="'在地图定位：'+locationName(row)" @click="openMap(row)">{{locationName(row)}}</button><span v-else>位置待核对</span></td><td>{{yieldText(row)}}<div class="manual-sheet-score" :class="'manual-sheet-score-'+(row.match_color || 'unknown')">{{row.utilization_percent==null?'匹配度待核算':'利用率 '+row.utilization_percent+'%'}}</div><div class="manual-sheet-waste">{{wasteText(row)}}</div></td>
+                  <td><label><input class="input" type="number" min="1" step="1" :max="row.actual_max_stock_quantity ?? row.max_stock_quantity" v-model="row.inputQuantity" :disabled="busy || !row.selected" :aria-label="'本次使用张数，最多 '+(row.actual_max_stock_quantity ?? row.max_stock_quantity)+' 张'"> 张</label><small class="manual-sheet-waste">本单建议 {{row.max_stock_quantity}} 张</small></td>
                 </tr>
               </tbody></table></div>
               <div v-else-if="!loading && preview && !uncertain" class="manual-sheet-empty">
                 <p v-if="!preview.remaining_required_piece_qty">当前用料需求已覆盖，无需再报料。</p><p v-else>{{matchMode==='swapped'?'暂无长宽交换后可用的同楞型片料。':'暂无符合材质楞型及加工用途的可用片料（已查询同尺寸、大张裁切和交换方向）。'}}</p>
                 <button v-if="matchMode==='exact' && preview.can_further_match" class="btn" type="button" :disabled="busy" @click="load('swapped')">进一步匹配（交换长宽）</button>
               </div>
+              <p v-if="rows.length" class="manual-sheet-explain">同尺寸优先，其次大张裁切、交换方向；组内按利用率推荐。裁余是矩形排版估算，含边料，不含模切内部挖空；可再利用的边料不等于报废。</p>
+              <details v-if="preview?.scrap_completion_allowed && (useScrap || (selection().length && totals().uncovered>0)) && !uncertain" class="manual-sheet-special"><summary>少几张，用废料补足（特殊情况）</summary><label><input type="checkbox" v-model="useScrap" :disabled="busy" @change="selectScrap"> 缺少部分已用废料加工完成</label><label v-if="useScrap">合格成品 <input class="input" type="number" min="1" step="1" v-model="scrapQuantity" :disabled="busy" :max="Math.floor(totals().uncovered / Math.max(preview.pieces_per_box,1))"> {{preview.output_unit || '只'}}</label><p>仅填写已经做好的数量；沿用保存货位入库并用于本单。废料材料成本为0，人工沿现有工序计算。尚未完成时不勾选，保留真实缺口。</p></details>
             </div>
-            <footer class="manual-sheet-foot"><div v-if="selection().length && !uncertain" class="manual-sheet-total"><strong>本次使用 {{totals().stock}} 张</strong><span>{{preview?.is_bom || componentType!=='whole'?'可出 '+totals().pieces+' 片部件':'可做 '+totals().boxes+' '+(preview?.output_unit || '只')}}</span><b :class="{'manual-sheet-covered':totals().remaining===0}">{{totals().remaining?'剩余 '+totals().remaining+' 片仍需报料':'抵扣后无需报料'}}</b><span v-if="totals().valid && totals().excess">理论余量 {{totals().excess}} 片</span><span v-if="!totals().valid" class="manual-sheet-invalid">请核对片数，不能超过库存或剩余需求。</span></div>
+            <footer class="manual-sheet-foot"><div v-if="selection().length && !uncertain" class="manual-sheet-total"><strong>本次使用 {{totals().stock}} 张</strong><span>{{preview?.is_bom || componentType!=='whole'?'可出 '+totals().pieces+' 片部件':'可做 '+totals().boxes+' '+(preview?.output_unit || '只')}}</span><b :class="{'manual-sheet-covered':totals().remaining===0}">{{totals().remaining?'剩余 '+totals().remaining+' 片仍需安排':'抵扣后无需报料'}}</b><span v-if="totals().valid && totals().excess">完工后预计余 {{totals().excess}} 片入库存，订单数量不变</span><span v-if="!totals().valid" class="manual-sheet-invalid">请填写可用库存内的正整数；缺口覆盖后，无需再选其他批次。</span></div>
               <div class="manual-sheet-buttons"><button v-if="!uncertain" class="btn" type="button" :disabled="busy || loading" @click="load('auto')">重新匹配</button><button class="btn" type="button" :disabled="busy" @click="close">取消</button><button class="btn primary" type="button" :disabled="busy || loading || uncertain || disabled || !totals().valid" @click="confirmSelection">{{busy?'正在抵扣…':'确认使用并抵扣'}}</button></div>
             </footer>
+          </section>
+          <section v-if="mapLocation" ref="mapDialog" class="manual-sheet-dialog manual-sheet-map" role="dialog" aria-modal="true" aria-label="片料货位定位" tabindex="-1">
+            <header class="manual-sheet-head"><h3>{{mapLocation.name}}</h3><button ref="mapBack" class="btn primary" type="button" @click="closeMap">返回片料选择</button></header>
+            <iframe :src="mapLocation.url" title="现有仓库地图：片料货位" referrerpolicy="same-origin"></iframe>
           </section>
         </div>
       </teleport>

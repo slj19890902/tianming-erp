@@ -30,12 +30,18 @@ def build_display_registry_for_order_ids(
     normalized_ids = sorted({int(order_id) for order_id in order_ids if order_id})
     if not normalized_ids:
         return DisplayOrderRegistry(by_order_id={})
-    rows = db.execute(
-        select(Order.id, Order.order_number).where(Order.id.in_(normalized_ids))
-    ).all()
-    return DisplayOrderRegistry(
-        by_order_id={int(order_id): str(order_number) for order_id, order_number in rows}
-    )
+    by_order_id: dict[int, str] = {}
+    # Full history callers can exceed SQLite's bind limit; list pages still
+    # issue one bounded query and empty scopes issue none.
+    for offset in range(0, len(normalized_ids), 800):
+        rows = db.execute(
+            select(Order.id, Order.order_number)
+            .where(Order.id.in_(normalized_ids[offset : offset + 800]))
+        ).all()
+        by_order_id.update(
+            (int(order_id), str(order_number)) for order_id, order_number in rows
+        )
+    return DisplayOrderRegistry(by_order_id=by_order_id)
 
 
 def display_order_number(

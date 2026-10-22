@@ -394,5 +394,8 @@ def test_active_summary_reuses_candidate_order_rows(full_list_app) -> None:
         if "FROM sales_orders" in statement
         and "WHERE sales_orders.id IN" in statement
         and "sales_orders.order_number" in statement
+        # The number registry now also uses an ID-bounded scalar query. Only
+        # repeated full ORM order loads would defeat candidate reuse.
+        and "sales_orders.customer_id" in statement
     ]
     assert len(order_row_loads) == 1

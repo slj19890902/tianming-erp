@@ -345,14 +345,8 @@ def _read_and_count(factory, user_id: int) -> tuple[dict, list[str]]:
 
 
 def test_paged_queries_are_bounded_read_only_and_skip_full_registry(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
 ) -> None:
-    import app.api.incoming as incoming_api
-
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("paged pending rows built the full history registry")
-
-    monkeypatch.setattr(incoming_api, "build_display_registry", forbidden)
     results: dict[int, tuple[dict, list[str]]] = {}
     for count in (1, 20, 100):
         _engine, factory, user_id, _ordinary_ids = _fixture(
@@ -371,6 +365,12 @@ def test_paged_queries_are_bounded_read_only_and_skip_full_registry(
     assert select_counts[100] <= select_counts[1] + 1
     assert all(
         not statement.startswith(("insert", "update", "delete"))
+        for _response, statements in results.values()
+        for statement in statements
+    )
+    assert all(
+        " ".join(statement.split())
+        != "select sales_orders.id, sales_orders.order_number from sales_orders"
         for _response, statements in results.values()
         for statement in statements
     )

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.709"
-APP_VERSION_NAME = "首页功能弹窗与免滚动布局"
+APP_VERSION = "v0.22.710"
+APP_VERSION_NAME = "待处理子件单行展开与当前库位"
 APP_BUILD_DATE = "2026-10-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6958,3 +6958,16 @@ APP_VERIFICATION_STEPS = [
     "待办输入文字后查看全部再关闭，确认草稿保留；共享文件全部列表和历史版本正常打开。",
 ]
 APP_CHANGELOG = [*(f"v0.22.709：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "待处理子件默认每项一行，点击展开配比、来源库存、当前位置和原组套操作。",
+    "子件位置与仓库正式地图使用同一名称及位置校验，修复区域改名后仍显示新区域待设置的问题，适用于订单及备库子件。",
+    "生产主界面移除重复的待收料入口；收料环节继续按原流程处理。",
+    "无数据库迁移，不移动库存，不修改数量、预占、成本或历史记录。",
+]
+APP_VERIFICATION_STEPS = [
+    "整页刷新ERP后进入生产，确认保留待生产、待处理子件等入口，待收料仍在收料环节。",
+    "打开待处理子件，确认每项默认一行；点击80012753展开，核对A片2片的位置为三楼I1-03及配对详情。",
+    "折叠后检查其他产品同样只占一行；展开仍能查看待核对批次和按原权限操作。",
+]
+APP_CHANGELOG = [*(f"v0.22.710：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -13,3 +13,18 @@
 }
 
 .production-map-mask{position:fixed;inset:0;z-index:1600;background:#f5f7fb;display:flex;flex-direction:column}.production-map-mask>header,.production-map-mask>footer{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 20px;background:white;border-bottom:1px solid #dbe3ed;flex-shrink:0}.production-map-mask>footer{border-top:1px solid #dbe3ed}.production-map-mask>iframe{width:100%;flex:1;min-height:0;border:0}.production-map-mask>p{margin:8px 20px}.production-map-mask>header strong{font-size:18px}.production-map-mask>footer strong{color:#174ea6}.production-placement-table .production-location-picker>.primary{grid-column:1/-1}
+.assembly-pending-row{border-bottom:1px solid #dce6e1}
+.assembly-pending-summary{display:flex;align-items:center;gap:12px;min-height:44px;padding:6px 10px;box-sizing:border-box;cursor:pointer;list-style:none;white-space:nowrap}
+.assembly-pending-summary::-webkit-details-marker{display:none}
+.assembly-pending-summary:hover,.assembly-pending-row[open]>.assembly-pending-summary{background:#f0f8f5}
+.assembly-pending-summary:focus-visible{outline:2px solid #2563eb;outline-offset:-2px}
+.assembly-pending-customer{flex:0 0 7em}
+.assembly-pending-code{flex:0 0 12em}
+.assembly-pending-name{flex:1;min-width:0}
+.assembly-pending-customer,.assembly-pending-code,.assembly-pending-name{overflow:hidden;text-overflow:ellipsis}
+.assembly-pending-summary>.status{flex:0 0 auto;max-width:35%;overflow:hidden;text-overflow:ellipsis}
+.assembly-pending-toggle{flex:0 0 auto}
+.assembly-pending-toggle::after{content:'展开 ▾'}
+.assembly-pending-row[open]>.assembly-pending-summary>.assembly-pending-toggle::after{content:'收起 ▴'}
+.assembly-pending-detail{padding:12px;background:#f7fbf9;border-top:1px solid #e2ebe6;overflow-wrap:anywhere}
+@media(max-width:680px){.assembly-pending-summary{gap:6px;padding:6px 4px;font-size:12px}.assembly-pending-customer{flex-basis:4em}.assembly-pending-code{flex-basis:8em}.assembly-pending-kind{display:none}.assembly-pending-summary>.status{max-width:26%;font-size:11px}.assembly-pending-toggle::after{content:'▾'}.assembly-pending-row[open]>.assembly-pending-summary>.assembly-pending-toggle::after{content:'▴'}}

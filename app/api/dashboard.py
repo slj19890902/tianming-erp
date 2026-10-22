@@ -1229,11 +1229,122 @@ def _authoritative_dashboard_todos(data: dict) -> list[dict]:
     return todos
 
 
+_HOME_GROUP_METRICS = {
+    "stock": (),
+    "production": ("pending_material", "pending_incoming", "pending_production"),
+    "delivery": ("pending_delivery", "pending_receipt"),
+    "finance": ("pending_reconciliation", "pending_invoice", "pending_payment"),
+    "approval": (),
+}
+
+
+def _inventory_dashboard_cards(db, *, as_of, month, deferred=False):
+    """Keep stock insight card metadata identical in full and layered reads."""
+    risk_count = high_priority_count = None
+    if not deferred:
+        insights = build_inventory_insights(db)
+        items = insights.get("action_items") or []
+        risk_count = _safe_int(insights.get("action_item_count", len(items)))
+        high_priority_count = _safe_int(insights.get("high_priority_action_item_count", sum(
+            1 for item in items if isinstance(item.get("priority"), (int, float)) and item["priority"] <= 1
+        )))
+    return [
+        {"key": key, "title": title, "count": count, "count_unit": "事项",
+         "description": description, "button_label": button_label, "target": "warehouse",
+         "target_filter": {}, "identity_key": "库存洞察事项 ID", "as_of": as_of,
+         "statement_month": month}
+        for key, title, count, description, button_label in (
+            ("inventory_risk", "库存风险", risk_count, "库存洞察待处理项", "查看库存"),
+            ("business_anomaly", "经营异常", high_priority_count, "高优先级库存异常", "查看异常"),
+        )
+    ]
+
+
+def _layered_dashboard_payload(db, *, user, group=None):
+    """No implicit detail fetch: summary supplies navigation, sections eligibility.
+
+    Every requested section uses the same complete authoritative projection as
+    the full response. There is no candidate limit before qualification.
+    """
+    from app.services.dashboard_workbench import build_workbench
+    from app.services.home_task_preferences import annotate_tasks
+
+    now = datetime.now(_BEIJING).replace(microsecond=0)
+    today, month, as_of = now.date(), now.strftime("%Y-%m"), now.isoformat()
+    visible = None if has_unrestricted_customer_access(user, db) else customer_scope_ids(user, db)
+    reconciliation_due = today.day >= RECONCILIATION_REMINDER_START_DAY
+    permissions = {
+        "pending_material": has_permission(user, "requisition.view"),
+        "pending_incoming": has_permission(user, "incoming.view"),
+        "pending_production": has_permission(user, "orders.view") and user.role in {"admin", "boss", "workshop"},
+        "pending_delivery": has_permission(user, "deliveries.view"),
+        "pending_receipt": has_permission(user, "deliveries.view"),
+        "pending_reconciliation": has_permission(user, "finance.view") and reconciliation_due,
+        "pending_invoice": has_permission(user, "finance.view"),
+        "pending_payment": has_permission(user, "finance.view"),
+    }
+    stock_warnings_allowed = permissions["pending_material"] and has_permission(user, "warehouse.view")
+    stock_insights_allowed = user.role == "boss" and has_permission(user, "warehouse.view")
+    groups = {
+        "stock": stock_warnings_allowed or stock_insights_allowed,
+        "production": any(permissions[key] for key in _HOME_GROUP_METRICS["production"]),
+        "delivery": permissions["pending_delivery"],
+        "finance": permissions["pending_invoice"],
+        "approval": user.role in {"admin", "boss"} or has_permission(user, "business_requests.submit"),
+    }
+    if group is not None and not groups.get(group, False):
+        raise HTTPException(status_code=403, detail="无此首页分组的查看权限")
+    requested_metrics = _HOME_GROUP_METRICS.get(group, ())
+    selected = {key: allowed and key in requested_metrics for key, allowed in permissions.items()}
+    data = _authoritative_dashboard_data(
+        db, user=user, visible_customer_ids=visible, statement_month=month, as_of=as_of,
+        can_view_requisition=selected["pending_material"],
+        can_view_incoming=selected["pending_incoming"],
+        can_view_orders=selected["pending_production"],
+        can_view_deliveries=selected["pending_delivery"],
+        can_view_finance=selected["pending_invoice"],
+        show_reconciliation_reminder=reconciliation_due,
+    )
+    cards = _authoritative_dashboard_cards(data, permissions=permissions if group is None else selected)
+    if group is None:
+        for card in cards:
+            for field in ("count", "amount", "waiting_count", "due_waiting_count"):
+                if field in card:
+                    card[field] = None
+    if stock_insights_allowed and group in (None, "stock"):
+        cards.extend(_inventory_dashboard_cards(db, as_of=as_of, month=month, deferred=group is None))
+    warnings = _common_box_low_stock_warnings(db, visible) if group == "stock" and stock_warnings_allowed else []
+    workbench = build_workbench(db, user=user, data=data, warnings=warnings, today=today,
+        visible_customer_ids=visible, include_approval_tasks=group == "approval")
+    annotate_tasks(db, user=user, workbench=workbench, today=today)
+    result = {"as_of": as_of, "month": month, "statement_month": month,
+              "timezone": "Asia/Shanghai", "cards": cards, "workbench": workbench}
+    if group is None:
+        result.update(mode="summary", available_groups=[key for key, allowed in groups.items() if allowed])
+    else:
+        result["group"] = group
+        if group == "stock":
+            result["low_stock_warnings"] = warnings
+    return result
+
+
+@router.get("/sections")
+def dashboard_section(
+    group: Literal["stock", "production", "delivery", "finance", "approval"],
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    return _layered_dashboard_payload(db, user=user, group=group)
+
+
 @router.get("/overview")
 def dashboard_overview(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
+    mode: Literal["full", "summary"] = "full",
 ) -> dict:
+    if mode == "summary":
+        return _layered_dashboard_payload(db, user=user)
     raw_db = db
     now = datetime.now(_BEIJING).replace(microsecond=0)
     today = now.date()
@@ -1315,53 +1426,7 @@ def dashboard_overview(
         permissions=metric_permissions,
     )
     if user.role == "boss" and has_permission(user, "warehouse.view"):
-        inventory_insights = build_inventory_insights(raw_db)
-        action_items = inventory_insights.get("action_items") or []
-        high_priority_count = sum(
-            1
-            for item in action_items
-            if isinstance(item.get("priority"), (int, float))
-            and item["priority"] <= 1
-        )
-        inventory_risk_count = _safe_int(
-            inventory_insights.get("action_item_count", len(action_items))
-        )
-        high_priority_count = _safe_int(
-            inventory_insights.get(
-                "high_priority_action_item_count",
-                high_priority_count,
-            )
-        )
-        cards.extend(
-            [
-                {
-                    "key": "inventory_risk",
-                    "title": "库存风险",
-                    "count": inventory_risk_count,
-                    "count_unit": "事项",
-                    "description": "库存洞察待处理项",
-                    "button_label": "查看库存",
-                    "target": "warehouse",
-                    "target_filter": {},
-                    "identity_key": "库存洞察事项 ID",
-                    "as_of": as_of,
-                    "statement_month": month,
-                },
-                {
-                    "key": "business_anomaly",
-                    "title": "经营异常",
-                    "count": high_priority_count,
-                    "count_unit": "事项",
-                    "description": "高优先级库存异常",
-                    "button_label": "查看异常",
-                    "target": "warehouse",
-                    "target_filter": {},
-                    "identity_key": "库存洞察事项 ID",
-                    "as_of": as_of,
-                    "statement_month": month,
-                },
-            ]
-        )
+        cards.extend(_inventory_dashboard_cards(raw_db, as_of=as_of, month=month))
 
     todos = _authoritative_dashboard_todos(authoritative_data)
     remaining_todo_count = max(len(todos) - 8, 0)

@@ -85,9 +85,12 @@ def decorate_stock_warnings(db, *, user, warnings, visible_customer_ids, request
     return warnings
 
 
-def build_workbench(db, *, user, data, warnings, today, visible_customer_ids):
+def build_workbench(db, *, user, data, warnings, today, visible_customer_ids,
+                    include_approval_tasks=True):
     sources = data["rows"]
-    requests = _pending_requests(db, user, visible_customer_ids)
+    # Stock warnings still need their linked request IDs, but an unrelated
+    # section must not fetch approvals or append them a second time.
+    requests = _pending_requests(db, user, visible_customer_ids) if include_approval_tasks or warnings else []
     customer_ids = {r["customer_id"] for rows in sources.values() for r in rows if r.get("customer_id")}
     customer_ids.update(cid for rows in sources.values() for r in rows for cid in r.get("_workbench_customer_ids", []))
     customer_ids.update(w["customer_id"] for w in warnings)
@@ -226,9 +229,10 @@ def build_workbench(db, *, user, data, warnings, today, visible_customer_ids):
                     task["customer_label"] = task["customer_name"] = row["customer_name"]
 
     from app.services.business_approvals import ACTIONS
-    applicant_ids = {r.applicant_id for r in requests}
+    approval_requests = requests if include_approval_tasks else []
+    applicant_ids = {r.applicant_id for r in approval_requests}
     applicants = dict(db.execute(select(User.id, User.real_name).where(User.id.in_(applicant_ids))).all()) if applicant_ids else {}
-    for request in requests:
+    for request in approval_requests:
         if request.customer_id not in customers:
             continue
         customer = customers[request.customer_id]

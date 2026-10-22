@@ -16706,6 +16706,15 @@
             this.loading = false;
             this.pageLoading = false;
             this.listReadStates = {};
+            this.customers = [];
+            this.customersTotal = 0;
+            this.products = [];
+            this.productsTotal = 0;
+            this.productsLoading = false;
+            this.productsError = "";
+            this.selectedProductCustomer = null;
+            this.productCustomerSearch = "";
+            this.filters.productCustomer = "";
             this.customerPhoneGovernanceExporting = false;
             this.pageCacheUpdatedAt = {};
             for (const controller of latestRequestControllers.values()) controller.abort();

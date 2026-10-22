@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm import object_session
 from app.models.warehouse_goods import WarehouseGoodsProfile
 from app.services.warehouse_goods import goods_profile, qualification_issues, lot_face, product_face
-from app.services.processed_sheet_matching import processed_match
+from app.services.inventory_read_scope import summary_prefetch
+from app.services.processed_sheet_matching import allowed_lot_ids_for_product, processed_match
 from app.services.sheet_measurement import crease_geometry
 
 from app.models.delivery import DeliveryItem
@@ -702,13 +703,7 @@ def _requirement_product_id(db: Session, requirement: OrderItemSemiRequirement) 
 
 
 def _allowed_lot_ids_for_product(db: Session, product_id: int) -> set[int]:
-    return set(
-        db.scalars(
-            select(SemiFinishedLotAllowedProduct.inventory_lot_id).where(
-                SemiFinishedLotAllowedProduct.product_id == product_id
-            )
-        ).all()
-    )
+    return set(allowed_lot_ids_for_product(db, product_id))
 
 
 def _lot_eligibility_scope(
@@ -1257,6 +1252,7 @@ def _semi_finished_candidates_for_signature(
         .order_by(*inventory_fifo_order_columns())
     ).all()
     allowed_lot_ids = _allowed_lot_ids_for_product(db, product_id)
+    summary_prefetch(db, WarehouseGoodsProfile, [lot.id for lot in rows])
     candidates: list[SemiFinishedCandidate] = []
     for lot in rows:
         detail = lot.semi_finished_detail

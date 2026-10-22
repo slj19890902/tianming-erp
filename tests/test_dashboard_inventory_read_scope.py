@@ -1,3 +1,5 @@
+import json
+import pytest
 from sqlalchemy import event
 from types import SimpleNamespace
 from sqlalchemy import create_engine
@@ -9,6 +11,7 @@ from app.models.product import Product
 from app.models.supplier_paper_code import SupplierPaperCode
 from app.services.inventory_read_scope import inventory_summary_read_scope
 from app.services.warehouse_goods import qualification_issues
+from tests.test_semi_finished_lot_eligibility import eligibility_db, _add_lot
 
 
 def test_summary_read_cache_preserves_matching_and_is_discarded(tmp_path):
@@ -67,3 +70,93 @@ def test_summary_scope_is_session_specific_and_cleans_up_on_failure():
     except ValueError:
         pass
     assert summary_read(first, 'missing', read) == 2
+
+
+@pytest.mark.parametrize('abort', [False, True])
+def test_bulk_summary_keeps_missing_rows_scoped_and_write_reads_fresh(eligibility_db, abort):
+    from app.models.warehouse_goods import WarehouseGoodsProfile
+    from app.services.inventory_read_scope import summary_prefetch, summary_get
+    from tests.test_processed_sheet_matching import setup
+    db, data = eligibility_db
+    product, lot, profile, facts = setup(db, data, approved=True)
+    missing_lot = _add_lot(db, data, key='profile-not-yet-present',
+                           customer_id=product.customer_id)
+    db.flush()
+    statements = []
+
+    def record(conn, cursor, statement, *rest):
+        if 'warehouse_goods_profiles' in statement:
+            statements.append(statement)
+
+    engine = db.get_bind()
+    event.listen(engine, 'before_cursor_execute', record)
+    try:
+        identities = [lot.id, missing_lot.id, *range(1000000, 1001100)]
+        try:
+            with inventory_summary_read_scope(db):
+                summary_prefetch(db, WarehouseGoodsProfile, identities)
+                assert len(statements) == 3  # bounded parameter batches, not per identity
+                for identity in identities:
+                    row = summary_get(db, WarehouseGoodsProfile, identity)
+                    assert (row is not None) == (identity == lot.id)
+                summary_prefetch(db, WarehouseGoodsProfile, identities)
+                assert len(statements) == 3
+                with Session(engine) as other:
+                    summary_prefetch(other, WarehouseGoodsProfile, identities)
+                assert len(statements) == 3  # cannot seed another Session's reads
+                if abort:
+                    raise ValueError('synthetic abandoned read')
+        except ValueError:
+            assert abort
+        before = len(statements)
+        summary_prefetch(db, WarehouseGoodsProfile, identities)
+        assert len(statements) == before  # ordinary writer never enables this cache
+        new_profile = WarehouseGoodsProfile(lot_id=missing_lot.id,
+                                            data_json=json.dumps(facts))
+        db.add(new_profile)
+        db.flush()
+        with inventory_summary_read_scope(db):
+            summary_prefetch(db, WarehouseGoodsProfile, [missing_lot.id])
+            assert summary_get(db, WarehouseGoodsProfile, missing_lot.id) is new_profile
+        assert summary_get(db, WarehouseGoodsProfile, missing_lot.id) is new_profile
+    finally:
+        event.remove(engine, 'before_cursor_execute', record)
+
+
+@pytest.mark.parametrize('mode', ['approved', 'unconfirmed', 'excluded_customer'])
+def test_prefetched_stock_qualification_keeps_customer_and_shape_guards(eligibility_db, mode):
+    from tests.test_processed_sheet_matching import setup, candidates
+    db, data = eligibility_db
+    product, lot, profile, facts = setup(db, data, approved=mode == 'approved')
+    if mode == 'excluded_customer':
+        facts['customer_ids'] = [data['other_customer'].id]
+        profile.data_json = json.dumps(facts)
+        db.flush()
+    expected = candidates(db, product)
+    with inventory_summary_read_scope(db):
+        actual = candidates(db, product)
+    assert actual == expected
+    if mode == 'approved':
+        assert actual and actual[0].direct_deduction_eligible
+    elif mode == 'excluded_customer':
+        assert not actual
+    else:
+        assert actual and not actual[0].direct_deduction_eligible
+
+
+def test_approval_scope_is_discarded_before_an_ordinary_qualification_read(eligibility_db):
+    from app.core.time_contract import utc_now_naive
+    from app.models.warehouse_inventory import SemiFinishedLotAllowedProduct
+    from tests.test_processed_sheet_matching import setup, candidates
+    db, data = eligibility_db
+    product, lot, profile, facts = setup(db, data, approved=False)
+    with inventory_summary_read_scope(db):
+        assert not candidates(db, product)[0].direct_deduction_eligible
+        assert not candidates(db, product)[0].direct_deduction_eligible
+    db.add(SemiFinishedLotAllowedProduct(inventory_lot_id=lot.id, product_id=product.id,
+                                       confirmed_by=data['admin'].id,
+                                       confirmed_at=utc_now_naive()))
+    db.flush()
+    assert candidates(db, product)[0].direct_deduction_eligible
+    with inventory_summary_read_scope(db):
+        assert candidates(db, product)[0].direct_deduction_eligible

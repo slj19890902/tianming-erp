@@ -5,8 +5,16 @@ from app.models.mold_tool import MoldTool
 from app.services.warehouse_goods import goods_profile, qualification_issues
 from app.services.sheet_measurement import crease_match, measurement_review
 from app.services.box_type_rules import get_box_type_rule
+from app.services.inventory_read_scope import summary_read, summary_scope_active
 
 MISSING_USE = "加工过的片料须逐款确认可用产品"
+
+
+def allowed_lot_ids_for_product(db, product_id):
+    return summary_read(db, ('processed-product-allowed-lots', product_id),
+        lambda: frozenset(db.scalars(select(
+            SemiFinishedLotAllowedProduct.inventory_lot_id).where(
+            SemiFinishedLotAllowedProduct.product_id == product_id))))
 
 
 def processed_match(db, lot, product, expected):
@@ -61,9 +69,15 @@ def processed_match(db, lot, product, expected):
             or detail.pieces_per_box != expected.pieces_per_box
             or detail.stock_yield_per_sheet != expected.stock_yield_per_sheet):
         return None
-    approved = product.id in profile.get("product_ids", []) or db.scalar(select(SemiFinishedLotAllowedProduct.id).where(
-        SemiFinishedLotAllowedProduct.inventory_lot_id == lot.id,
-        SemiFinishedLotAllowedProduct.product_id == product.id)) is not None
+    approved = product.id in profile.get("product_ids", [])
+    if not approved:
+        if summary_scope_active(db):
+            approved = lot.id in allowed_lot_ids_for_product(db, product.id)
+        else:
+            # Reservation and other ordinary callers keep their fresh point read.
+            approved = db.scalar(select(SemiFinishedLotAllowedProduct.id).where(
+                SemiFinishedLotAllowedProduct.inventory_lot_id == lot.id,
+                SemiFinishedLotAllowedProduct.product_id == product.id)) is not None
     # Blank die-cut sheets can serve different printed products using the same registered mold.
     mold = db.get(MoldTool, profile["mold_tool_id"]) if profile.get("mold_tool_id") else None
     if mold and profile.get("mold_version") is not None and (not mold.is_active or profile["mold_version"] != mold.version):

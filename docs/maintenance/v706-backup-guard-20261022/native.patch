@@ -1,0 +1,83 @@
+--- native.py.before-ca3ce9c4
++++ native.py-2366c320
+@@ -81 +81,3 @@
+-            or v.get('minimum_free_bytes') not in (150 * 10**9, 200 * 10**9)):
++            or v.get('minimum_free_bytes') not in (150 * 10**9, 200 * 10**9)
++            or v.get('backup_minimum_free_bytes') != 150 * 10**9
++            or v.get('preserve_formal_backups') is not True):
+@@ -290,0 +293,2 @@
++    # Complete business backups never belong to automatic housekeeping.
++    # Missing historical pins remain explicit warnings and protect program originals.
+@@ -294 +298 @@
+-        protected=h in protected_hashes or str(p) in paths or str(p)==state.get('update_backup')
++        protected=True  # Formal cipher rotation requires a separate reviewed operation.
+@@ -339,0 +344 @@
++                missing_owner_preserved_sha256=sorted((set(state.get('owner_preserved_backup_sha256', [])) | set(settings.get('owner_preserved_backup_sha256', []))) - {r['sha256'] for r in backups}),
+@@ -350,0 +356,39 @@
++
++
++def backup_workspace_budget(shared, *, kind):
++    """Conservative temporary-space upper bound; never substitute cleanup target.
++
++    Six DB/WAL-sized allocations cover snapshot, raw/encrypted/readback ZIP,
++    verified extraction and durable output. Paired objects reserve all originals
++    as new plus the largest encrypt/readback pair. No reuse discount is assumed.
++    """
++    from desktop_assistant import data_recovery
++    shared = Path(shared)
++    db = shared / data_recovery.DATABASE
++    if db.is_symlink() or not db.is_file():
++        raise ValueError('Snapshot source must be a real database file')
++    db_bytes = db.stat().st_size
++    wal = db.with_name(db.name + '-wal')
++    if wal.exists():
++        if wal.is_symlink() or not wal.is_file():
++            raise ValueError('Unsafe snapshot WAL')
++        db_bytes += wal.stat().st_size
++    files = file_points.fingerprint(shared)
++    amounts = [v[2] for v in files.values()]
++    total = sum(amounts)
++    largest = max(amounts, default=0)
++    if kind not in ('database', 'data'):
++        raise ValueError('Unknown snapshot kind')
++    workspace = (6 * db_bytes + (2 * total + 2 * largest if kind == 'database' else 6 * total)
++                 + 1024**3 + 16 * 1024**2)
++    return dict(database_and_wal_bytes=db_bytes, business_file_count=len(amounts),
++                business_file_bytes=total, temporary_budget_bytes=workspace)
++
++
++def online_rotation_candidates(points, *, settings, keep):
++    pins = settings.get('owner_preserved_online_point_sha256', [])
++    if (not isinstance(pins, list) or len(pins) > 128
++            or any(not isinstance(h, str) or not policy.IDENTITY.fullmatch(h) for h in pins)):
++        raise ValueError('Online point preservation pins invalid')
++    return [p for p in policy.point_retirements(points, keep=keep, new_verified=True)
++            if p['sha256'] not in pins]
+@@ -405,2 +449,4 @@
+-                    if shutil.disk_usage(ROOT).free < settings['minimum_free_bytes']+(10 if kind=='data' else 1)*1024**3:
+-                        results.append({'kind':kind, 'status':'insufficient-workspace'})
++                    budget = backup_workspace_budget(ROOT/'shared', kind=kind)
++                    required = settings['backup_minimum_free_bytes'] + budget['temporary_budget_bytes']
++                    if shutil.disk_usage(ROOT).free < required:
++                        results.append({'kind':kind, 'status':'insufficient-workspace', 'budget':budget, 'required_free_bytes':required})
+@@ -433,2 +479,2 @@
+-                        for old in policy.point_retirements([p for p in completed_points() if p['kind']==kind],
+-                                                            keep=keep, new_verified=True):
++                        for old in online_rotation_candidates([p for p in completed_points() if p['kind']==kind],
++                                                             settings=settings, keep=keep):
+@@ -444 +490 @@
+-                                        'incremental':incremental})
++                                        'incremental':incremental, 'budget':budget, 'reserve_bytes':settings['backup_minimum_free_bytes']})
+@@ -670 +716,3 @@
+-            unknown_backup=False
++            missing = proof.get('missing_owner_preserved_sha256', [])
++            report['missing_owner_preserved_sha256'] = missing
++            unknown_backup=bool(missing)
+@@ -672,5 +720,2 @@
+-                if not row['protected'] and row['recognized']:
+-                    p=Path(row['path']);unchanged();assert_idle(p,allow_unrelated_inaccessible_file=True)
+-                    if policy.digest(p)!=row['sha256']:raise ValueError('Predecessor cipher changed')
+-                    if settings['apply_cleanup']: policy.unlink_verified(p,row['identity'])
+-                    report['removed' if settings['apply_cleanup'] else 'planned'].append({'path':str(p),'kind':'authenticated-backup-predecessor'})
++                if not row['protected']:
++                    raise ValueError('Automatic deletion of formal backups is forbidden')

@@ -900,6 +900,25 @@ def _pdf_preview_safety_states(draft: dict) -> dict:
     }
 
 
+def _jushengda_review_hash(value) -> str:
+    """Bind manually checked order facts, independently of inventory/UI fields."""
+    data = value if isinstance(value, dict) else value.model_dump()
+    def number(value):
+        return str(Decimal(str(value)).normalize())
+    facts = {
+        "customer_po": str(data.get("customer_po") or "").strip(),
+        "order_date": str(data.get("order_date") or ""),
+        "delivery_date": str(data.get("delivery_date") or ""),
+        "items": [{
+            "product_id": item.get("matched_product_id", item.get("product_id")),
+            "quantity": number(item.get("quantity")),
+            "unit_price": number(item.get("unit_price")),
+            "production_notes": str(item.get("production_notes") or "").strip(),
+        } for item in data.get("items", [])],
+    }
+    return hashlib.sha256(json.dumps(facts, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
 def _encode_pdf_preview_safety_token(
     draft: dict,
     user: User,
@@ -922,6 +941,8 @@ def _encode_pdf_preview_safety_token(
         "iat": now,
         "exp": now + timedelta(minutes=PDF_PREVIEW_SAFETY_TOKEN_TTL_MINUTES),
     }
+    if claims.get("source_template") == "jushengda_purchase_v1" and states.get("integrity_status") == "manual_confirmed":
+        claims["manual_facts_hash"] = states.get("manual_facts_hash") if "manual_facts_hash" in states else _jushengda_review_hash(draft)
     return jwt.encode(claims, load_settings().secret_key, algorithm="HS256")
 
 
@@ -1089,6 +1110,12 @@ def _validate_pdf_import_safety(
         )
 
     reasons: list[str] = []
+    if claims.get("source_template") == "jushengda_purchase_v1":
+        if claims.get("manual_facts_hash") != _jushengda_review_hash(payload):
+            raise HTTPException(status_code=409, detail={
+                "code": "PDF_MANUAL_FACTS_CHANGED",
+                "message": "客户单号、日期、产品、数量、单价或备注已变化，请重新对照原单核对。",
+            })
     if claims["recognition_status"] != "recognized":
         reasons.append(f"recognition_status={claims['recognition_status']}")
     if claims["customer_route_status"] != "locked":
@@ -5062,6 +5089,7 @@ def rematch_order_draft(
             "source_lines": trusted_claims["source_lines"],
             "source_template": trusted_claims.get("source_template"),
             "source_format": trusted_claims.get("source_format", "pdf"),
+            "manual_facts_hash": trusted_claims.get("manual_facts_hash"),
         },
     )
 
@@ -5102,6 +5130,17 @@ def rematch_manual_order_draft(
     if not isinstance(raw_items, list) or not 1 <= len(raw_items) <= 500:
         raise HTTPException(status_code=400, detail="按原 PDF 人工录入必须包含 1 至 500 条明细")
 
+    # The signed template identity survives manual review. Its missing-code
+    # safeguard must not disappear merely because an operator opens this mode.
+    jushengda_review = trusted_claims.get("source_template") == "jushengda_purchase_v1"
+    if jushengda_review:
+        try:
+            checked_order_date = date.fromisoformat(str(payload.draft.get("order_date") or ""))
+            checked_delivery_date = date.fromisoformat(str(payload.draft.get("delivery_date") or ""))
+            if checked_delivery_date < checked_order_date:
+                raise ValueError
+        except ValueError:
+            raise HTTPException(status_code=400, detail="下单日期或交货日期缺失、无效或顺序错误，请按原单填写后核对") from None
     manual_items: list[dict] = []
     for index, raw in enumerate(raw_items, start=1):
         if not isinstance(raw, dict):
@@ -5138,6 +5177,27 @@ def rematch_manual_order_draft(
                 "is_new_product": False,
             }
         )
+        if jushengda_review:
+            amount = raw.get("amount")
+            try:
+                price = Decimal(str(unit_price))
+                printed_amount = Decimal(str(amount))
+                if not price.is_finite() or not printed_amount.is_finite() or price <= 0 or printed_amount <= 0:
+                    raise ValueError
+                expected_amount = (quantity * price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                if printed_amount != expected_amount:
+                    raise ValueError
+            except (ArithmeticError, TypeError, ValueError):
+                raise HTTPException(status_code=400, detail=f"第{index}条原单金额缺失或与数量×含税单价不符，请核对后再确认") from None
+            manual_items[-1].update(
+                amount=str(printed_amount),
+                production_notes=str(raw.get("production_notes") or "").strip(),
+                raw_code_and_remark=str(raw.get("raw_code_and_remark") or "").strip(),
+                raw_lines=raw.get("raw_lines") if isinstance(raw.get("raw_lines"), list) else [],
+                raw_quantity=raw.get("raw_quantity"), raw_unit_price=raw.get("raw_unit_price"), raw_amount=raw.get("raw_amount"),
+                preserve_pdf_price=True,
+                manual_selected_product_id=raw.get("matched_product_id"),
+            )
 
     trusted_draft = {
         "source_name": trusted_claims["source_name"],
@@ -5157,6 +5217,14 @@ def rematch_manual_order_draft(
         "items": manual_items,
         "warnings": ["本草稿由操作员逐项对照原 PDF 人工录入，请在保存前再次核对。"],
     }
+    if jushengda_review:
+        trusted_draft.update(
+            template="jushengda_purchase_v1", source_format="jushengda_purchase",
+            customer_type="jushengda", notes=str(payload.draft.get("notes") or "").strip(),
+            order_date=checked_order_date.isoformat(), delivery_date=checked_delivery_date.isoformat(),
+        )
+        for field in ("customer_name_raw", "supplier_name_raw", "tax_rate", "currency"):
+            trusted_draft[field] = payload.draft.get(field)
     result = _match_pdf_preview_for_user(
         db,
         trusted_draft,

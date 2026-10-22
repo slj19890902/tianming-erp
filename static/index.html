@@ -7781,9 +7781,9 @@
                     <a v-if="draft.duplicate_order_id" class="btn small" :href="`/?page=orders&email_order=${draft.duplicate_order_id}`" target="_blank" rel="noopener">查看原订单</a>
                   </div>
                 </div>
-                <div v-if="!draft.manual_entry && (draft.recognition_status === 'failed' || !draft.items?.length)" class="panel" style="margin-bottom:10px;border-color:#93c5fd;background:#f8fbff">
+                <div v-if="!draft.manual_entry && (draft.recognition_status === 'failed' || !draft.items?.length || (draft.template === 'jushengda_purchase_v1' && draft.recognition_status === 'needs_confirmation'))" class="panel" style="margin-bottom:10px;border-color:#93c5fd;background:#f8fbff">
                   <strong>这份 PDF 可以按原单人工录入</strong>
-                  <div class="muted" style="margin:4px 0 8px">系统保留原 PDF 文件凭据；请人工填写客户单号和明细，再由系统匹配该客户的常用箱。</div>
+                  <div class="muted" style="margin:4px 0 8px">系统保留原 PDF 文件凭据和已提取明细；请对照原单核对客户单号、数量、单价和备注，再选择该客户的常用箱。</div>
                   <button class="btn primary small" type="button" :disabled="isImportDraftLocked(draft)" @click="startManualPdfDraft(draft)">按原 PDF 人工录入</button>
                 </div>
                 <div v-if="draft.manual_entry" class="notice" style="margin-bottom:10px;white-space:normal">
@@ -7962,7 +7962,7 @@
                         <span v-if="pdfFinishedInventoryExplicitlySkipped(item) && pdfInventoryBalanceHint(item)" class="status neutral">本行未抵扣</span>
                       </td>
                       <td v-if="canViewSalesAmounts"><input class="input compact-input" type="number" min="0" step="0.0001" v-model="item.unit_price" placeholder="待核对" @input="invalidateImportDraftConfirmation(draft);refreshPdfPriceConflict(item)" /><span v-if="item.price_conflict" class="status orange">价格变化<info-note>常用箱价格 {{unitPrice(item.price_conflict.product_default_price)}}，请核对本单价格。</info-note></span></td>
-                      <td v-if="canViewSalesAmounts"><strong>{{pdfItemAmount(item)}}</strong></td>
+                      <td v-if="canViewSalesAmounts"><template v-if="draft.template === 'jushengda_purchase_v1'"><label v-if="draft.manual_entry">原单金额<input class="input compact-input" type="number" min="0" step="0.01" v-model="item.amount" placeholder="原单金额" @input="invalidateImportDraftConfirmation(draft)" /></label><strong v-else>原单 {{item.amount ?? '待核对'}}</strong><div class="muted">计算 {{pdfItemAmount(item)}}</div></template><strong v-else>{{pdfItemAmount(item)}}</strong></td>
                       <td style="font-size:11px;white-space:normal" :title="pdfInventoryIssueText(item)">
                         <button v-if="item.matched_product_id && !item.is_new_product && !commonBoxReadiness(item).ready && canEditProducts && !isImportDraftLocked(draft)" type="button" class="status orange order-readiness-link" :disabled="orderContextOpening" @click.stop="openCommonBoxEditorFromPdf(draftIndex,item)">常用箱资料待完善</button><span v-else-if="pdfInventoryIssueText(item)" :class="['status',pdfInventoryDisplayState(item)==='exception'?'red':'orange']">{{ pdfInventoryIssueText(item) }}</span>
                         <span v-else class="muted">-</span>
@@ -8014,7 +8014,7 @@
                       </td>
                     </tr>
                     <!-- 多候选副行：只切换常用箱，不改写 PDF 存货编码 -->
-                    <tr v-if="draft._show_advanced_details && !item.is_new_product && item.product_candidates && item.product_candidates.length > 1" class="order-item-sub-row import-product-candidate-row">
+                    <tr v-if="draft._show_advanced_details && !item.is_new_product && item.product_candidates && (item.product_candidates.length > 1 || (draft.template === 'jushengda_purchase_v1' && item.product_candidates.length > 0))" class="order-item-sub-row import-product-candidate-row">
                       <td :colspan="pdfDraftColumnCount(draft)" style="padding:4px 6px 7px">
                         <div style="display:flex;gap:8px;align-items:center">
                           <label style="font-size:12px;font-weight:600;white-space:nowrap">匹配候选（只选择常用箱，不会改写 PDF 存货编码）</label>
@@ -34020,6 +34020,7 @@
             if (!draft?.items?.length) reasons.push("没有识别到明细。");
             if (draft?.duplicate_status === "duplicate_skipped") reasons.push("重复订单已跳过。");
             if (!["passed","manual_confirmed"].includes(draft?.integrity_check?.integrity_status)) reasons.push(draft?.manual_entry ? "请先核对并匹配人工录入明细。" : "订单文件识别完整性未通过或缺失，请重新识别并处理完整性异常。");
+            if (draft?.template === "jushengda_purchase_v1" && draft.manual_entry && draft.integrity_check?.integrity_status === "manual_confirmed" && draft._manual_review_facts !== this.manualPdfReviewFacts(draft)) reasons.push("原单字段已变化，请重新点击核对并匹配常用箱。");
             if (this.hasImportDraftQuantityReview(draft)) reasons.push("存在非整数数量，不能直接保存，请人工修改后再保存。");
             (draft?.items || []).forEach((item, index) => {
               const masterReason = this.importItemMasterBlockReason(item, index);
@@ -34066,6 +34067,9 @@
           invalidateImportDraftConfirmation(draft) {
             if (!draft || this.isImportDraftLocked(draft)) return;
             draft.confirmed = false;
+            if (draft.template === "jushengda_purchase_v1" && draft.manual_entry && draft.integrity_check?.integrity_status === "manual_confirmed" && draft._manual_review_facts !== this.manualPdfReviewFacts(draft)) {
+              draft.integrity_check = {...draft.integrity_check, integrity_status:"unknown"};
+            }
             if (draft._save_status === "failed") {
               draft._save_status = "idle";
               draft._save_message = "";
@@ -34117,6 +34121,10 @@
 	            this.syncOrderImportReminderVisibility(draft);
             this.reallocateAllDraftInventory();
           },
+          manualPdfReviewFacts(draft) {
+            return JSON.stringify({customer_po:String(draft.customer_po || "").trim(),order_date:draft.order_date,delivery_date:draft.delivery_date,customer_id:draft.matched_customer_id,
+              items:(draft.items || []).map(item => ({product_id:item.matched_product_id,quantity:String(item.quantity),unit_price:String(item.unit_price),amount:String(item.amount),production_notes:String(item.production_notes || "").trim()}))});
+          },
           manualPdfDraftItem(lineNo) {
             return this.preparePdfImportItem({
               line_no:lineNo,
@@ -34140,7 +34148,7 @@
             draft.confirmed = false;
             draft._manual_matching = false;
             draft._show_advanced_details = true;
-            draft.items = [this.manualPdfDraftItem(1)];
+            draft.items = draft.items?.length ? draft.items.map(item => this.preparePdfImportItem({...item})) : [this.manualPdfDraftItem(1)];
             draft.integrity_check = {...(draft.integrity_check || {}),integrity_status:"failed"};
           },
           addManualPdfDraftItem(draft) {
@@ -34182,6 +34190,7 @@
                 items:(data.items || []).map(item => this.preparePdfImportItem(item)),
               });
               const refreshed = this.orderImportDrafts[index];
+              if (refreshed.template === "jushengda_purchase_v1") refreshed._manual_review_facts = this.manualPdfReviewFacts(refreshed);
               await this.loadOrderImportReminderForDraft(refreshed,{force:true});
               await Promise.all(refreshed.items.filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,refreshed.matched_customer_id)));
               this.showToast("人工明细已核对，请确认未匹配行、数量和单价");

@@ -1,0 +1,28 @@
+{
+  "evidence": "Original PDF and rendered page visually reviewed on 2026-10-22. Text fixture preserves the actual header/table syntax; contact data, delivery address and terms are synthetic. Original PDF stays outside Git.",
+  "customer_name": "苏州聚晟达电子材料科技有限公司",
+  "supplier_name": "苏州工业园区天美德风包装有限公司",
+  "customer_po": "JSD20261022001",
+  "order_date": "2026-10-22",
+  "delivery_date": "2026-10-27",
+  "tax_rate": "13",
+  "currency": "RMB",
+  "item_count": 1,
+  "items": [
+    {
+      "line_no": 1,
+      "description": "1020*620*960MM",
+      "quantity": "90",
+      "unit": "PCS",
+      "unit_price": "20.5",
+      "amount": "1845",
+      "product_code": "",
+      "source_tail": "20L包装"
+    }
+  ],
+  "source_total_amount": null,
+  "source_total_quantity": null,
+  "synthetic_delivery_note": "备注:20L包装送到测试收货点，请按原单联系收货。",
+  "integrity_status": "unknown",
+  "recognition_status": "needs_confirmation"
+}

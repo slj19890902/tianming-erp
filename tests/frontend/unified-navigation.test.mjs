@@ -152,11 +152,60 @@ test('unknown commands and hidden menu targets cannot invoke arbitrary methods',
   for(const key of ['deleteAll','action:save','menu:permissions','warehouse:secret']) assert.equal(await s.execute(key),'denied');
   assert.equal(s.calls.length,0);
 });
-test('pending command blocks a second action until the first finishes', async () => {
+test('pending account command blocks a second action until the first finishes', async () => {
   let finish;
-  const s=setup({refreshCurrent:()=>new Promise(resolve=>{finish=resolve})});
-  s.connect(); s.command('action:refresh');
+  const s=setup({openChangePassword:()=>new Promise(resolve=>{finish=resolve})});
+  s.connect(); s.command('action:password');
   s.command('action:logout',{requestId:'22222222-2222-4222-8222-222222222222'});
   assert.equal(s.messages.at(-1).status,'busy');
   finish(); await flush(); assert.equal(s.calls.length,0);
+});
+
+test('page reads allow another navigation; real writes and recovery states still block without a modal',async()=>{
+ const s=setup({pageLoading:true});assert.equal(s.ui().busy,false);assert.equal(await s.execute('menu:workbench'),'done');
+ for(const state of [{dirty:true},{saving:true},{uncertain:true}]){
+  s.window.ERPFrontendReliability={state:()=>state};assert.equal(s.ui().busy,true);assert.equal(await s.execute('menu:workbench'),'busy');
+ }
+ s.window.ERPFrontendReliability={state:()=>({dirty:false,saving:false,uncertain:false})};s.window.erpMutationPending=()=>true;
+ assert.equal(s.ui().busy,true);assert.equal(await s.execute('action:refresh'),'busy');
+});
+test('slow read navigation is supersedable, unlike a pending account command',async()=>{
+ let finish;const s=setup({goMenu:()=>new Promise(r=>finish=r)});s.connect();s.command('menu:workbench');
+ s.command('action:refresh',{requestId:'22222222-2222-4222-8222-222222222222'});await flush();assert.deepEqual(s.calls,[['refreshCurrent']]);finish();await flush();
+});
+
+test('shell and legacy classify only the same supersedable navigation commands as reads',()=>{
+ const f=setup();
+ for(const key of ['action:refresh','page:products','menu:master','finance:current','warehouse:ledger','action:logout','action:password','ui:large','garbage']){
+  assert.equal(shellModule.exports.isReadCommand(key),f.window.ERPUnifiedNavigation.isReadCommand(key),key);
+ }
+});
+
+test('legacy uncertain drafts and held manual-sheet original requests block navigation without a visible modal',async()=>{
+ for(const overrides of [
+  {supplierRequisitionSaveState:{uncertain:true}}, {compositeRequisitionSaveState:{uncertain:true}},
+  {stockReplenishmentSaveState:{uncertain:true}}, {manualSheetPendingOperations:()=>[['1:original',{inFlight:false}]]},
+  {manualSheetParentControlsBlocked:()=>true}, {originalBusinessConfirmation:{visible:true}}
+ ]){
+  const f=setup(overrides);f.connect();assert.equal(f.ui().busy,true);assert.equal(await f.execute('menu:workbench'),'busy');
+  if(!overrides.originalBusinessConfirmation)assert.equal(f.messages.findLast(m=>m.type==='tianming-formal-navigation-v1').draftOpen,true);
+  assert.equal(await f.execute('ui:large'),'done');
+ }
+});
+
+test('actual shell command handler permits display adjustment during a form and replaces slow reads',()=>{
+ const app=readFileSync(new URL('../../frontend-v2/src/App.vue',import.meta.url),'utf8');
+ const handler=app.slice(app.indexOf('function runCommand('),app.indexOf('\nfunction accountAction('));
+ const sent=[],cleared=[],timers=[];
+ const state={shellUi:{value:{actorId:1,generation:3,uiModeSaving:false}},toolsBusy:{value:true},exclusiveCommandPending:{value:false},pendingCommand:{value:null},commandTimer:5,
+  formalFrame:()=>({postMessage:m=>sent.push(m)}),navigationRequestId:()=>String(sent.length),location:{origin:'fixture'},clearTimeout:id=>cleared.push(id),setTimeout:fn=>{timers.push(fn);return timers.length},ElMessage:{warning(){}}};
+ runInNewContext(ts.transpileModule(handler,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,state);
+ state.runCommand('ui:large');assert.equal(sent[0].key,'ui:large');
+ state.runCommand('menu:workbench');assert.equal(sent.length,1);
+ state.toolsBusy.value=false;state.runCommand('action:refresh');state.runCommand('menu:workbench');assert.equal(sent.length,3);assert.equal(state.pendingCommand.value.key,'menu:workbench');assert.deepEqual(cleared,[5,1,2]);
+ state.exclusiveCommandPending.value=true;state.runCommand('ui:standard');assert.equal(sent.length,3);
+});
+
+test('known completed draft does not permanently lock navigation after closing its form',()=>{
+ const f=setup({stockReplenishmentSaveState:{committed:true,uncertain:false,saving:false}});assert.equal(f.ui().busy,false);
 });

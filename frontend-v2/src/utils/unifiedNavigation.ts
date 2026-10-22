@@ -36,3 +36,8 @@ export function parseShellUi(value: unknown, actorId: number | undefined): Shell
     }))) return null
   return data
 }
+
+/** Reads may be superseded; the formal workspace still gates drafts and writes. */
+export function isReadCommand(key: string): boolean {
+  return key === 'action:refresh' || /^(menu|page|warehouse|finance):/.test(key)
+}

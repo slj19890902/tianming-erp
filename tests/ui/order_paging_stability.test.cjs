@@ -13,7 +13,7 @@ function fixture(){
     tHead:{getBoundingClientRect:()=>({height:36})}};
   const panel={closest:()=>main,querySelector:()=>table,getBoundingClientRect:()=>({bottom:650}),parentElement:main,nextElementSibling:null};
   const browser={innerWidth:1920,innerHeight:800,addEventListener:(name,fn)=>events[name]=fn};
-  const sandbox={window:browser,document:{querySelector:()=>null,querySelectorAll:()=>[table]},getComputedStyle:()=>({}),setTimeout:fn=>{events.timer=fn;return 1;},clearTimeout:()=>{}};
+  const sandbox={window:browser,document:{querySelector:()=>null,querySelectorAll:()=>[table]},getComputedStyle:()=>({}),setTimeout:fn=>{events.timer=fn;return 1;},clearTimeout:()=>{},requestAnimationFrame:fn=>{events.frame=fn;return 1;},cancelAnimationFrame:()=>{}};
   vm.runInNewContext(fs.readFileSync(path.join(root,'static/ui/workspace.js'),'utf8'),sandbox);
   browser.ERPWorkspace.install({mixin:m=>mixins.push(m),component:()=>{}});
   const html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');

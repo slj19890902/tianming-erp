@@ -1,6 +1,18 @@
 (function (global) {
   'use strict';
+  const isReadCommand = key => key === 'action:refresh' || /^(menu|page|warehouse|finance):/.test(key);
   const allowedPage = (vm, page) => typeof vm.pageAllowed === 'function' && vm.pageAllowed(page);
+  function protectionState(vm) {
+    const recovery = global.ERPFrontendReliability?.state?.() || {};
+    const drafts = [vm.supplierRequisitionSaveState, vm.compositeRequisitionSaveState, vm.stockReplenishmentSaveState].filter(Boolean);
+    const manual = vm.manualSheetPendingOperations?.() || [];
+    return {
+      dirty:!!recovery.dirty,
+      saving:!!(recovery.saving || global.erpMutationPending?.() || drafts.some(state => state.saving)
+        || vm.manualSheetParentControlsBlocked?.() || manual.some(([,request]) => request.inFlight)),
+      uncertain:!!(recovery.uncertain || drafts.some(state => state.uncertain || state.outcomeUncertain) || manual.length),
+    };
+  }
   function describe(vm) {
     const items = [];
     const add = (key, label, active, more = false) => items.push({key, label, active:!!active, more});
@@ -28,6 +40,8 @@
       const current = (vm.menus || []).find(menu => vm.isMenuActive(menu.key));
       if (current) { label = current.label; add('menu:'+current.key,current.label,true); }
     }
+    const recovery = protectionState(vm);
+    const protectedWork = recovery.dirty || recovery.saving || recovery.uncertain;
     const admin = ['admin','boss'].includes(vm.user?.role);
     const metrics = vm.warehouseTwinMetrics || {};
     return { label, flow, items, actorId:vm.user.id, generation:vm.authGeneration,
@@ -35,7 +49,7 @@
       role:vm.roleLabel(vm.user.role), uiMode:vm.uiMode === 'large' ? 'large' : 'standard',
       uiModeSaving:!!vm.uiModeSaving, canApprove:!!(admin || vm.canSubmitBusinessRequest),
       approvalLabel:admin ? '审批中心' : '业务申请',
-      busy:!!(vm.loading || vm.modal?.type || vm.productionEntry || vm.stockPrepDialog || vm.stockAssemblyDialog || vm.warehouseNavigating),
+      busy:!!(protectedWork || vm.originalBusinessConfirmation?.visible || vm.loading || vm.modal?.type || vm.productionEntry || vm.stockPrepDialog || vm.stockAssemblyDialog || vm.warehouseNavigating),
       overview:vm.activePage === 'warehouse' && vm.warehouseView === 'map' ? {
         floor:String(vm.warehouseTwinFloor || ''),
         lots:Number(metrics.active_lots || 0), occupied:Number(metrics.occupied_locations || 0),
@@ -71,5 +85,5 @@
     } else return 'denied';
     return 'done';
   }
-  global.ERPUnifiedNavigation = {describe, execute};
+  global.ERPUnifiedNavigation = {describe, execute, isReadCommand, protectionState};
 })(window);

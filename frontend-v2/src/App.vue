@@ -9,7 +9,7 @@ import { useAuthStore } from './stores/auth'
 import { authApi } from './api/client'
 import { currentFormalFrame } from './utils/formalOrderEntry'
 import FormalWorkspaceView from './views/FormalWorkspaceView.vue'
-import { navigationRequestId, parseShellUi, type ShellUi } from './utils/unifiedNavigation'
+import { navigationRequestId, parseShellUi, isReadCommand, type ShellUi } from './utils/unifiedNavigation'
 
 const router = useRouter()
 const route = useRoute()
@@ -64,7 +64,8 @@ let commandTimer: ReturnType<typeof setTimeout> | undefined
 const primaryItems = computed(() => shellUi.value?.items.filter(item => !item.more) || [])
 const moreItems = computed(() => shellUi.value?.items.filter(item => item.more) || [])
 const moreActive = computed(() => moreItems.value.find(item => item.active))
-const toolsBusy = computed(() => !!pendingCommand.value || (isFormalWorkspace.value && (!shellUi.value || shellUi.value.busy)))
+const exclusiveCommandPending = computed(() => !!pendingCommand.value && !isReadCommand(pendingCommand.value.key))
+const toolsBusy = computed(() => exclusiveCommandPending.value || (isFormalWorkspace.value && (!shellUi.value || shellUi.value.busy)))
 const toolsHint = computed(() => shellUi.value?.busy ? '请先完成或关闭当前表单，等待当前操作完成' : '')
 const accountName = computed(() => shellUi.value?.name || authStore.displayName())
 const accountRole = computed(() => shellUi.value?.role || ({ admin: '管理员', boss: '老板', sales: '业务', finance: '财务', workshop: '车间', delivery_picker: '送货拿货员' }[authStore.user?.role || ''] || ''))
@@ -117,8 +118,10 @@ onBeforeUnmount(() => { window.removeEventListener('message', receiveFormalNavig
 function runCommand(key: string) {
   const ui = shellUi.value
   const frame = formalFrame()
-  if (!ui || !frame || pendingCommand.value) return
+  const displayMode = key === 'ui:standard' || key === 'ui:large'
+  if (!ui || !frame || (displayMode ? exclusiveCommandPending.value || ui.uiModeSaving : toolsBusy.value)) return
   const requestId = navigationRequestId()
+  clearTimeout(commandTimer)
   pendingCommand.value = { key, requestId }
   frame.postMessage({ type: 'tianming-unified-command-v1', key, requestId, actorId: ui.actorId, generation: ui.generation }, location.origin)
   commandTimer = setTimeout(() => {
@@ -239,7 +242,7 @@ onMounted(() => {
           <template v-for="(item, index) in primaryItems" :key="item.key">
             <span v-if="shellUi?.flow && index" class="flow-arrow" aria-hidden="true">→</span>
             <button type="button" class="module-link" :class="{ active: item.active }" :aria-current="item.active ? 'page' : undefined"
-              :disabled="toolsBusy" :title="toolsHint" @click="runCommand(item.key)">{{ item.label }}</button>
+              :disabled="toolsBusy" :aria-busy="pendingCommand?.key === item.key" :title="toolsHint" @click="runCommand(item.key)">{{ item.label }}<span v-if="pendingCommand?.key === item.key" class="command-pending" aria-hidden="true">…</span></button>
           </template>
           <el-dropdown v-if="moreItems.length" trigger="click" @command="runCommand">
             <button type="button" class="module-link more-link" :class="{ active: !!moreActive }" :disabled="toolsBusy" :title="toolsHint">
@@ -310,13 +313,13 @@ onMounted(() => {
             <div v-if="shellUi" class="display-mode" role="group" aria-label="显示模式">
               <span>显示模式</span><div class="mode-options">
                 <button v-for="mode in (['standard', 'large'] as const)" :key="mode" type="button" :aria-pressed="shellUi.uiMode === mode"
-                  :disabled="!!pendingCommand || shellUi.uiModeSaving" @click="runCommand('ui:' + mode)">{{ mode === 'standard' ? '标准' : '大字' }}</button>
+                  :disabled="exclusiveCommandPending || shellUi.uiModeSaving" @click="runCommand('ui:' + mode)">{{ mode === 'standard' ? '标准' : '大字' }}</button>
               </div>
             </div>
             <div class="account-actions" :title="toolsHint">
               <a v-if="shellUi?.canApprove" href="/static/business-approvals.html" target="_blank" rel="noopener noreferrer"
                 :aria-disabled="toolsBusy" :tabindex="toolsBusy ? -1 : 0" title="在新标签打开，保留当前工作区" @click="openApprovalLink"><el-icon><Checked /></el-icon>{{ shellUi.approvalLabel }}</a>
-              <button v-if="shellUi" type="button" :disabled="toolsBusy" @click="accountAction('action:refresh')"><el-icon><Refresh /></el-icon>刷新</button>
+              <button v-if="shellUi" type="button" :disabled="toolsBusy" :aria-busy="pendingCommand?.key === 'action:refresh'" @click="accountAction('action:refresh')"><el-icon><Refresh /></el-icon>{{ pendingCommand?.key === 'action:refresh' ? '刷新中…' : '刷新' }}</button>
               <button type="button" :disabled="toolsBusy" @click="accountAction('action:password')"><el-icon><Lock /></el-icon>修改密码</button>
               <button type="button" class="logout-action" :disabled="toolsBusy" @click="accountAction('action:logout')"><el-icon><SwitchButton /></el-icon>退出登录</button>
             </div>

@@ -10,7 +10,7 @@ import json
 from uuid import uuid4
 
 from sqlalchemy import and_, case, func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, contains_eager, selectinload
 
 from app.core.time_contract import (
     beijing_now_naive,
@@ -1051,6 +1051,7 @@ def customer_board_preparation_coverage(
         pending_items = db.scalars(select(StockReplenishmentOrderItem)
             .join(StockReplenishmentOrder,
                   StockReplenishmentOrder.id == StockReplenishmentOrderItem.replenishment_order_id)
+            .options(contains_eager(StockReplenishmentOrderItem.order))
             .where(StockReplenishmentOrder.status.in_(('draft', 'confirmed', 'partially_stocked')),
                    ~active_stock_purchase_clause(),
                    StockReplenishmentOrder.source_type == 'stock_warning',
@@ -1076,6 +1077,7 @@ def customer_board_preparation_coverage(
                 StockReplenishmentOrder.id
                 == StockReplenishmentOrderItem.replenishment_order_id,
             )
+            .options(contains_eager(StockReplenishmentOrderItem.order))
             .where(
                 StockReplenishmentOrder.source_type == "stock_warning",
                 active_stock_purchase_clause(),

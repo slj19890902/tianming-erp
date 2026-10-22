@@ -16,7 +16,7 @@
 
 ## 隔离与停止条件
 
-工作树 `/Users/kimiyf/ERP-Migration/delivery-fulfillment-facts-20261022`，分支`codex/delivery-fulfillment-facts-20261022`，主任务指定基线8e1acb82，非app管理。与历史闭合批候选完全分开。不能部署、操作正式库、受保护认证、启动/重启服务；不抢v714迁移head。模型DDL只作待整合迁移候选，正式revision由统一整合确认；不得与已发布head并行上线。最终 rebase 和迁移需等待 v714 源码及正式回执。
+工作树 `/Users/kimiyf/ERP-Migration/delivery-fulfillment-facts-20261022`，分支`codex/delivery-fulfillment-facts-20261022`，最初指定基线8e1acb82，现已rebase至主任务提供的v714源码c6af868826b2b2764949f1039e2b840c7407a5f7，非app管理。与历史闭合批候选完全分开。不能部署、操作正式库、受保护认证、启动/重启服务；不抢v714迁移head。模型DDL只作待整合迁移候选，正式revision由统一整合确认；不得与已发布head并行上线。正式迁移衔接仍需等待v714正式回执并核对真实唯一head。
 
 如不能保证完整投影、不重复对账及旧锁不变，停在证据设计，不开放提交。缺价批的9867/227仍只订单报料；本任务不涉及其收料，也不涉及9719/98增量10的库存/金额修复。
 

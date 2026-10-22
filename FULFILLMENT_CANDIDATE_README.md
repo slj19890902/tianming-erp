@@ -1,5 +1,7 @@
 # 已开票送货实际交付事实候选
 
-独立git worktree，未受Codex app管理；不要使用archive_worktree清理。基线8e1acb82由主任务指定。范围见docs/tasks/DELIVERY_FULFILLMENT_FACTS_20261022.md；与只读historical-closed-batch分支无继承关系。
+独立git worktree，未受Codex app管理；不要使用archive_worktree清理。最初基线8e1acb82，现已按主任务指定rebase至v714源码c6af868826b2b2764949f1039e2b840c7407a5f7。源码对齐不代表正式v714已经切换。范围见docs/tasks/DELIVERY_FULFILLMENT_FACTS_20261022.md；与只读historical-closed-batch分支无继承关系。
 
 禁止正式写入/部署，不属于v714三项前端修复；迁移编号及接入必须统一评审。保留所有现有普通送货409锁和权限。仅追加数量等值的实际交付批次，原票据、财务和库存成本不改。
+
+后端、读取投影、经典UI预览审批入口、V2分批显示和旧reader门禁为候选内容；没有Alembic revision或正式迁移验收。禁止单独部署读取投影到未迁移数据库。正式变更前须另行承接真实唯一head、完成空表升降升与非空拒绝降级、最新副本原事实比较及签名运行时验证。

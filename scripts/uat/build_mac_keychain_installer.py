@@ -10,7 +10,7 @@ import zipfile
 
 FILES = ('app/__init__.py', 'app/core/__init__.py', 'app/core/mac_keychain.py',
          'app/core/mac_service_keychain.py', 'desktop_assistant/__init__.py',
-         'desktop_assistant/mac_service_identity.py', 'desktop_assistant/mac_keychain_install.py',
+         'desktop_assistant/mac_publisher_trust.py', 'desktop_assistant/mac_service_identity.py', 'desktop_assistant/mac_keychain_install.py',
          'desktop_assistant/mac_release_publish.py', 'desktop_assistant/mac_system_service.py',
          'desktop_assistant/mac_archive_contract.py', 'desktop_assistant/mac_archive_install.py',
          'desktop_assistant/mac_mount.py', 'desktop_assistant/factory_target_contract.py',
@@ -19,7 +19,9 @@ FILES = ('app/__init__.py', 'app/core/__init__.py', 'app/core/mac_keychain.py',
          'desktop_assistant/mac_factory_activation_install.py', 'desktop_assistant/home_process.py',
          'desktop_assistant/mac_smb_stream_contract.py',
          'desktop_assistant/mac_smb_stream_runtime_contract.py',
-         'desktop_assistant/mac_smb_stream_setup.py')
+         'desktop_assistant/mac_smb_stream_setup.py',
+         'desktop_assistant/uat_export_contract.py', 'desktop_assistant/uat_export_sanitize.py',
+         'desktop_assistant/mac_uat_export.py')
 
 
 def build(repo, commit, output):

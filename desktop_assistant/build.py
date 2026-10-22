@@ -297,6 +297,10 @@ def main():
                                                     'factory_request_v1': 1, 'factory_audit_v1': 1,
                                                     'factory_activation_v1': 1, 'factory_execution_v1': 1}
         runtime_metadata['runtime_capabilities'].update(current_protocols)
+        from desktop_assistant.uat_export_contract import FILES as export_files, CAPABILITY as export_capability
+        if not export_files <= sources.keys():
+            raise ValueError('固定 UAT 导出协议源码不完整')
+        runtime_metadata['runtime_capabilities'][export_capability] = 1
         local_update_files = {'desktop_assistant/local_code_update.py',
                               'desktop_assistant/service_local_code_update_entry.py'}
         if local_update_files <= sources.keys():

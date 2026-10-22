@@ -29,8 +29,11 @@ STATE_LIMIT = 16 * 1024**2
 
 
 def authenticated(request, script, executable):
-    if (not isinstance(request, dict) or set(request) != {'action','package_sha256','challenge',
-            'context_sha256','publisher_sha256','registry_sha256'} or request['action'] not in system.MANAGE_ACTIONS
+    from desktop_assistant import uat_export_contract as export
+    is_export = isinstance(request, dict) and request.get('action') in export.ACTIONS
+    if is_export: export.validate_request(request)
+    if (not isinstance(request, dict) or (not is_export and set(request) != {'action','package_sha256','challenge',
+            'context_sha256','publisher_sha256','registry_sha256'}) or (not is_export and request['action'] not in system.MANAGE_ACTIONS)
             or any(not system._sha(request[k]) for k in request if k.endswith('_sha256'))
             or not isinstance(request['challenge'], str) or not re.fullmatch('[0-9a-f]{32}', request['challenge'])
             or sys.platform != 'darwin' or not sys.flags.isolated or not sys.dont_write_bytecode
@@ -45,6 +48,7 @@ def authenticated(request, script, executable):
         raise ValueError('专用管理本机批准身份已经变化')
     tree, manifest = published.resolve(ROOT, request['package_sha256'], meta['public'], kind='migration')
     system.require_management(manifest)
+    if is_export: export.require_capability(manifest)
     if (Path(script).resolve() != tree/system.MANAGE_ENTRY or Path(__file__).resolve() != tree/system.MANAGE_MODULE
             or Path(executable).resolve() != tree/'runtime/bin/python3.12'):
         raise ValueError('专用管理不属于正在执行的批准程序')
@@ -235,6 +239,10 @@ def _stream_backup(request,context,public):
 
 def run(request, *, script, executable):
     context, public = authenticated(request, script, executable)
+    from desktop_assistant import uat_export_contract as export
+    if request['action'] in export.ACTIONS:
+        from desktop_assistant.uat_export import run as run_export
+        return run_export(request, context, public)
     if request['action']=='backup':
         result=_stream_backup(request,context,public)
         if result is not None:return result

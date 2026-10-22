@@ -2461,7 +2461,10 @@ def get_product(
     from app.models.shared_finished_stock import SharedFinishedMember
     from app.services.shared_product_master import receipt
     member=db.get(SharedFinishedMember,product.id)
-    result['shared_manufacturing_enabled']=bool(member and receipt(db,member.group_id))
+    shared_policy = receipt(db, member.group_id) if member else None
+    result['shared_manufacturing_enabled']=bool(shared_policy)
+    # Policy marker only: group/member availability remains separately governed.
+    result['shared_catalog_policy_enabled']=bool(shared_policy and shared_policy.get('full_catalog'))
     return result
 
 
@@ -2808,6 +2811,35 @@ def create_product(
     return _create_product(payload, db, user)
 
 
+def _product_integrity_detail(error: IntegrityError) -> str:
+    """Do not describe an unrelated database guard as a duplicate product."""
+    original = getattr(error, "orig", None)
+    constraint = getattr(getattr(original, "diag", None), "constraint_name", None)
+    message = " ".join(str(original or "").lower().split())
+    identity_constraints = {
+        "uq_products_customer_material_code_name",
+        "uq_products_customer_product_code_name",
+    }
+    identity_columns = (
+        "products.customer_id, products.customer_material_code, products.product_name",
+        "products.customer_id, products.product_code, products.product_name",
+    )
+    if constraint in identity_constraints or any(
+        message == f"unique constraint failed: {columns}" for columns in identity_columns
+    ):
+        return "同一客户下，存货编码与产品名称的组合不能重复"
+    if constraint == "ck_products_external_supply_profile" or message == (
+        "check constraint failed: ck_products_external_supply_profile"
+    ):
+        return "常用箱外购供货资料约束冲突，本次修改未保存；请联系管理员核对供货资料"
+    if constraint == "uq_master_data_object_versions_object_version" or message == (
+        "unique constraint failed: master_data_object_versions.object_type, "
+        "master_data_object_versions.object_id, master_data_object_versions.version"
+    ):
+        return "常用箱版本记录冲突，本次修改未保存；请刷新后重试，仍失败时联系管理员核对版本记录"
+    return "常用箱保存遇到数据约束冲突，本次修改未保存；请联系管理员核对错误记录"
+
+
 def _create_product(payload, db, user, *, commit=True) -> dict:
     from app.services.production_variants import validate_references as validate_variants
     validate_variants(db, payload.customer_id, payload.production_variants)
@@ -2881,7 +2913,7 @@ def _create_product(payload, db, user, *, commit=True) -> dict:
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail="同一客户下，存货编码与产品名称的组合不能重复",
+            detail=_product_integrity_detail(error),
         ) from error
     except Exception:
         db.rollback()
@@ -2945,7 +2977,7 @@ def _update_product(product_id, payload, db, user, *, commit=True) -> dict:
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail="同一客户下，存货编码与产品名称的组合不能重复",
+            detail=_product_integrity_detail(error),
         ) from error
     except Exception:
         db.rollback()

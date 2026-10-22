@@ -182,6 +182,21 @@ def test_secret_repeated_in_business_data_refuses_instead_of_editing_business(tm
     assert not (tmp_path/'clean.db').exists()
 
 
+@pytest.mark.parametrize('as_blob', [False, True])
+def test_known_secret_split_across_overflow_pages_is_also_rejected(tmp_path, as_blob):
+    source = snapshot(tmp_path)
+    secret = 'SYNTHETIC_LONG_ENCRYPTED_CREDENTIAL_' * 1000
+    execute(source, 'DROP TRIGGER email_protected')
+    execute(source, 'UPDATE email_intake_settings SET encrypted_secret=?', (secret,))
+    execute(source, 'UPDATE orders SET notes=?', (secret.encode() if as_blob else secret,))
+    before = source.read_bytes()
+    assert secret.encode() not in before  # SQLite page headers split this value.
+    with pytest.raises(ValueError, match='retains original credential'):
+        subject.sanitize(source, tmp_path/'clean.db')
+    assert source.read_bytes() == before
+    assert not (tmp_path/'clean.db').exists()
+
+
 def test_verifier_rejects_unstripped_credentials_and_noncompacted_files(tmp_path):
     source = snapshot(tmp_path)
     with pytest.raises(ValueError, match='credential state'):

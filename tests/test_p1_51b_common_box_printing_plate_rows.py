@@ -170,7 +170,12 @@ def plate_rows_app(tmp_path_factory: pytest.TempPathFactory) -> FastAPI:
     from app.models.printing_plate import PrintingPlate
     from app.models.user import User
 
-    os.environ["ERP_SECRET_KEY"] = "p1-51b-printing-plate-rows-tests-only"
+    if os.getenv("ERP_UAT_ROOT"):
+        from app.core.uat_isolation import validate_uat_environment
+
+        validate_uat_environment()
+    else:
+        os.environ["ERP_SECRET_KEY"] = "p1-51b-printing-plate-rows-tests-only"
     engine = create_sqlite_engine(
         tmp_path_factory.mktemp("p1-51b") / "p1-51b-printing-plate-rows.sqlite3"
     )

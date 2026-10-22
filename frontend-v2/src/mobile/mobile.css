@@ -1099,3 +1099,15 @@ body:has(.mobile-app) {
 .m-size-tolerance select { min-height: 48px; padding: 0 12px; font-size: 15px; border: 1px solid var(--m-line); border-radius: 8px; }
 .m-match { color: var(--m-green); font-size: 24px; }
 .m-received-range { font-size: 15px; margin: 12px 0; }
+
+/* Mobile 3.0: the same touch and reading rhythm as the standalone shell. */
+.mobile-app button, .mobile-app select { min-height: 44px; }
+.mobile-app select { font: inherit; border-radius: 10px; padding: 6px; }
+.m-workheading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:4px 0 18px; }
+.m-workheading h2 { font-size:23px; line-height:1.35; }
+.m-workheading p { color:var(--m-muted); margin:5px 0 0; }
+.m-appbar h1 { min-width:0; overflow-wrap:anywhere; }
+.m-brand { max-width:45%; overflow-wrap:anywhere; text-align:right; }
+.m-tabbar a.active { background:#e7f2ea; border-radius:12px; }
+.mobile-app .m-result-list { scroll-margin-top:16px; }
+@media (prefers-reduced-motion: reduce) { .mobile-app * { scroll-behavior:auto !important; } }

@@ -14,7 +14,8 @@ const pendingOrders = ref<number>(),
 const overview = ref<Overview | null>(null),
   margin = ref<Margin | null>(null),
   error = ref("");
-let generation = 0;
+let controller: AbortController | null = null;
+const loading = ref(false);
 const summaryAllowed = computed(
   () =>
     ["admin", "boss", "finance"].includes(auth.user?.role || "") &&
@@ -40,42 +41,43 @@ function count(key: string) {
   );
 }
 async function load() {
-  const token = ++generation;
+  controller?.abort();
+  controller = new AbortController();
+  const current = controller, shell = mobile.shell;
   error.value = "";
-  overview.value = null;
-  margin.value = null;
-  pendingOrders.value = undefined;
-  if (!mobile.shell) return;
-  try {
-    if (mobile.shell.management_summary_allowed) {
-      const response = await mobileApi.overview();
-      if (token === generation) overview.value = response;
-    }
-    if (ordersAllowed.value) {
-      const result = await mobileApi.unfulfilled();
-      if (token === generation) pendingOrders.value = result.groups[0]?.total;
-    }
-  } catch (e) {
-    if (token === generation) error.value = safeMessage(e);
-  }
-  // Follow the server's explicit cost entitlement. No financial request for employees.
-  if (summaryAllowed.value && mobile.shell?.delivery_margin_allowed) {
-    try {
-      const result = await mobileApi.margin();
-      if (token === generation) margin.value = result;
-    } catch (e) {
-      if (token === generation) error.value = safeMessage(e);
-    }
-  }
+  overview.value = null; margin.value = null; pendingOrders.value = undefined;
+  loading.value = !!shell;
+  if (!shell) return;
+  // Independent reads must not make employees wait for the management summary.
+  const reads: Promise<void>[] = [];
+  const read = async (work: () => Promise<void>) => {
+    try { await work(); }
+    catch (e) { if (!current.signal.aborted) error.value = safeMessage(e); }
+  };
+  if (shell.management_summary_allowed) reads.push(read(async () => {
+    const value = await mobileApi.overview(current.signal);
+    if (!current.signal.aborted) overview.value = value;
+  }));
+  if (shell.search_categories?.includes("orders")) reads.push(read(async () => {
+    const value = await mobileApi.unfulfilled(1, current.signal);
+    if (!current.signal.aborted) pendingOrders.value = value.groups[0]?.total;
+  }));
+  if (summaryAllowed.value && shell.delivery_margin_allowed) reads.push(read(async () => {
+    const value = await mobileApi.margin(current.signal);
+    if (!current.signal.aborted) margin.value = value;
+  }));
+  await Promise.all(reads);
+  if (controller === current) loading.value = false;
 }
 watch(() => mobile.shell, load);
 onMounted(load);
-onBeforeUnmount(() => {
-  generation++;
-});
+onBeforeUnmount(() => controller?.abort());
 </script>
 <template>
   <section class="m-home">
+    <div class="m-workheading"><div><h2>今天要做什么？</h2><p>找到货物，直接办事</p></div>
+      <button class="m-icon-btn" aria-label="刷新工作台" :disabled="loading" @click="load"><MobileIcon name="refresh" /></button>
+    </div>
     <div class="m-grid2">
       <template v-for="button in buttons" :key="button.id">
         <a
@@ -99,9 +101,9 @@ onBeforeUnmount(() => {
       </template>
     </div>
     <div v-if="overview || pendingOrders != null" class="m-todo">
-      <RouterLink v-if="mobile.allowed('incoming')" to="/mobile/receive"
+      <RouterLink v-if="mobile.allowed('incoming') && count('pending_incoming') != null" to="/mobile/receive"
         >待收料 <b>{{ quantity(count("pending_incoming")) }}</b></RouterLink
-      ><span v-if="mobile.allowed('incoming') && ordersAllowed">·</span
+      ><span v-if="mobile.allowed('incoming') && count('pending_incoming') != null && ordersAllowed">·</span
       ><RouterLink v-if="ordersAllowed" to="/mobile/query?unfulfilled=1"
         >未送齐订单 <b>{{ quantity(pendingOrders) }}</b></RouterLink
       >

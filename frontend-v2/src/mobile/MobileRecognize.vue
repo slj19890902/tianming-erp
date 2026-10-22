@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { mobilePage } from "./navigation";
 import { mobileApi, type Product } from "./api";
 import { safeMessage } from "./format";
 import ProductRow from "./components/ProductRow.vue";
@@ -10,7 +11,7 @@ const tolerance = ref(Number(route.query.tolerance ?? 5)),
   items = ref<Product[]>([]),
   error = ref(""),
   loading = ref(false),
-  page = ref(1),
+  page = ref(mobilePage(route.query.page)),
   total = ref(0);
 let controller: AbortController | null = null;
 async function load(nextPage = 1) {
@@ -51,7 +52,7 @@ async function load(nextPage = 1) {
       total.value = result.total;
       page.value = nextPage;
       void router.replace({
-        query: { ...route.query, tolerance: String(tolerance.value) },
+        query: { ...route.query, tolerance: String(tolerance.value), page: String(nextPage) },
       });
     }
   } catch (e) {
@@ -62,7 +63,7 @@ async function load(nextPage = 1) {
 }
 watch(
   () => [route.query.length, route.query.width],
-  () => load(),
+  () => load(mobilePage(route.query.page)),
   { immediate: true },
 );
 onBeforeUnmount(() => controller?.abort());
@@ -96,9 +97,9 @@ onBeforeUnmount(() => controller?.abort());
       />
     </div>
     <div v-if="total > 12" class="m-pagination">
-      <button :disabled="page === 1" @click="load(page - 1)">上一页</button
+      <button :disabled="loading || page === 1" @click="load(page - 1)">上一页</button
       ><span>{{ page }} / {{ Math.ceil(total / 12) }}</span
-      ><button :disabled="page * 12 >= total" @click="load(page + 1)">
+      ><button :disabled="loading || page * 12 >= total" @click="load(page + 1)">
         下一页
       </button>
     </div>

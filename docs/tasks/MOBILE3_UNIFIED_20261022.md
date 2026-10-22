@@ -23,7 +23,9 @@
 
 ## 进度
 
-最新正式基线：ERP3.0统一v0.22.714已于2026-10-22 19:42:06 +08:00完成发布及原生收尾，继承本批08d9db61。已核对Git祖先关系和最终回执 `/Library/TianmingERP-Release-erp3-next-20261022-v0-22-714-c6af868826b2/final-result.json`；源码c6af868826b2b2764949f1039e2b840c7407a5f7，包83407eadc5e786b9d1d131e6d722b67088ed3c464782182b475f73ad8501348b，revision ez1022hc，healthy=true、manual_stop=false、backup_work_retained=false。以下v713记录保留为本任务原始发布历史，不重跑旧事务。
+最新正式基线已进一步推进为v0.22.715，2026-10-22 20:31:39 +08:00完整收尾。源码80e2fff6b786d2bb460435d37d3786a01e8e45ff，包318782c43b823369652b4540b95c346ffd654ba0fee648f27f4be472bec8e35a，revision ez1022hc。已核对 `/Library/TianmingERP-Release-erp3-next-20261022-v0-22-715-80e2fff6b786/final-result.json` 的四项完成条件，并比较v714/v715签名清单，部署仅app/version.py变化以修复版本元数据接口回归，手机资产不变。后续以v715为准，保留此补丁，不重复发布手机。
+
+统一发布历史：ERP3.0统一v0.22.714已于2026-10-22 19:42:06 +08:00完成发布及原生收尾，继承本批08d9db61。已核对Git祖先关系和最终回执 `/Library/TianmingERP-Release-erp3-next-20261022-v0-22-714-c6af868826b2/final-result.json`；源码c6af868826b2b2764949f1039e2b840c7407a5f7，包83407eadc5e786b9d1d131e6d722b67088ed3c464782182b475f73ad8501348b，revision ez1022hc，healthy=true、manual_stop=false、backup_work_retained=false。以下v713记录保留为本任务原始发布历史，不重跑旧事务。
 
 已批准方案：plans/mobile-3.0-20261022/手机端3.0升级方案.md（本地规划附件）。本批已于2026-10-22 18:40:24 +08:00以 v0.22.713 完成技术发布与原生收尾，待员工真机验收。已发布源码08d9db6113fb6d4a0f1f87abc18f9ad48d6a14ab，包f20b952f63353e3925965c2baca01a2f6e5db981c5cae43ed56d8a9eff2b2820，revision仍ez1022hc；本任务卡的发布后文档更新不作为另一次应用发布。
 

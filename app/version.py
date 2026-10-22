@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.714"
-APP_VERSION_NAME = "ERP 3.0 首页提速与统一查询体验"
+APP_VERSION = "v0.22.715"
+APP_VERSION_NAME = "ERP 3.0 系统基础信息修复"
 APP_BUILD_DATE = "2026-10-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -7026,3 +7026,14 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.714：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
+
+APP_CHANGES = [
+    "修复系统版本说明合并后超出条数限制，导致账号、公司资料与版本信息读取失败的问题。",
+    "保留首页分区读取、统一列表与导航、常用箱操作和手机入口等已发布升级。",
+    "无数据库迁移，不修改账号、公司资料、订单、库存、送货或财务数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新系统备份→账号与公司，确认账号列表、公司资料与版本信息正常显示，版本为 v0.22.715。",
+    "返回首页并切换订单或常用箱查询，确认原有筛选、分页与返回体验保持正常。",
+]
+APP_CHANGELOG = [*(f"v0.22.715：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

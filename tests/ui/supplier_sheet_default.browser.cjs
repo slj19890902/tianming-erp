@@ -16,21 +16,23 @@ const base=`http://127.0.0.1:${port}`,out=path.join(process.env.ERP_SUPPLIER_SHE
   const row=page.locator(`[data-supplier-sheet-default="${component}"]`);
   await row.waitFor();assert.equal(await row.getByLabel('供应商报料长',{exact:true}).inputValue(),'750');
   assert.equal(await row.getByLabel('供应商报料宽',{exact:true}).inputValue(),'678');
-  await row.getByLabel('供应商报料宽',{exact:true}).fill('700');await row.getByLabel('供应商纸板要求',{exact:true}).selectOption('毛片');
+  await row.getByLabel('供应商报料宽',{exact:true}).fill('700');await row.getByLabel('供应商毛净',{exact:true}).selectOption('毛片');
   fs.mkdirSync(out,{recursive:true});await row.scrollIntoViewIfNeeded();await page.screenshot({path:path.join(out,'default-edited.png')});
   const responsePromise=page.waitForResponse(r=>r.url().endsWith('/api/master/products/1')&&r.request().method()==='PUT');
   await page.getByRole('button',{name:'保存',exact:true}).last().click();
   const saved=await responsePromise;assert.equal(saved.status(),200,await saved.text());
   const record=await saved.json();assert.equal(record.sheet_cutting_settings.schema_version,3);
-  assert.equal(record.sheet_cutting_settings[component].actual_supplier_width_mm,'700');assert.equal(Number(record.report_width_mm),226);assert.equal(record[component==='base'?'base_crease_type':'crease_type'],'毛片');
+  assert.equal(record.sheet_cutting_settings[component].actual_supplier_width_mm,'700');assert.equal(Number(record.report_width_mm),226);assert.equal(record[component==='base'?'base_supplier_edge_type':'supplier_edge_type'],'毛片');
+  assert.equal(record[component==='base'?'base_crease_type':'crease_type'],component==='base'?'压线':'毛片');
   if(component==='base'){
-   assert.equal(record.crease_type,'净料');assert.equal(record.base_crease_left_mm,null);assert.equal(record.base_crease_middle_mm,null);assert.equal(record.base_crease_right_mm,null);
+   assert.equal(record.crease_type,'净料');assert.equal(record.base_crease_left_mm,50);assert.equal(record.base_crease_middle_mm,126);assert.equal(record.base_crease_right_mm,50);
    assert.equal(record.sheet_cutting_settings.cover.actual_supplier_width_mm,undefined);
   }
   await page.reload();await page.waitForFunction(()=>document.querySelector('#app')?._vnode?.component?.proxy?.user?.id);
   await page.evaluate(async()=>await document.querySelector('#app')._vnode.component.proxy.openProduct({id:1}));
   await row.waitFor();assert.equal(await row.getByLabel('供应商报料宽',{exact:true}).inputValue(),'700');
-  assert.equal(await row.getByLabel('供应商纸板要求',{exact:true}).inputValue(),'毛片');
+  assert.equal(await row.getByLabel('供应商毛净',{exact:true}).inputValue(),'毛片');
+  if(component==='base')assert.equal(await row.getByLabel('供应商纸板要求',{exact:true}).textContent(),'压线：50＋126＋50 mm');
   await row.scrollIntoViewIfNeeded();await page.screenshot({path:path.join(out,'default-reloaded.png')});
   const defaults=await context.request.get(base+'/api/requisition/stock-replenishment/products?customer_id=1&product_ids=1');assert.equal(defaults.status(),200);
   const product=(await defaults.json()).items[0];assert.equal(product.report_width_mm,component==='base'?678:700);assert.equal(product.output_per_sheet,6);

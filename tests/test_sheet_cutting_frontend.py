@@ -8,6 +8,49 @@ from tests.test_p1_09c_58_product_editor_race_contract import _method_body, _run
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_supplier_crease_requirement_uses_live_main_and_base_segments(tmp_path):
+    requirement = _method_body("productSupplierCreaseRequirement(key) {", "syncProductSupplierEdge(")
+    sync_edge = _method_body("syncProductSupplierEdge(key) {", "productSupplierDimension(")
+    _run_node(rf"""
+const assert=require('node:assert/strict');
+const fs=require('node:fs'),nodeVm=require('node:vm');
+const html=fs.readFileSync({json.dumps(str(ROOT/'static/index.html'))},'utf8');
+const form={{crease_type:'压线',crease_left_mm:233,crease_middle_mm:384,crease_right_mm:233,
+ supplier_edge_type:null,base_crease_type:'压线',base_crease_left_mm:50,base_crease_middle_mm:126,base_crease_right_mm:0,
+ base_supplier_edge_type:'净料',length_mm:615,width_mm:460,height_mm:375,report_length_mm:2180,report_width_mm:850}};
+const component={{productForm:form}};
+component.productSupplierCreaseRequirement=new Function('key',{json.dumps(requirement)}).bind(component);
+component.syncProductSupplierEdge=new Function('key',{json.dumps(sync_edge)}).bind(component);
+const before=JSON.stringify(form);
+assert.equal(component.productSupplierCreaseRequirement('whole'),'压线：233＋384＋233 mm');
+assert.equal(component.productSupplierCreaseRequirement('cover'),'压线：233＋384＋233 mm');
+assert.equal(component.productSupplierCreaseRequirement('base'),'压线：50＋126＋0 mm');
+assert.equal(JSON.stringify(form),before,'display must not change product or report dimensions');
+form.supplier_edge_type='毛片';component.syncProductSupplierEdge('whole');
+assert.equal(form.crease_type,'压线');
+assert.equal(component.productSupplierCreaseRequirement('whole'),'压线：233＋384＋233 mm');
+for(const missing of [null,undefined,'',' ']){{
+ form.base_crease_middle_mm=missing;
+ assert.equal(component.productSupplierCreaseRequirement('base'),'压线：50＋待填写＋0 mm（请补全压线尺寸）');
+}}
+form.base_crease_middle_mm=130;
+assert.equal(component.productSupplierCreaseRequirement('base'),'压线：50＋130＋0 mm');
+const label=html.match(/<label v-if="productForm\[part.key==='base'\?'base_crease_type':'crease_type'\]==='压线'">[\s\S]*?<\/label>/);
+assert.ok(label,'actual supplier requirement must be visible for pressure creases');
+assert.match(html,/aria-label="供应商毛净" v-model="productForm\[part.key==='base'\?'base_supplier_edge_type':'supplier_edge_type'\]"/);
+const sandbox=nodeVm.createContext({{console}});
+nodeVm.runInContext(fs.readFileSync({json.dumps(str(ROOT/'static/vendor/vue-3.5.40.global.prod.js'))},'utf8'),sandbox);
+const render=sandbox.Vue.compile(label[0],{{decodeEntities:value=>value,onError:error=>{{throw error;}}}});
+const vnode=render({{...component,part:{{key:'base'}}}},[]);
+assert.equal(vnode.type,'label');
+assert.equal(vnode.children.find(child=>child.type==='output').children,'压线：50＋130＋0 mm');
+form.base_crease_type='净料';
+assert.equal(component.productSupplierCreaseRequirement('base'),'');
+assert.notEqual(render({{...component,part:{{key:'base'}}}},[]).type,'label','switching type must hide old crease dimensions');
+assert.deepEqual([form.length_mm,form.width_mm,form.height_mm,form.report_length_mm,form.report_width_mm],[615,460,375,2180,850]);
+""", tmp_path, "supplier-crease-requirement.cjs")
+
+
 def test_browser_contract_matches_decimal_backend_and_rejects_bad_inputs(tmp_path):
     expected = SheetCuttingContract("298.5", "444.25", 2, 3, True, 4).to_snapshot()
     _run_node(f"""

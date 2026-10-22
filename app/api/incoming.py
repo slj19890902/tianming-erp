@@ -69,7 +69,6 @@ from app.models.supplier_requisition_order import (
 from app.models.user import User
 from app.models.warehouse_inventory import WarehouseLocation
 from app.services.order_number_display import (
-    build_display_registry,
     build_display_registry_for_order_ids,
     display_order_number,
 )
@@ -2264,11 +2263,6 @@ def _rows(
             OrderItem.material_received_at.desc(),
             OrderItem.id.desc(),
         )
-    registry = (
-        build_display_registry(db)
-        if selected_pending_routes is None
-        else None
-    )
     base_rows = []
     for row in db.execute(query):
         data = dict(row._mapping)
@@ -2284,15 +2278,6 @@ def _rows(
             else data["quantity"]
         )
         base_rows.append(data)
-    if selected_pending_routes is not None:
-        order_ids = {
-            int(row["order_id"])
-            for row in base_rows
-            if row.get("order_id") is not None
-        }
-        registry = build_display_registry_for_order_ids(db, order_ids)
-    assert registry is not None
-
     rows = []
     received_component_order_item_ids: set[int] = set()
     component_types_by_requisition_item: dict[int, str] = {}
@@ -2540,6 +2525,9 @@ def _rows(
             continue
         else:
             rows.append(data)
+    registry = build_display_registry_for_order_ids(
+        db, {int(row["order_id"]) for row in rows if row.get("order_id")}
+    )
     rows = _decorate_rows_with_display_numbers(db, rows, registry)
     product_ids = {row["product_id"] for row in rows if row.get("product_id")}
 
@@ -2587,19 +2575,7 @@ def _rows(
             if data.get("snapshot_crease_right_mm") is None:
                 data["snapshot_crease_right_mm"] = product.crease_right_mm
 
-    latest_drawings: dict[int, ProductDrawing] = {}
-    if product_ids:
-        drawings = db.scalars(
-            select(ProductDrawing)
-            .where(ProductDrawing.product_id.in_(product_ids), engineering_drawing_condition())
-            .order_by(
-                ProductDrawing.product_id,
-                ProductDrawing.uploaded_at.desc(),
-                ProductDrawing.id.desc(),
-            )
-        ).all()
-        for drawing in drawings:
-            latest_drawings.setdefault(drawing.product_id, drawing)
+    latest_drawings = _latest_engineering_drawings(db, product_ids)
     stock_replenishment_rows = (
         _stock_replenishment_pending_rows(
             db,
@@ -3367,6 +3343,31 @@ def _decorate_received_rows_with_purpose(
             }
 
 
+def _latest_engineering_drawings(
+    db: Session, product_ids: set[int]
+) -> dict[int, ProductDrawing]:
+    """Resolve each product's fallback once, preserving upload/ID precedence."""
+    latest: dict[int, ProductDrawing] = {}
+    sorted_ids = sorted(product_ids)
+    # Keep history reads within SQLite's bind limit even for older installations.
+    for offset in range(0, len(sorted_ids), 800):
+        drawings = db.scalars(
+            select(ProductDrawing)
+            .where(
+                ProductDrawing.product_id.in_(sorted_ids[offset : offset + 800]),
+                engineering_drawing_condition(),
+            )
+            .order_by(
+                ProductDrawing.product_id,
+                ProductDrawing.uploaded_at.desc(),
+                ProductDrawing.id.desc(),
+            )
+        ).all()
+        for drawing in drawings:
+            latest.setdefault(drawing.product_id, drawing)
+    return latest
+
+
 def _receipt_fact_rows(
     db: Session,
     *,
@@ -3374,7 +3375,6 @@ def _receipt_fact_rows(
     received_since: datetime | None,
     include_reversed: bool = False,
 ) -> list[dict]:
-    registry = build_display_registry(db)
     visible_customer_ids = _visible_customer_ids(user, db)
     rows: list[dict] = []
     history_facts = receipt_history(
@@ -3382,6 +3382,35 @@ def _receipt_fact_rows(
         received_since=received_since,
         include_reversed=include_reversed,
     )
+    registry = build_display_registry_for_order_ids(
+        db, {int(fact.order_id) for fact in history_facts if fact.order_id}
+    )
+    # Frozen order drawings remain authoritative. Batch only the engineering
+    # fallbacks required by this history, within the caller's customer scope.
+    fallback_product_ids: set[int] = set()
+    history_fact_ids = sorted({
+        int(fact.id)
+        for fact in history_facts
+        if fact.order_item_id and fact.stock_replenishment_item_id is None
+    })
+    for offset in range(0, len(history_fact_ids), 800):
+        fallback_query = (
+            select(OrderItem.product_id, OrderItem.drawing_file)
+            .join(IncomingReceiptItem, IncomingReceiptItem.order_item_id == OrderItem.id)
+            .join(Order, Order.id == IncomingReceiptItem.order_id)
+            .where(
+                IncomingReceiptItem.id.in_(history_fact_ids[offset : offset + 800]),
+                OrderItem.product_id.is_not(None),
+            )
+        )
+        if visible_customer_ids is not None:
+            fallback_query = fallback_query.where(Order.customer_id.in_(visible_customer_ids))
+        fallback_product_ids.update(
+            product_id
+            for product_id, drawing_file in db.execute(fallback_query)
+            if not (drawing_file or "").strip()
+        )
+    latest_drawings = _latest_engineering_drawings(db, fallback_product_ids)
     component_requisition_ids = {
         int(fact.requisition_item_id)
         for fact in history_facts
@@ -3516,11 +3545,7 @@ def _receipt_fact_rows(
         drawing_reference = (item.drawing_file or "").strip() or None
         drawing_path = _order_drawing_url(item.id, drawing_reference)
         if drawing_reference is None and product is not None:
-            drawing = db.scalar(
-                select(ProductDrawing)
-                .where(ProductDrawing.product_id == product.id, engineering_drawing_condition())
-                .order_by(ProductDrawing.uploaded_at.desc(), ProductDrawing.id.desc())
-            )
+            drawing = latest_drawings.get(product.id)
             drawing_reference = drawing.image_path if drawing else None
             drawing_path = _product_drawing_url(drawing)
         receiver = db.get(User, fact.receipt.received_by) if fact.receipt.received_by else None

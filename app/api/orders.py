@@ -108,6 +108,7 @@ from app.models.warehouse_inventory import (
 )
 from app.services.order_number_display import (
     build_display_registry,
+    build_display_registry_for_order_ids,
     serialize_order_number_fields,
 )
 from app.services.fulfillment_reminders import list_order_production_reminders
@@ -2947,7 +2948,6 @@ def list_orders(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    display_registry = build_display_registry(db)
     search_keyword = keyword.strip() if keyword and keyword.strip() else None
     status_values = tuple(
         dict.fromkeys(value.strip() for value in (status_filter or []) if value.strip())
@@ -3282,6 +3282,9 @@ def list_orders(
                 order_map[item_id] for item_id in page_ids if item_id in order_map
             ]
 
+    display_registry = build_display_registry_for_order_ids(
+        db, {order.id for order in orders}
+    )
     customer_ids = {order.customer_id for order in orders}
     customer_names = (
         {
@@ -6852,7 +6855,9 @@ def get_order_group_detail(
         business_projections=business_projections,
     )
     customer = db.get(Customer, customer_id)
-    display_registry = build_display_registry(db)
+    display_registry = build_display_registry_for_order_ids(
+        db, {order.id for order in orders}
+    )
     return {
         "customer_id": customer_id,
         "customer_name": customer.name if customer is not None else "-",
@@ -6881,7 +6886,6 @@ def get_order_detail(
     user: User = Depends(can_read),
     create_key: str | None = None,
 ) -> dict:
-    display_registry = build_display_registry(db)
     order = db.scalar(
         select(Order)
         .options(
@@ -6897,6 +6901,7 @@ def get_order_detail(
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
     require_customer_access(order.customer_id, current_user=user, db=db)
+    display_registry = build_display_registry_for_order_ids(db, {order.id})
     customer = db.get(Customer, order.customer_id)
     full_response_context = _build_full_order_response_context(
         db,
@@ -6958,7 +6963,7 @@ def get_order_item_documents(
     if item is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
     customer = db.get(Customer, order.customer_id)
-    display_registry = build_display_registry(db)
+    display_registry = build_display_registry_for_order_ids(db, {order.id})
     return build_order_item_document_trace(
         db,
         order=order,

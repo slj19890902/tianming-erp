@@ -24,6 +24,11 @@ COMMERCIAL = ('sale_unit_price', 'sale_unit_price_no_tax', 'cost_unit_price', 'b
 PRINTING = ('printing_plate_mode', 'printing_plate_1_id', 'printing_plate_2_id', 'printing_plate_3_id',
             'print_content', 'printing_colors', 'plate_alignment_value_mm', 'plate_mount_value_mm',
             'machine_set_length_mm', 'machine_set_width_mm', 'machine_set_height_mm')
+EXTERNAL_SUPPLY = ('supply_mode', 'external_packaging_category_code',
+    'external_packaging_specification_json', 'external_packaging_specification_summary',
+    'external_packaging_purchase_unit', 'external_packaging_candidate_snapshot_json',
+    'external_packaging_default_order_quantity_basis',
+    'external_packaging_default_purchase_quantity_basis')
 
 
 def catalog_products(db, product):
@@ -279,14 +284,18 @@ def prepare_sync(db, product, updates, user):
            for key in ('customer_id','product_code','is_composite','is_internal_component','is_virtual_composite_parent')):
         raise HTTPException(409, '共用产品的客户、编码和BOM角色不能单边变更，请先调整共用范围')
     from app.services.shared_customer_access import PHYSICAL_FIELDS
-    fields = set(PHYSICAL_FIELDS) | set(MATERIAL) | set(REPORT)
-    if receipt(db, gid).get('full_catalog'):
+    policy = receipt(db, gid)
+    fields = set(PHYSICAL_FIELDS) | set(MATERIAL) | set(REPORT) | set(EXTERNAL_SUPPLY)
+    if policy.get('full_catalog'):
         fields |= set(COMMERCIAL) | set(PRINTING)
     changed = {key for key in fields if key in updates and
                (getattr(product,key) != updates[key] if key == 'sheet_cutting_settings' else
                 shared._value(getattr(product,key)) != shared._value(updates[key]))}
     if not changed:
         return None
+    external_changed = bool(changed & set(EXTERNAL_SUPPLY))
+    if external_changed and not policy.get('full_catalog'):
+        raise HTTPException(409, '共用产品的外购供货资料需确认整套产品共用后才能同步，请先核对共用范围；本次修改未保存')
     if not _same_role(products):
         raise HTTPException(409, '共用产品的BOM角色或单位尚未统一，未保存单边资料')
     from app.api.deps import require_customer_access
@@ -294,6 +303,9 @@ def prepare_sync(db, product, updates, user):
     peers = []
     # Full field families keep derived material/report fields consistent.
     copy_fields = changed | (set(MATERIAL) if changed & set(MATERIAL) else set()) | (set(REPORT) if changed & set(REPORT) else set())
+    if external_changed:
+        # Supply mode and its required profile are one database/business contract.
+        copy_fields |= set(EXTERNAL_SUPPLY)
     peer_updates = {key: deepcopy(updates.get(key, getattr(product,key))) for key in copy_fields}
     for peer in products:
         require_customer_access(peer.customer_id, current_user=user, db=db)
@@ -301,6 +313,9 @@ def prepare_sync(db, product, updates, user):
             continue
         if peer.deleted_at or peer.purged_at:
             raise HTTPException(409, '共用产品已删除，请先调整共用范围')
+        validated_peer_updates = deepcopy(peer_updates)
+        if external_changed:
+            validated_peer_updates.update(_validate_peer_external_supply(db, peer, peer_updates))
         # Validate references for each customer as well as the original source.
         from app.api.products import _validate_references
         _validate_references(db, customer_id=peer.customer_id,
@@ -313,20 +328,40 @@ def prepare_sync(db, product, updates, user):
                 plate = db.get(PrintingPlate, plate_id)
                 if plate is None or plate.status != 'active' or not plate_allowed(db, product, plate):
                     raise HTTPException(409, '挂板不适用于本共用产品，未保存任何一方资料')
-        preview = preview_versioned_update(db, object_type='product',entity=peer,updates=peer_updates,
+        preview = preview_versioned_update(db, object_type='product',entity=peer,updates=validated_peer_updates,
                                           expected_version=peer.version,user=user)
-        peers.append(dict(product=peer,version=peer.version,token=preview['confirmation_token']))
+        peers.append(dict(product=peer,version=peer.version,token=preview['confirmation_token'],updates=validated_peer_updates))
     group = db.get(SharedFinishedGroup,gid)
     return dict(peers=peers,products=products,group_id=gid,group_version=group.version,
                 updates=peer_updates,before_policy=receipt(db,gid),ancestors=ancestor_plans(db,[p.id for p in products],user),
                 before_members={str(p.id):dict(identity_json=shared.member_identity(p),product_basis_json=shared.product_basis(p)) for p in products})
 
 
+def _validate_peer_external_supply(db, peer, updates):
+    """Re-use ordinary product validation with the receiving customer's scope."""
+    from app.api.products import ProductPayload, _normalize_product_external_supply
+    from pydantic import ValidationError
+    try:
+        external_supply = None
+        if updates['supply_mode'] == 'external_purchase':
+            external_supply = dict(
+                customer_specification=json.loads(updates['external_packaging_specification_json'] or '{}'),
+                candidates=json.loads(updates['external_packaging_candidate_snapshot_json'] or '[]'))
+        values = {field: updates[field] for field in EXTERNAL_SUPPLY if field in ProductPayload.model_fields}
+        payload = ProductPayload(**values, customer_id=peer.customer_id,
+            product_code=peer.product_code, customer_material_code=peer.customer_material_code,
+            product_name=peer.product_name, box_category=updates.get('box_category', peer.box_category),
+            box_style=updates.get('box_style', peer.box_style), external_supply=external_supply)
+    except (TypeError, ValueError, ValidationError) as error:
+        raise HTTPException(422, '共用产品的外购供货资料无效，请核对规格、候选供应商和采购比例；本次修改未保存') from error
+    return _normalize_product_external_supply(db, payload=payload, existing=peer)
+
+
 def finish_sync(db, product, plan, user, reason, source):
     from uuid import uuid4
     from app.services.master_data_versioning import _apply_versioned_update
     for row in plan['peers']:
-        _apply_versioned_update(db,object_type='product',entity=row['product'],updates=plan['updates'],
+        _apply_versioned_update(db,object_type='product',entity=row['product'],updates=row['updates'],
             expected_version=row['version'],user=user,reason=reason or '共用生产资料同步',
             source=source+'.shared_master',confirmation_token=row['token'])
     for current in plan['products']:

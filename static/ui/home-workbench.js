@@ -53,7 +53,7 @@
   }
   function stageCards(cards, tasks, filtered) {
     return cards.filter(c => c.key !== 'warehouse_capacity').map(card => {
-      if (!filtered) return card;
+      if (!filtered || card.count === null) return card;
       const rows = tasks.filter(t => t.key === card.key);
       return {...card, count:new Set(rows.map(t=>t.settlement_identity|| (card.count_unit==='客户'?t.customer_id:t.id))).size,
         ...(card.amount!==undefined?{amount:rows.reduce((s,r)=>s+Number(r.amount||0),0)}:{})};
@@ -66,8 +66,15 @@
       homeEntry:null, homeActionBusy:false, homeViewportHeight:global.innerHeight || 1080, homeViewportWidth:global.innerWidth || 1920, homeDialog:'',
       homeAvailableHeight:420, homeCustomerAvailableHeight:420, homeRowHeight:64, homeCustomerRowHeight:110, homeStockCustomer:null, homeWorkCustomer:null, homeExpandedTaskGroup:null, homeShowPriorityAll:false, homeSearchSummary:false, homeAttentionTab:'active', homePreferenceForm:null,
       homePreferenceBusy:false, homePreferenceError:'', homeAdvice:null, homeAdviceBusy:false,
+      homeSections:{}, homeSectionLoadedAt:{}, homeReadGeneration:0,
     }; },
     computed: {
+      homeAvailableGroups(){return this.overview?.mode==='summary' ? (this.overview.available_groups || []) : ['stock','delivery','production','finance','approval'];},
+      homeDialogReadState(){
+        if(this.overview?.mode!=='summary')return {loaded:true,loading:false,error:''};
+        const groups=this.homeGroupsForDialog(this.homeDialog),states=groups.map(group=>this.listReadStates?.['dashboard:section:'+group]);
+        return {loaded:groups.every(group=>!!this.homeSections[group]),loading:states.some(state=>state?.loading),error:states.map(state=>state?.error).filter(Boolean).join('；')};
+      },
       homeSummaryCompact(){return this.homeViewportWidth<760 || this.homeViewportHeight<620 || !!this.overviewError;},
       homeSummaryRows(){return this.homeViewportHeight<720?1:this.homeViewportHeight<850?2:4;},
       homeDialogTitle(){return {stock:'库存预警',delivery:'交付跟进',production:'报料与生产',finance:'财务跟进',approval:this.homeData.can_review?'待我审批':'我的申请',progress:this.canViewDeliveryMargin?'业务进度与送货毛利':'业务进度',priority:'今日优先'}[this.homeDialog]||'工作清单';},
@@ -78,12 +85,24 @@
         {key:'finance',label:'财务跟进',count:this.homeFilteredTasks.filter(r=>workKeys.finance.includes(r.key)).length,unit:'项',note:this.homeFinanceCard?'未收款 ¥'+this.homeNumber(this.homeFinanceCard.amount):'对账 · 开票 · 收款',visible:this.homeStages.some(c=>workKeys.finance.includes(c.key))},
         {key:'approval',label:this.homeData.can_review?'待我审批':'我的申请',count:this.homeApprovalCount,unit:'项',note:'申请与处理进度',visible:this.homeData.can_view_approvals},
         {key:'progress',label:'业务进度',count:this.homeStages.length,unit:'环节',note:this.canViewDeliveryMargin?'流程统计 · 送货毛利':'流程统计',visible:this.homeStages.length>0}
-      ].filter(r=>r.visible);},
+      ].filter(r=>r.visible && (this.overview?.mode!=='summary' || r.key==='progress' || this.homeAvailableGroups.includes(r.key))).map(r=>{
+        if(this.overview?.mode!=='summary')return r;
+        const groups=this.homeGroupsForDialog(r.key),loaded=groups.every(group=>!!this.homeSections[group]);
+        const states=groups.map(group=>this.listReadStates?.['dashboard:section:'+group]);
+        const stale=loaded && groups.some(group=>Date.now()-(this.homeSectionLoadedAt[group]||0)>=30000);
+        return {...r,count:loaded?r.count:null,unit:loaded?r.unit:'',note:states.some(state=>state?.error)?(loaded?'更新失败，保留上次结果':'读取失败，点击重试'):states.some(state=>state?.loading)?'正在更新…':stale?'上次结果 · 点击更新':loaded?r.note:'点击查看工作清单'};
+      });},
       homePriorityPage(){return pageRows(taskGroups(this.homeFilteredTasks.filter(r=>attentionCategory(r)==='active'&&(r.key==='approval'||r.urgency==='today'&&r.due_date===this.homeData.today))),this.homeTaskPage,this.homePageSize);},
-      homeData() { return this.overview?.workbench || {tasks:[],customers:[]}; },
+      homeData() {
+        const data=this.overview?.workbench || {tasks:[],customers:[]};
+        if(this.overview?.mode!=='summary')return data;
+        const sections=this.homeAvailableGroups.map(group=>this.homeSections[group]).filter(Boolean);
+        const customers=new Map([...(data.customers || []),...sections.flatMap(section=>section.workbench?.customers || [])].map(customer=>[customer.id,customer]));
+        return {...data,customers:[...customers.values()],tasks:sections.flatMap(section=>section.workbench?.tasks || [])};
+      },
       homeCanStock() { return this.hasPermission('warehouse.view') && this.hasPermission('requisition.view'); },
       homeFilteredTasks() { return (this.homeData.tasks || []).filter(r => matches(r,this.homeCustomer,this.homeQuery)); },
-      homeWarnings() { return this.overview?.low_stock_warnings || []; },
+      homeWarnings() { return this.overview?.mode==='summary' ? (this.homeSections.stock?.low_stock_warnings || []) : (this.overview?.low_stock_warnings || []); },
       homeVisibleWarnings() {return this.homeWarnings.filter(r=>matches(r,this.homeCustomer,this.homeQuery));},
       homeStockGroups() {const visible=new Set(this.homeVisibleWarnings.map(r=>Number(r.customer_id)));return customerGroups(this.homeWarnings).filter(g=>visible.has(g.id));},
       homeStockCounts() { const groups=this.homeStockGroups;return {customers:groups.length,action:groups.reduce((n,g)=>n+g.action,0),arranged:groups.reduce((n,g)=>n+g.arranged,0),approval:groups.reduce((n,g)=>n+g.approval,0),all:groups.reduce((n,g)=>n+g.rows.length,0)}; },
@@ -107,13 +126,16 @@
       homeTaskRows() {return this.homeTaskScopeRows.filter(r=>this.homeAttentionTab==='all'||attentionCategory(r)===this.homeAttentionTab);},
       homeGroupedTasks() {return taskGroups(this.homeTaskRows);},
       homePriority() {const rows=this.homeFilteredTasks.filter(r=>attentionCategory(r)==='active'&&(r.key==='approval'||r.urgency==='today'&&r.due_date===this.homeData.today));return this.homeShowPriorityAll?taskGroups(rows):priorityTasks(rows,this.homeData.today);},
-      homePriorityTotal() {return taskGroups(this.homeFilteredTasks.filter(r=>attentionCategory(r)==='active'&&(r.key==='approval'||r.urgency==='today'&&r.due_date===this.homeData.today))).length;},
+      homePriorityTotal() {if(this.overview?.mode==='summary' && !this.homeGroupsForDialog('priority').every(group=>!!this.homeSections[group]))return null;return taskGroups(this.homeFilteredTasks.filter(r=>attentionCategory(r)==='active'&&(r.key==='approval'||r.urgency==='today'&&r.due_date===this.homeData.today))).length;},
       homeAttentionCounts() {const rows=this.homeTaskScopeRows;const counts={active:0,customer:0,deferred:0,review:0,hidden:0,all:taskGroups(rows).length};for(const key of ['active','customer','deferred','review','hidden'])counts[key]=taskGroups(rows.filter(r=>attentionCategory(r)===key)).length;return counts;},
       homeTasksPage() { return pageRows(this.homeGroupedTasks,this.homeTaskPage,this.homePageSize); },
       homeFinanceCard() {return this.homeStages.find(c=>c.key==='pending_payment')||null;},
       homeDeliveryCustomers() {return new Set(this.homeFilteredTasks.filter(r=>r.key==='pending_delivery').map(r=>r.customer_id)).size;},
       homeDeliveryDetails() {return this.homeFilteredTasks.filter(r=>r.key==='pending_delivery').length;},
-      homeStages() { return stageCards(this.dashboardCards || [],this.homeFilteredTasks,!!this.homeCustomer || !!this.homeQuery); },
+      homeStages() {
+        const loaded=new Map((this.overview?.mode==='summary'?this.homeAvailableGroups.map(group=>this.homeSections[group]).filter(Boolean):[]).flatMap(section=>section.cards || []).map(card=>[card.key,card]));
+        return stageCards((this.dashboardCards || []).map(card=>loaded.get(card.key)||card),this.homeFilteredTasks,!!this.homeCustomer || !!this.homeQuery);
+      },
       homeReceiptCount() { return this.homeFilteredTasks.filter(t=>t.key==='pending_receipt').length; },
       homeApprovalCount() { return this.homeFilteredTasks.filter(t=>t.key==='approval').length; },
       homeTaskLabel() { if(this.homeTaskMode==='all')return ({delivery:'交付安排',production:'报料与生产',finance:'财务跟进',approval:'审批'})[this.homeWorkspace]||'工作清单';return ({all:'工作清单',today:'今日交期事项',approval:this.homeData.can_review?'待我审批':'我的申请',receipt:'待回单'})[this.homeTaskMode] || this.homeStages.find(c=>c.key===this.homeTaskMode)?.title || '优先处理'; },
@@ -129,14 +151,51 @@
       productWorkbenchOpen(){this.$nextTick(()=>this.homeMeasure());},
       homeTaskMode() { this.homeTaskPage=1; },
       homeAttentionTab(){this.homeTaskPage=1;this.homePreferenceForm=null;},
-      authGeneration() { if(this.$parent)return;this.homeDialog='';this.homeCustomer='';this.homeQuery='';this.homeEntry=null;this.homeResetPages();this.homeAnalyticsOpen=false;this.homeAttentionTab='active';this.homePreferenceError='';this._homeReminderAttempt=null;this._homeAdviceRequest=null; },
+      activePage(page){if(this.$parent)return;if(page!=='dashboard')this.homeCancelSections();else if(this.homeDialog)this.homeLoadDialog();},
+      authGeneration() { if(this.$parent)return;this.homeCancelSections();this.homeSections={};this.homeSectionLoadedAt={};this.homeDialog='';this.homeCustomer='';this.homeQuery='';this.homeEntry=null;this.homeResetPages();this.homeAnalyticsOpen=false;this.homeAttentionTab='active';this.homePreferenceError='';this._homeReminderAttempt=null;this._homeAdviceRequest=null; },
       'user.id'(id) { if(this.$parent||!id)return;try{const saved=JSON.parse(sessionStorage.getItem(`erp-home-filter:${id}`)||'null');if(saved){this.homeCustomer=saved.customer||'';this.homeQuery='';sessionStorage.removeItem(`erp-home-filter:${id}`);}}catch(_){} },
       homeAnalyticsOpen() { this.dashboardDetailsVisible=false;this.$nextTick(()=>this.syncDesktopDeliveryMargin()); },
       homeDialog(){this.$nextTick(()=>this.homeMeasure());},
       homeLaunchers(items){if(this.homeDialog&&this.homeDialog!=='priority'&&!items.some(x=>x.key===this.homeDialog))this.homeCloseDialog();},
     },
     methods: {
-      homeOpenDialog(key){if(key!=='priority'&&!this.homeLaunchers.some(x=>x.key===key))return;this.homeDialog=key;this.homeAnalyticsOpen=key==='progress';if(workKeys[key]||key==='stock'||key==='approval')this.homeWorkspace=key;this.$nextTick(()=>this.homeMeasure());},
+      homeOpenDialog(key){if(key!=='priority'&&!this.homeLaunchers.some(x=>x.key===key))return;this.homeDialog=key;this.homeAnalyticsOpen=key==='progress';if(workKeys[key]||key==='stock'||key==='approval')this.homeWorkspace=key;this.homeLoadDialog(key);this.$nextTick(()=>this.homeMeasure());},
+      homeGroupsForDialog(key){
+        const groups=this.homeAvailableGroups || [];
+        return key==='progress'?groups:key==='priority'?groups.filter(group=>group!=='stock'):groups.includes(key)?[key]:[];
+      },
+      homeCancelSections(){
+        this.homeReadGeneration++;
+        for(const group of ['stock','delivery','production','finance','approval'])this.cancelLatestRequest('dashboard:section:'+group);
+      },
+      homeRefreshLoadedSections(){
+        if(this.overview?.mode!=='summary')return;
+        for(const group of Object.keys(this.homeSectionLoadedAt))this.homeSectionLoadedAt[group]=0;
+        for(const group of Object.keys(this.homeSections))if(!this.homeAvailableGroups.includes(group)){delete this.homeSections[group];delete this.homeSectionLoadedAt[group];}
+        if(this.activePage!=='dashboard')return;
+        const groups=new Set([...Object.keys(this.homeSections),...this.homeGroupsForDialog(this.homeDialog)]);
+        for(const group of groups)if(this.homeAvailableGroups.includes(group))this.homeLoadSection(group,{force:true});
+      },
+      async homeLoadDialog(key=this.homeDialog,{force=false}={}){
+        if(this.overview?.mode!=='summary')return true;
+        if(key==='delivery' && this.hasPermission('deliveries.view'))this.loadDeliveryBacklogs(1,false);
+        if(key==='progress')this.loadWarehouseCapacitySummary();
+        return (await Promise.all(this.homeGroupsForDialog(key).map(group=>this.homeLoadSection(group,{force})))).every(Boolean);
+      },
+      async homeLoadSection(group,{force=false}={}){
+        if(!this.homeAvailableGroups.includes(group) || this.activePage!=='dashboard')return false;
+        if(!force && this.homeSections[group] && Date.now()-(this.homeSectionLoadedAt[group]||0)<30000)return true;
+        const request=global.ERPListRead.begin(this,{
+          key:'dashboard:section:'+group,scope:()=>group,context:()=>JSON.stringify([this.activePage,this.homeReadGeneration]),
+          clear:()=>{delete this.homeSections[group];delete this.homeSectionLoadedAt[group];},
+        });
+        try{
+          const {data}=await global.axios.get('/api/dashboard/sections',{params:{group},signal:request.signal,timeout:30000});
+          if(data?.group!==group || !Array.isArray(data.cards) || !Array.isArray(data.workbench?.tasks))throw Error('工作清单数据不完整，请重试');
+          return request.accept(()=>{this.homeSections[group]=data;this.homeSectionLoadedAt[group]=Date.now();});
+        }catch(error){return request.fail(error);}
+        finally{request.finish();this.$nextTick(()=>this.homeMeasure());}
+      },
       homeCloseDialog(){if(this.homePreferenceBusy)return;this.homeDialog='';this.homeAnalyticsOpen=false;},
       homeResetPages() { this.homeStockPage=1;this.homeCustomerPage=1;this.homeTaskPage=1;this.homeExpandedPolicy=null;this.homeExpandedTaskGroup=null;this.homeStockCustomer=null;this.homeWorkCustomer=null;this.homeSearchSummary=false;this.homeAdvice=null;this.homePreferenceForm=null; },
       homeChooseCustomer(id){if(this.homeWorkspace==='stock')this.homeStockCustomer=id;else this.homeWorkCustomer=id;this.homeStockPage=1;this.homeTaskPage=1;this.homeExpandedPolicy=null;this.homeExpandedTaskGroup=null;this.homeAdvice=null;},
@@ -168,7 +227,7 @@
       homeEditReminder(row){this.homePreferenceError='';this.homePreferenceForm={task_id:row.id,reason:row.attention_reason||'later',remind_on:this.homeDateAfter(3),scope:'personal'};},
       homeReminderEffect(){return this.homeData.attention_reasons?.find(r=>r.code===this.homePreferenceForm?.reason)?.effect||'';},
       async homeSaveReminder(row,action){
-        if(this.homePreferenceBusy||this.overviewError)return;
+        if(this.homePreferenceBusy||this.overviewError||this.homeDialogReadState?.error)return;
         const form=this.homePreferenceForm||{},reason=this.homeData.attention_reasons?.find(r=>r.code===form.reason);
         const scope=action==='hidden'?'personal':action==='active'?row.attention_scope:form.scope;
         const payload={task_id:row.id,source_hash:row.source_hash,scope,state:action||reason?.state,
@@ -222,7 +281,7 @@
         return '查看库存';
       },
       async homeOpenStock(row) {
-        if(this.homeActionBusy || this.overviewError)return;
+        if(this.homeActionBusy || this.overviewError || this.homeDialogReadState?.error)return;
         this.homeActionBusy=true;
         try {
           const state=stockState(row);this.homeRemember();
@@ -255,7 +314,7 @@
       },
       homeOpenApproval(id) { this.homeRemember();window.location.href=`/static/business-approvals.html?${id?'request='+Number(id):''}`; },
       async homeOpenTask(row) {
-        if(this.homeActionBusy||this.overviewError)return;
+        if(this.homeActionBusy||this.overviewError||this.homeDialogReadState?.error)return;
         this.homeActionBusy=true;
         try {
           this.homeEntry={...row};
@@ -317,15 +376,17 @@
     <div v-if="vm.overviewLoading" class="home-loading" role="status">正在更新首页…</div>
     <template v-if="vm.overview.as_of && !vm.productWorkbenchOpen">
       <nav class="home-metrics home-launchers" aria-label="首页功能入口">
-        <button v-for="item in vm.homeLaunchers" :key="item.key" type="button" @click="vm.homeOpenDialog(item.key)" :aria-label="item.label+'，打开弹窗'" aria-haspopup="dialog"><span>{{item.label}} <b aria-hidden="true">↗</b></span><strong>{{item.count}}<small>{{item.unit}}</small></strong><em>{{item.note}}</em></button>
+        <button v-for="item in vm.homeLaunchers" :key="item.key" type="button" @click="vm.homeOpenDialog(item.key)" :aria-label="item.label+'，打开弹窗'" aria-haspopup="dialog"><span>{{item.label}} <b aria-hidden="true">↗</b></span><strong>{{item.count === null ? '待查看' : item.count}}<small>{{item.unit}}</small></strong><em>{{item.note}}</em></button>
       </nav>
-      <div class="home-priority-summary"><span>今日优先 <strong>{{vm.homePriorityTotal}}</strong> 组</span><button type="button" class="home-link" @click="vm.homeOpenDialog('priority')">查看安排 ›</button><span v-if="vm.deliveryBacklogs.error" class="amber">交付记录读取失败，请打开交付跟进重试</span></div>
+      <div class="home-priority-summary"><span>今日优先 <strong>{{vm.homePriorityTotal === null ? '待查看' : vm.homePriorityTotal + ' 组'}}</strong></span><button type="button" class="home-link" @click="vm.homeOpenDialog('priority')">查看安排 ›</button><span v-if="vm.deliveryBacklogs.error" class="amber">交付记录读取失败，请打开交付跟进重试</span></div>
       <home-dialog v-if="vm.homeDialog" :expanded="true" :title="vm.homeDialogTitle" dialog-id="home-work-dialog" :kind="vm.homeDialog" :can-close="!vm.homePreferenceBusy" @close="vm.homeCloseDialog">
       <div class="home-dialog-toolbar"><label>客户 <select v-model="vm.homeCustomer" aria-label="弹窗客户筛选"><option value="">全部客户</option><option v-for="c in vm.homeData.customers" :key="c.id" :value="c.id">{{c.label}}</option></select></label><input v-model="vm.homeQuery" type="search" placeholder="查编码、产品或订单" aria-label="弹窗查找"><button v-if="vm.homeCustomer||vm.homeQuery" class="home-link" @click="vm.homeClearFilters">清空筛选</button></div>
       <div v-if="vm.overviewError" class="home-error" role="alert">{{vm.overviewError}}<button :disabled="vm.overviewLoading" @click="vm.loadOverview">重新加载</button></div>
+      <list-read-status :state="vm.homeDialogReadState" :has-rows="vm.homeDialogReadState.loaded" loading-text="正在读取工作清单…" empty-text="" @retry="vm.homeLoadDialog(vm.homeDialog,{force:true})"></list-read-status>
       <nav v-if="!['progress','priority'].includes(vm.homeDialog)" class="home-work-tabs" aria-label="切换工作区"><button v-for="item in vm.homeLaunchers.filter(x=>x.key!=='progress')" :key="item.key" :class="{active:vm.homeDialog===item.key}" @click="vm.homeOpenDialog(item.key)">{{item.label}}</button></nav>
-      <nav v-if="vm.homeWorkflowFilters.length && ['delivery','finance','production'].includes(vm.homeDialog)" class="home-workflow-filters" aria-label="业务环节筛选"><button :class="{active:vm.homeTaskMode==='all'}" @click="vm.homeTaskMode='all'">全部</button><button v-for="c in vm.homeWorkflowFilters" :key="c.key" :class="{active:vm.homeTaskMode===c.key}" @click="vm.homeTaskMode=c.key">{{c.title}} <strong>{{c.count}}</strong><small>{{c.count_unit}}</small></button></nav>
-      <section v-if="vm.homeDialog==='priority'" class="home-priority-list"><p v-if="!vm.homePriorityTotal" class="home-empty">暂无明确今日安排或待审批事项</p><article v-for="g in vm.homePriorityPage.rows" :key="g.key"><div><strong>{{g.customer_label}}</strong><p>{{g.kind==='approval'?'待审批':'今日交期'}} · {{g.order_label||g.rows[0].type}} · {{g.rows.length}}项</p></div><button class="home-button" @click="vm.homeFocusPriority(g)">{{g.rows.length>1?'查看明细':g.action_text}}</button></article><footer class="home-pagination"><span>共{{vm.homePriorityPage.total}}组</span><div><button :disabled="vm.homePriorityPage.page<=1" @click="vm.homeTaskPage--">上一页</button>{{vm.homePriorityPage.page}} / {{vm.homePriorityPage.pages}}<button :disabled="vm.homePriorityPage.page>=vm.homePriorityPage.pages" @click="vm.homeTaskPage++">下一页</button></div></footer></section>
+      <nav v-if="vm.homeWorkflowFilters.length && ['delivery','finance','production'].includes(vm.homeDialog)" class="home-workflow-filters" aria-label="业务环节筛选"><button :class="{active:vm.homeTaskMode==='all'}" @click="vm.homeTaskMode='all'">全部</button><button v-for="c in vm.homeWorkflowFilters" :key="c.key" :class="{active:vm.homeTaskMode===c.key}" @click="vm.homeTaskMode=c.key">{{c.title}} <strong>{{c.count === null ? '待查看' : c.count}}</strong><small>{{c.count_unit}}</small></button></nav>
+      <template v-if="vm.homeDialogReadState.loaded">
+      <section v-if="vm.homeDialog==='priority'" class="home-priority-list"><p v-if="!vm.homePriorityTotal" class="home-empty">暂无明确今日安排或待审批事项</p><article v-for="g in vm.homePriorityPage.rows" :key="g.key"><div><strong>{{g.customer_label}}</strong><p>{{g.kind==='approval'?'待审批':'今日交期'}} · {{g.order_label||g.rows[0].type}} · {{g.rows.length}}项</p></div><button class="home-button" :disabled="vm.homeActionBusy || !!vm.overviewError || !!vm.homeDialogReadState.error" @click="vm.homeFocusPriority(g)">{{g.rows.length>1?'查看明细':g.action_text}}</button></article><footer class="home-pagination"><span>共{{vm.homePriorityPage.total}}组</span><div><button :disabled="vm.homePriorityPage.page<=1" @click="vm.homeTaskPage--">上一页</button>{{vm.homePriorityPage.page}} / {{vm.homePriorityPage.pages}}<button :disabled="vm.homePriorityPage.page>=vm.homePriorityPage.pages" @click="vm.homeTaskPage++">下一页</button></div></footer></section>
       <div v-if="!['progress','priority'].includes(vm.homeDialog)" class="home-columns home-main" :class="{'home-no-stock':!vm.homeCanStock}">
         <section v-if="vm.homeWorkspace==='stock' && vm.homeCanStock" class="home-panel home-stock" aria-labelledby="home-stock-title">
           <div class="home-panel-heading"><h2 id="home-stock-title">库存预警 <span class="home-badge amber">{{vm.homeStockCounts.action}}款待处理</span></h2><button class="home-link" @click="vm.homeStockTab='all'">全部预警</button></div>
@@ -346,7 +407,7 @@
             <div class="home-stock-row"><div class="home-product"><span class="home-customer" :title="r.customer_name">{{r.customer_label || r.customer_name}}</span><strong>{{r.product_code || '无编码'}}</strong><span>{{r.product_name}}</span></div>
               <div class="home-stock-qty"><div><strong>{{vm.homeNumber(r.physical_unconsumed_quantity)}}</strong><span> {{vm.homeStockUnit(r)}}</span></div><small>实存 · 可用 {{vm.homeNumber(r.available_quantity)}}<template v-if="r.is_virtual_composite_parent">（含可配套）</template></small></div>
               <div class="home-stock-status"><strong>预警 {{vm.homeNumber(r.warning_quantity)}} · 目标 {{vm.homeNumber(r.target_quantity)}} {{vm.homeStockUnit(r)}}</strong><span>{{vm.homeState(r)==='new'?vm.homeStockDetail(r):vm.homeStockHeading(r)}}<template v-if="['missing','review'].includes(vm.homeState(r))"> · {{vm.homeStockDetail(r)}}</template></span></div>
-              <div class="home-row-actions"><button class="home-button" :class="{primary:vm.homeState(r)==='new'}" :disabled="vm.homeActionBusy || !!vm.overviewError" @click="vm.homeOpenStock(r)">{{vm.homeStockAction(r)}}</button><button class="home-link" :aria-expanded="vm.homeExpandedPolicy===r.policy_id" @click="vm.homeExpandedPolicy=vm.homeExpandedPolicy===r.policy_id?null:r.policy_id">{{vm.homeExpandedPolicy===r.policy_id?'收起明细':'库存明细'}}</button></div>
+              <div class="home-row-actions"><button class="home-button" :class="{primary:vm.homeState(r)==='new'}" :disabled="vm.homeActionBusy || !!vm.overviewError || !!vm.homeDialogReadState.error" @click="vm.homeOpenStock(r)">{{vm.homeStockAction(r)}}</button><button class="home-link" :aria-expanded="vm.homeExpandedPolicy===r.policy_id" @click="vm.homeExpandedPolicy=vm.homeExpandedPolicy===r.policy_id?null:r.policy_id">{{vm.homeExpandedPolicy===r.policy_id?'收起明细':'库存明细'}}</button></div>
             </div>
             <div v-if="vm.homeExpandedPolicy===r.policy_id" class="home-stock-expanded">
               <span>订单占用 {{vm.homeNumber(r.reserved_quantity)}} {{vm.homeStockUnit(r)}}</span><span>备料 {{vm.homeNumber(r.customer_board_preparation_available_sheet_quantity)}} 张</span><span v-if="r.processed_component_available_piece_quantity">已加工半成品 {{vm.homeNumber(r.processed_component_available_piece_quantity)}} 片</span><span v-if="r.processed_component_identity_review_piece_quantity">旧工艺半成品待核 {{vm.homeNumber(r.processed_component_identity_review_piece_quantity)}} 片</span><span>在途 {{vm.homeNumber(r.incoming_board_preparation_sheet_quantity)}} 张</span>
@@ -378,23 +439,24 @@
           <div v-if="!vm.homeTasksPage.total" class="home-empty">{{vm.homeQuery || vm.homeCustomer?'当前筛选下暂无待办':'当前没有此类待办'}}</div>
           <article v-for="g in vm.homeTasksPage.rows" :key="g.key" class="home-task-group"><div class="home-task-group-head"><strong>{{g.order_label || g.rows[0].product_code || g.rows[0].type}}</strong><span>{{g.rows[0].type}} · {{g.rows.length}}项</span><button class="home-link" @click="vm.homeExpandedTaskGroup=vm.homeExpandedTaskGroup===g.key?null:g.key">{{vm.homeExpandedTaskGroup===g.key?'收起成员':'查看成员'}}</button></div><template v-for="r in g.rows" :key="r.id"><div v-if="vm.homeExpandedTaskGroup===g.key || g.rows.length===1" class="home-task">
             <div class="home-task-meta"><span class="home-badge" :class="r.urgency==='overdue'?'':r.urgency">{{r.urgency==='overdue'?'交期已过 · 待确认安排':r.urgency_label}}</span><span v-if="r.type!==r.urgency_label">{{r.type}}</span><time v-if="r.due_date">原交期 {{r.due_date}}</time></div>
-            <div class="home-task-main"><div><strong :title="r.customer_name">{{r.customer_label}}<template v-if="r.product_code"> · {{r.product_code}}</template></strong><span v-if="r.product_name">{{r.product_name}}</span><p>{{r.message}}</p><small v-if="r.customer_po || r.order_number">{{r.customer_po?'客户单号':'ERP订单'}} {{r.customer_po || r.order_number}}</small><small v-if="r.attention_label" class="home-attention-note">{{r.attention_label}}<template v-if="r.remind_on"> · {{r.remind_on}}提醒</template></small><small v-else-if="r.resurface_reason" class="blue">{{r.resurface_reason}}</small></div><div class="home-task-actions"><button class="home-button" :disabled="vm.homeActionBusy || !!vm.overviewError" @click="vm.homeOpenTask(r)">{{r.action_text}}</button><button class="home-link" :disabled="vm.homePreferenceBusy || !!vm.overviewError" @click="vm.homeEditReminder(r)">稍后 / 处置</button><button v-if="r.attention_state!=='active' && (r.attention_scope==='personal'||vm.homeData.can_manage_team_reminders)" class="home-link" :disabled="vm.homePreferenceBusy || !!vm.overviewError" @click="vm.homeSaveReminder(r,'active')">恢复提醒</button></div></div>
+            <div class="home-task-main"><div><strong :title="r.customer_name">{{r.customer_label}}<template v-if="r.product_code"> · {{r.product_code}}</template></strong><span v-if="r.product_name">{{r.product_name}}</span><p>{{r.message}}</p><small v-if="r.customer_po || r.order_number">{{r.customer_po?'客户单号':'ERP订单'}} {{r.customer_po || r.order_number}}</small><small v-if="r.attention_label" class="home-attention-note">{{r.attention_label}}<template v-if="r.remind_on"> · {{r.remind_on}}提醒</template></small><small v-else-if="r.resurface_reason" class="blue">{{r.resurface_reason}}</small></div><div class="home-task-actions"><button class="home-button" :disabled="vm.homeActionBusy || !!vm.overviewError || !!vm.homeDialogReadState.error" @click="vm.homeOpenTask(r)">{{r.action_text}}</button><button class="home-link" :disabled="vm.homePreferenceBusy || !!vm.overviewError || !!vm.homeDialogReadState.error" @click="vm.homeEditReminder(r)">稍后 / 处置</button><button v-if="r.attention_state!=='active' && (r.attention_scope==='personal'||vm.homeData.can_manage_team_reminders)" class="home-link" :disabled="vm.homePreferenceBusy || !!vm.overviewError || !!vm.homeDialogReadState.error" @click="vm.homeSaveReminder(r,'active')">恢复提醒</button></div></div>
             <div v-if="vm.homePreferenceForm?.task_id===r.id" class="home-reminder-form">
               <label>原因<select v-model="vm.homePreferenceForm.reason"><option v-for="reason in vm.homeData.attention_reasons" :key="reason.code" :value="reason.code">{{reason.label}}</option></select></label>
               <label>提醒日期<input type="date" v-model="vm.homePreferenceForm.remind_on" :min="vm.homeDateAfter(1)" :max="vm.homeDateAfter(365)" /></label>
               <div class="home-reminder-shortcuts"><button v-for="n in [1,3,7]" class="home-link" @click="vm.homePreferenceForm.remind_on=vm.homeDateAfter(n)">{{n===1?'明天':n+'天后'}}</button></div>
               <label v-if="vm.homeData.can_manage_team_reminders">范围<select v-model="vm.homePreferenceForm.scope"><option value="team">团队提醒</option><option value="personal">仅对我</option></select></label>
               <small>{{vm.homeReminderEffect()}}</small>
-              <div class="home-reminder-buttons"><button class="home-button primary" :disabled="vm.homePreferenceBusy" @click="vm.homeSaveReminder(r)">{{vm.homePreferenceBusy?'保存中…':'保存安排'}}</button><button class="home-button" :disabled="vm.homePreferenceBusy" @click="vm.homeSaveReminder(r,'hidden')">仅对我隐藏</button><button class="home-link" :disabled="vm.homePreferenceBusy" @click="vm.homePreferenceForm=null">取消</button></div>
+              <div class="home-reminder-buttons"><button class="home-button primary" :disabled="vm.homePreferenceBusy || !!vm.overviewError || !!vm.homeDialogReadState.error" @click="vm.homeSaveReminder(r)">{{vm.homePreferenceBusy?'保存中…':'保存安排'}}</button><button class="home-button" :disabled="vm.homePreferenceBusy || !!vm.overviewError || !!vm.homeDialogReadState.error" @click="vm.homeSaveReminder(r,'hidden')">仅对我隐藏</button><button class="home-link" :disabled="vm.homePreferenceBusy" @click="vm.homePreferenceForm=null">取消</button></div>
             </div>
           </div></template></article>
           <footer class="home-pagination"><span>共{{vm.homeTasksPage.total}}组 · {{vm.homeTasksPage.page}} / {{vm.homeTasksPage.pages}}</span><div><button :disabled="vm.homeTasksPage.page<=1" @click="vm.homeTaskPage=vm.homeTasksPage.page-1">上一页</button><button :disabled="vm.homeTasksPage.page>=vm.homeTasksPage.pages" @click="vm.homeTaskPage=vm.homeTasksPage.page+1">下一页</button></div></footer>
           </div>
         </section>
       </div>
-      <section v-if="vm.homeAnalyticsOpen" class="home-panel home-progress"><div class="home-panel-heading"><h2>业务进度</h2></div><nav aria-label="业务进度"><button v-for="c in vm.homeStages" :key="c.key" :class="{active:vm.homeTaskMode===c.key}" @click="vm.homeSelectMetric(c.key)">{{c.title}} <strong>{{c.count}}</strong><small>{{c.count_unit}}</small><span v-if="c.key==='pending_payment'" class="home-stage-amount">¥{{vm.homeNumber(c.amount)}}</span></button><button v-if="vm.dashboardRequisitionHoldSummary.total" @click="vm.openWaitingRequisitionFromDashboard">等候报料 <strong>{{vm.dashboardRequisitionHoldSummary.total}}</strong>条</button></nav></section>
+      <section v-if="vm.homeAnalyticsOpen" class="home-panel home-progress"><div class="home-panel-heading"><h2>业务进度</h2></div><nav aria-label="业务进度"><button v-for="c in vm.homeStages" :key="c.key" :class="{active:vm.homeTaskMode===c.key}" @click="vm.homeSelectMetric(c.key)">{{c.title}} <strong>{{c.count === null ? '待查看' : c.count}}</strong><small>{{c.count_unit}}</small><span v-if="c.key==='pending_payment'" class="home-stage-amount">¥{{vm.homeNumber(c.amount)}}</span></button><button v-if="vm.dashboardRequisitionHoldSummary.total" @click="vm.openWaitingRequisitionFromDashboard">等候报料 <strong>{{vm.dashboardRequisitionHoldSummary.total}}</strong>条</button></nav></section>
       <slot v-if="vm.homeDialog==='progress'" name="analytics"></slot>
       <div v-if="vm.homeDialog==='delivery' && (vm.deliveryBacklogs.items.length || vm.deliveryBacklogs.error)" class="home-backlog"><button class="home-link" @click="vm.openDeliveryBacklogs">待补送与历史</button><span>{{vm.deliveryBacklogs.error || '有待补送事项，请核对交付安排'}}</span></div>
+      </template>
       </home-dialog>
     </template>
   </section>`;

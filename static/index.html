@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260926-cost-column" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
     <link rel="stylesheet" href="/static/ui/home-workbench.css?v=2a585f7ebfed" />
-    <script src="/static/ui/home-workbench.js?v=4557c6b3e1db"></script>
+    <script src="/static/ui/home-workbench.js?v=4e354ed685b0"></script>
     <link rel="stylesheet" href="/static/ui/home-collaboration.css?v=a7c8d76c9fff" />
     <script src="/static/vendor/element-plus-icons-vue-2.3.2.min.js"></script>
     <script src="/static/ui/home-collaboration.js?v=9b9da0e92092"></script>
@@ -3269,6 +3269,7 @@
     <link rel="stylesheet" href="/static/ui/order-reference.css?v=423" />
     <script src="/static/ui/incoming-actual.js?v=e251f82faeb0"></script>
 <script src="/static/ui/order-reference.js?v=423"></script>
+    <script src="/static/js/list-read-state.js?v=cd7ef6caf1c8"></script>
     <script src="/static/js/unified-navigation.js?v=9ac4627ab6c7"></script>
     <script src="/static/js/frontend-reliability.js?v=20261009"></script>
     <script src="/static/js/frontend-shell-bridge.js?v=bd6de3a55961"></script>
@@ -3510,7 +3511,8 @@
                 <div class="toolbar-group"><button v-if="canCreateCustomers" class="btn primary" @click="openCustomer()">新增客户</button></div>
                 <div class="toolbar-group"><button class="btn" :disabled="customerPhoneGovernanceExporting" @click="exportCustomerPhoneGovernance">{{ customerPhoneGovernanceExporting ? '生成清单中…' : '导出电话待核对清单' }}</button><label><input type="checkbox" v-model="filters.showInactive" @change="runExplicitPageListLoad('customers',{resetPage:true})" /> 显示已停用客户</label><input class="input" v-model="filters.customerKeyword" @input="queuePageSearch('customers')" @keyup.enter="runExplicitPageListLoad('customers',{resetPage:true})" /><button class="btn" @click="runExplicitPageListLoad('customers',{resetPage:true})">查询</button></div>
               </div>
-              <data-panel :empty="!customers.length">
+              <list-read-status :state="listReadStates['customers:list']" :has-rows="!!customers.length" @retry="runExplicitPageListLoad('customers')"></list-read-status>
+              <data-panel v-if="customers.length" :empty="false">
                 <table class="customer-list-table" data-viewport-page="customers"><colgroup><col class="customer-col-number" /><col class="customer-col-code" /><col class="customer-col-label-short" /><col class="customer-col-name" /><col class="customer-col-contact" /><col class="customer-col-phone" /><col class="customer-col-term" /><col class="customer-col-delivery" /><col class="customer-col-status" /><col class="customer-col-actions" /></colgroup><thead><tr><th>客户编号</th><th>客户缩写</th><th>标签中文简称</th><th>客户名称</th><th>联系人</th><th>电话</th><th>账期</th><th>送货方式</th><th v-if="orderListColumnVisible('status')">状态</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in customers" :key="row.id">
                   <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td><span :class="row.chinese_short_name ? '' : 'status orange'">{{ row.chinese_short_name || "待补录" }}</span></td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td><span>{{ customerPhoneDisplay(row.phone) || "-" }}</span><span v-if="customerPhoneAnalysis(row.phone).needs_review" class="phone-review-note">疑似占位，待核对</span></td>
@@ -3690,9 +3692,7 @@
                     <pager :page="pages.products" :total="productsTotal" :page-size="productListPageSize()" :always="true" :compact="true" :filter-count="productListFilterCount" @change="pages.products=$event; runExplicitPageListLoad('products')"></pager>
                   </div>
   
-                  <div v-if="productsLoading" class="product-list-status" role="status">{{ products.length ? '正在更新，以下保留上次结果…' : '正在读取该客户的常用箱…' }}</div>
-                  <div v-if="productsError" class="notice error" role="alert">{{ products.length ? '更新失败，以下保留上次结果：' : '读取失败：' }}{{ productsError }} <button class="btn small" @click="runExplicitPageListLoad('products')">重试</button></div>
-                  <div v-if="!productsLoading && !productsError && !products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
+                  <list-read-status :state="listReadStates['products:list']" :has-rows="!!products.length" loading-text="正在读取该客户的常用箱…" empty-text="该客户当前没有符合条件的常用箱" @retry="runExplicitPageListLoad('products')"></list-read-status>
                   <div v-if="products.length" class="table-wrap product-list-wrap" :aria-busy="productsLoading"><table class="product-list-table" data-viewport-page="products"><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>单位</th><th>分类</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td>{{ productUnitLabel(row) }}<span v-if="row.unit_needs_review" class="status orange">单位待完善</span></td><td :title="row.classification?.legacy_name" style="white-space:nowrap">{{ row.classification?.label || "待核对" }}</td><td style="min-width:160px;max-width:320px;white-space:pre-wrap;overflow-wrap:anywhere">{{ row.customer_specification == null ? spec(row) : row.customer_specification }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ unitPrice(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '报料资料完整' : '报料资料待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="product-list-actions"><div class="product-row-actions"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><details class="product-row-more" @toggle="positionProductRowActions($event)" @keydown.esc.stop="closeProductRowActions($event)" @focusout="leaveProductRowActions($event)"><summary class="btn small" :aria-label="plainProductText(row.product_code) + ' 更多操作'">更多</summary><div class="product-row-menu" @click="closeProductRowActions($event)"><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="(canRequisition || canEditStockAlerts) && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></div></details></div></td></tr></tbody></table></div>
                 </template>
               </div>
@@ -4202,7 +4202,8 @@
               <template v-else>
               <div class="order-list-panel">
               <div class="workflow-list-note">点击行可定位当前订单；详情返回后保留筛选与页码。客户单号为主，展开可看明细进度。</div>
-              <data-panel :empty="!orders.length">
+              <list-read-status :state="listReadStates['orders:list']" :has-rows="!!orders.length" @retry="runExplicitPageListLoad('orders')"></list-read-status>
+              <data-panel v-if="orders.length" :empty="false">
                 <table class="order-group-table">
                   <thead>
                     <tr>
@@ -4315,7 +4316,8 @@
                   <button class="btn" @click="runExplicitPageListLoad('orders',{resetPage:true})">搜索</button>
                 </div>
               </div>
-              <data-panel :empty="!orders.length">
+              <list-read-status :state="listReadStates['orders:list']" :has-rows="!!orders.length" @retry="runExplicitPageListLoad('orders')"></list-read-status>
+              <data-panel v-if="orders.length" :empty="false">
                 <table><thead><tr><th>主操作</th><th></th><th>客户订单号</th><th class="erp-order-no">ERP订单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
                   <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><order-reference :row="row" :secondary="false"></order-reference></td><td class="erp-order-no">{{ row.order_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ row.business_delivery_progress?.delivered_quantity || 0 }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><status-tag :value="orderDisplayStatusKey(row)"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">¥ {{ salesMoney(row.total_amount) }}</td></tr>
@@ -10331,7 +10333,7 @@
                     <td class="sensitive-price">{{ unitPrice(row.sale_unit_price) }}</td><td v-if="hasPermission('warehouse.view')" :title="row.inventory_error || '可用成品数量，已排除预占'">{{ row.inventory_error ? '待核对' : (row.available_finished_quantity ?? '—') }}</td>
                     <td><button v-if="!commonBoxReadiness(row).ready && canEditProducts" type="button" class="status orange order-readiness-link" :disabled="orderContextOpening" :title="commonBoxReadinessTitle(row)" @click.stop="openCommonBoxEditorFromPicker(row)">待完善</button><span v-else :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']">{{ commonBoxReadiness(row).ready ? "完善" : "待完善" }}</span></td>
                   </tr>
-                  <tr v-if="!orderCommonBoxPicker.loading && !orderCommonBoxPicker.items.length"><td :colspan="hasPermission('warehouse.view') ? 9 : 8" class="empty">当前筛选没有可用常用箱</td></tr>
+                  <tr v-if="!orderCommonBoxPicker.loading && !orderCommonBoxPicker.items.length"><td :colspan="hasPermission('warehouse.view') ? 9 : 8" class="empty">当前筛选没有可下单的常用箱。可清空筛选重试，或到常用箱核对客户及产品的启用状态。</td></tr>
                   <tr v-if="orderCommonBoxPicker.loading"><td :colspan="hasPermission('warehouse.view') ? 9 : 8" class="empty">正在读取常用箱…</td></tr>
                 </tbody>
               </table>
@@ -11211,7 +11213,7 @@
             masterVersionConflict: null,
             masterVersionHistory: blankMasterVersionHistory(),
             selectedProductCustomer: null, productCustomerSearch: "",
-            productsLoading: false, productsError: "", productsListIdentity: "",
+            productsLoading: false, productsError: "", listReadStates: {},
             showProductMoreFilters: false,
             productTrashOpen: false, productTrashItems: [], productTrashLoading:false, productTrashError:"", productLifecycleAction:{action:"",productId:null}, customerLifecycleAction:{action:"",customerId:null}, materialLifecycleAction:{action:"",materialId:null},
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderNumber:"", orderCustomerPo:"", orderProductCode:"", orderProductName:"", orderSpecification:"", orderDateFrom:"", orderDateTo:"", orderDeliveryDateFrom:"", orderDeliveryDateTo:"", orderScope:"active", orderStage:"", orderStatus:"business", orderView:"customer_po", orderSortBy:"", orderSortDirection:"desc" },
@@ -11814,13 +11816,16 @@
             });
           },
           dashboardRequisitionHoldSummary() {
-            const pendingCard = (this.overview?.cards || []).find(card => card.key === "pending_material") || {};
+            const summaryMode = this.overview?.mode === "summary";
+            const production = summaryMode && this.homeAvailableGroups?.includes("production") ? this.homeSections?.production : null;
+            if (summaryMode && !production) return {total:null,due_count:null,anomaly_count:null};
+            const pendingCard = (production?.cards || this.overview?.cards || []).find(card => card.key === "pending_material") || {};
             const source = this.overview?.requisition_hold_summary
               || this.overview?.requisition_holds
               || this.overview?.summary?.requisition_holds
               || {
                 total:pendingCard.waiting_count,
-                due_count:pendingCard.waiting_due_count,
+                due_count:pendingCard.due_waiting_count ?? pendingCard.waiting_due_count,
               };
             return {
               total:Number(source.total ?? source.active_count ?? source.waiting_count ?? 0),
@@ -16700,7 +16705,7 @@
             this.expandedOrders = {};
             this.loading = false;
             this.pageLoading = false;
-            this.productsListIdentity = "";
+            this.listReadStates = {};
             this.customerPhoneGovernanceExporting = false;
             this.pageCacheUpdatedAt = {};
             for (const controller of latestRequestControllers.values()) controller.abort();
@@ -17540,22 +17545,26 @@
             const requestKey = "dashboard:overview";
             const controller = this.beginLatestRequest(requestKey);
             const generation = this.authGeneration;
+            const page = this.activePage;
+            this.homeCancelSections?.();
             const userId = this.user?.id ?? null;
-            const isCurrent = () => latestRequestControllers.get(requestKey) === controller
+            const ownsRequest = () => latestRequestControllers.get(requestKey) === controller
               && generation === this.authGeneration && userId === (this.user?.id ?? null);
-            if(this.hasPermission('deliveries.view')) this.loadDeliveryBacklogs(1,false);
+            const isCurrent = () => ownsRequest() && page === this.activePage && !controller.signal.aborted;
             this.overviewLoading = true;
             this.overviewError = "";
             this.warehouseCapacitySummary = null;
             try {
-              const data = (await axios.get("/api/dashboard/overview", {signal:controller.signal, timeout:20000})).data || { cards: [], todos: [], summary: {} };
+              const data = (await axios.get("/api/dashboard/overview", {params:{mode:"summary"},signal:controller.signal, timeout:20000})).data || { cards: [], todos: [], summary: {} };
               if (!isCurrent()) return false;
               this.overview = data;
-              if (data.kpi) this.kpi = data.kpi;
-              else await this.loadKpi();
-              if (!isCurrent()) return false;
-              // Optional capacity must not hold the main dashboard in loading.
-              this.loadWarehouseCapacitySummary();
+              if(data.mode==='summary') this.homeRefreshLoadedSections?.();
+              else {
+                if (data.kpi) this.kpi = data.kpi;
+                else await this.loadKpi();
+                if (!isCurrent()) return false;
+                this.loadWarehouseCapacitySummary();
+              }
               return true;
             } catch (error) {
               if (!isCurrent() || this.isCancelledRequest(error)) return false;
@@ -17563,7 +17572,7 @@
                 ? "请求超时，请点击重新加载" : this.errorMessage(error);
               return false;
             } finally {
-              if (isCurrent()) {
+              if (ownsRequest()) {
                 this.overviewLoading = false;
                 this.$nextTick(() => this.syncDesktopDeliveryMargin());
               }
@@ -17611,25 +17620,19 @@
           },
           async loadCustomers() {
             if (!this.hasPermission("customers.view")) return true;
-            const requestKey = "customers:list";
-            const controller = this.beginLatestRequest(requestKey);
+            const request = window.ERPListRead.begin(this, {
+              key:"customers:list", scope:()=>"customers",
+              context:()=>JSON.stringify([this.activePage,this.filters.customerKeyword,this.filters.showInactive,this.pages.customers]),
+              clear:()=>{this.customers=[];this.customersTotal=0;},
+            });
             try {
-              const { data } = await axios.get("/api/master/customers", {
-                params: {
-                  keyword: this.filters.customerKeyword, include_inactive:this.filters.showInactive,
-                  page: this.pages.customers, page_size: this.desktopListPageSize()
-                },
-                signal: controller.signal,
+              const {data} = await axios.get("/api/master/customers", {
+                params:{keyword:this.filters.customerKeyword,include_inactive:this.filters.showInactive,page:this.pages.customers,page_size:this.desktopListPageSize()},
+                signal:request.signal,
               });
-              if (latestRequestControllers.get(requestKey) !== controller) return false;
-              this.customers = data.items; this.customersTotal = data.total;
-              return true;
-            } catch (error) {
-              if (this.isCancelledRequest(error)) return false;
-              throw error;
-            } finally {
-              this.finishLatestRequest(requestKey, controller);
-            }
+              return request.accept(()=>{this.customers=data.items;this.customersTotal=data.total;});
+            } catch(error) {return request.fail(error);}
+            finally {request.finish();}
           },
           async exportCustomerPhoneGovernance() {
             if (!this.hasPermission("customers.view") || this.customerPhoneGovernanceExporting) return false;
@@ -17747,12 +17750,6 @@
             if (this.activePage === "products" && this.productTab === "products" && !this.selectedProductCustomer) {
               this.products = []; this.productsTotal = 0; this.productsLoading = false; this.productsError = ""; return true;
             }
-            const customerId = this.selectedProductCustomer?.id ?? this.filters.productCustomer ?? '';
-            const identity = `${this.user?.id ?? 'anonymous'}:${this.authGeneration}:${customerId}`;
-            if (this.productsListIdentity !== identity) {
-              this.products = []; this.productsTotal = 0; this.productsListIdentity = identity;
-            }
-            const requestPage = this.activePage, requestTab = this.productTab;
             const params = {
               keyword: this.filters.productKeyword,
               product_code: this.filters.productCode,
@@ -17766,29 +17763,16 @@
             };
             if (this.selectedProductCustomer) params.customer_id = this.selectedProductCustomer.id;
             else if (this.filters.productCustomer) params.customer_id = this.filters.productCustomer;
-            const requestKey = "products:list";
-            const controller = this.beginLatestRequest(requestKey);
-            const ownsLoading = () => latestRequestControllers.get(requestKey) === controller
-              && identity === `${this.user?.id ?? 'anonymous'}:${this.authGeneration}:${this.selectedProductCustomer?.id ?? this.filters.productCustomer ?? ''}`;
-            const isCurrent = () => ownsLoading() && !controller.signal.aborted
-              && this.activePage === requestPage && this.productTab === requestTab;
-            this.productsLoading = true;
-            this.productsError = "";
+            const request = window.ERPListRead.begin(this, {
+              key:"products:list", scope:()=>String(this.selectedProductCustomer?.id ?? this.filters.productCustomer ?? ''),
+              context:()=>JSON.stringify([this.activePage,this.productTab,this.pages.products,this.filters.productKeyword,this.filters.productCode,this.filters.productName,this.filters.productSpec,this.filters.productMaterial,this.filters.showInactiveProducts]),
+              clear:()=>{this.products=[];this.productsTotal=0;},loadingField:"productsLoading",errorField:"productsError",
+            });
             try {
-              const { data } = await axios.get("/api/master/products", { params, signal:controller.signal });
-              if (!isCurrent()) return false;
-              this.products = data.items; this.productsTotal = data.total;
-              return true;
-            } catch (error) {
-              if (this.isCancelledRequest(error)) return false;
-              if (isCurrent()) {
-                this.productsError = this.errorMessage(error) || "常用箱读取失败，请重试";
-              }
-              return false;
-            } finally {
-              if (ownsLoading()) this.productsLoading = false;
-              this.finishLatestRequest(requestKey, controller);
-            }
+              const {data} = await axios.get("/api/master/products", {params,signal:request.signal});
+              return request.accept(()=>{this.products=data.items;this.productsTotal=data.total;});
+            } catch(error) {return request.fail(error);}
+            finally {request.finish();}
           },
           async loadMoldTools() {
             if (this.isWorkshop) return true;
@@ -19550,10 +19534,14 @@
               params.sort_by = this.filters.orderSortBy;
               params.sort_direction = this.filters.orderSortDirection;
             }
-            const controller = this.beginLatestRequest("orders:list");
+            const request = window.ERPListRead.begin(this, {
+              key:"orders:list",scope:()=>`${this.activePage}:${this.orderWorkspace}:${this.filters.orderCustomer || ''}`,
+              context:()=>JSON.stringify([this.activePage,this.orderWorkspace,this.pages.orders,Object.entries(this.filters).filter(([key])=>key.startsWith('order'))]),
+              clear:()=>{this.orders=[];this.ordersTotal=0;this.ordersUnfinishedTotal=0;},
+            });
             try {
-              const { data } = await axios.get("/api/orders", { params, signal:controller.signal });
-              if (latestRequestControllers.get("orders:list") !== controller) return false;
+              const { data } = await axios.get("/api/orders", { params, signal:request.signal });
+              if (!request.current()) return false;
               const total = Math.max(0, Number(data.total || 0));
               const responsePageSize = Math.max(1, Number(data.page_size || effectivePageSize));
               const lastPage = Math.max(1, Math.ceil(total / responsePageSize));
@@ -19561,21 +19549,18 @@
                 this.pages.orders = lastPage;
                 return this.loadOrders();
               }
-              this.orders = data.items; this.ordersTotal = total; this.ordersUnfinishedTotal = data.unfinished_total || 0;
-              this.cancelOrderGroupDetailRequests();
-              this.orderListGeneration += 1;
-              this.expandedOrders = {};
-              this.orderGroupDetails = {};
-              this.orderGroupDetailLoading = {};
-              this.orderGroupDetailErrors = {};
-              if (this.orderBomDemandSaveState?.outcomeUncertain) this.resetOrderBomDemandSaveState();
-              return true;
-            } catch (error) {
-              if (!this.isCancelledRequest(error) && latestRequestControllers.get("orders:list") === controller) throw error;
-              return false;
-            } finally {
-              this.finishLatestRequest("orders:list", controller);
-            }
+              return request.accept(()=>{
+                this.orders = data.items; this.ordersTotal = total; this.ordersUnfinishedTotal = data.unfinished_total || 0;
+                this.cancelOrderGroupDetailRequests();
+                this.orderListGeneration += 1;
+                this.expandedOrders = {};
+                this.orderGroupDetails = {};
+                this.orderGroupDetailLoading = {};
+                this.orderGroupDetailErrors = {};
+                if (this.orderBomDemandSaveState?.outcomeUncertain) this.resetOrderBomDemandSaveState();
+              });
+            } catch(error) {return request.fail(error);}
+            finally {request.finish();}
           },
           async autoReleaseReadyRequisitionHolds(signal=null) {
             if (!this.canRequisition) return [];
@@ -30671,7 +30656,7 @@
           async selectProductCustomer(row) {
             this.cancelLatestRequest("products:list");
             this.selectedProductCustomer = row;
-            this.productsListIdentity = "";
+            delete this.listReadStates["products:list"];
             this.filters.productCustomer = row.id;
             this.filters.productKeyword = "";
             this.filters.productCode = "";
@@ -30705,7 +30690,7 @@
             this.cancelQueuedPageSearch("products");
             this.cancelLatestRequest("products:list");
             this.selectedProductCustomer = null;
-            this.productsListIdentity = "";
+            delete this.listReadStates["products:list"];
             this.pages.productCustomers = 1;
             this.filters.productCustomer = "";
             this.filters.productKeyword = "";
@@ -43695,6 +43680,7 @@
         </div>`
       });
       window.ERPOrderContext?.install(app);
+      window.ERPListRead?.install(app);
       window.ERPWorkspace?.install(app);
       window.ERPWorkflowContinuity?.install(app);
       window.ERPPdfWorkspace?.install(app);

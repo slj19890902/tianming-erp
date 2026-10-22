@@ -33,7 +33,7 @@
     <script src="/static/ui/stock-preparation-assembly-recovery.js?v=a11f3ee39242"></script>
     <script src="/static/ui/production-workspace.js?v=20261019labels01"></script>
     <script src="/static/ui/production-desk.js?v=round-experience-d2"></script>
-    <link rel="stylesheet" href="/static/ui/production-desk.css?v=20260922-map-return">
+    <link rel="stylesheet" href="/static/ui/production-desk.css?v=40671f989eb1">
     <script src="/static/ui/exact-money.js?v=dd6e94acf45e"></script>
     <script src="/static/ui/finance-workspace.js?v=73e0d81ec493"></script>
     <script src="/static/ui/desktop-delivery-margin.js?v=20260926-dashboard-cost"></script>
@@ -4818,7 +4818,6 @@
               <div class="production-compact-command-bar">
                 <div class="toolbar-group production-tab-strip">
                   <h2>生产工作台</h2>
-                  <button class="btn" :disabled="productionBusy" @click="incomingTab='pending'; go('incoming')">待收料</button>
                   <button :class="['btn',{primary:productionTab==='pending'}]" @click="productionPendingSource='all'; selectStockProductionTab('pending')">待生产<span v-if="productionPendingTotal + stockPrepPendingCount"> · {{productionPendingTotal + stockPrepPendingCount}}</span></button>
                   <button :class="['btn',{primary:productionTab==='assembly'}]" @click="productionTab='assembly'; loadPendingAssemblies(1)">待处理子件</button>
                   <button :class="['btn',{primary:productionTab==='placement'}]" @click="productionTab='placement'; loadProductionPlacement()">已入库 / 成品<span v-if="productionPlacementPendingTotal"> · 待归位 {{productionPlacementPendingTotal}}</span></button>
@@ -4847,22 +4846,32 @@
                 <div v-if="assemblyError" class="status orange">{{assemblyError}}</div>
                 <div v-if="assemblyLoading" class="muted">正在核对配套库存…</div>
                 <div v-else-if="!pendingAssemblies.length" class="empty">暂无未组套子件</div>
-                <article v-for="row in pendingAssemblies" :key="row.key || row.order_item_id" class="panel" style="margin-top:10px;background:#f0f8f5">
+                <details v-for="row in pendingAssemblies" :key="row.key || row.order_item_id" class="assembly-pending-row">
+                  <summary class="assembly-pending-summary">
+                    <strong class="assembly-pending-customer" :title="row.customer_name">{{row.customer_name || '订单子件'}}</strong>
+                    <span class="assembly-pending-code" :title="row.product_code || row.order_number">{{row.product_code || row.order_number || '订单 '+row.order_item_id}}</span>
+                    <span class="assembly-pending-name" :title="row.product_name">{{row.product_name || '配对信息待核对'}}</span>
+                    <span class="assembly-pending-kind muted">{{row.source_kind==='stock' ? '备库' : '订单'}}</span>
+                    <span :class="['status',row.error || row.assembly_block ? 'orange' : 'blue']">{{row.error ? '待核对' : row.source_kind==='stock' ? '可组 '+(row.verified_available_sets ?? 0)+' '+(row.unit||'单位待核对') : (row.outputs || []).filter(o=>Number(o.quantity)>0).map(o=>'可组 '+o.quantity+' '+o.unit).join(' / ') || '待配对'}}</span>
+                    <span class="assembly-pending-toggle muted" aria-hidden="true"></span>
+                  </summary>
+                  <div class="assembly-pending-detail">
                   <strong>{{row.customer_name}}</strong> <span class="status blue">{{ row.source_kind==='stock' ? '备库自由库存' : '本订单已领用子件' }}</span> <order-reference :row="row"></order-reference>
                   <button v-if="row.source_kind!=='stock' && row.order_item_id && hasPermission('warehouse.view')" class="btn small" @click="openOrderBomStockReview({id:row.order_item_id})">核对本单库存与未匹配批次</button>
                   <div v-if="row.error" class="status orange">{{row.error}}</div>
                   <div v-if="row.source_kind==='stock'" class="toolbar-group"><strong>{{row.product_name}}</strong><span>数量配比参考 {{row.reference_available_sets ?? row.available_sets}} {{row.unit||'单位待核对'}}</span><span>当前备库入口可组 {{row.verified_available_sets ?? 0}} {{row.unit||'单位待核对'}}</span><span class="muted">{{row.notice}}</span></div>
-                  <div v-for="child in row.children" :key="child.product_id" class="toolbar-group" style="margin-top:6px"><strong>{{child.product_code}}</strong><span>{{child.product_name}} · {{child.quantity}} {{child.unit}}</span><span v-if="child.required!==undefined">需 {{child.required}}</span><span v-if="child.missing" class="status orange">本单尚未领用 {{child.missing}}</span><span v-if="row.source_kind==='stock'" class="muted">本入口已核实 {{child.verified_quantity || 0}}；已预占给订单的数量另列</span></div>
+                  <div v-for="child in row.children" :key="child.product_id" class="toolbar-group" style="margin-top:6px"><strong>{{child.product_code}}</strong><span>{{child.product_name}} · {{child.quantity}} {{child.unit}}</span><span v-if="child.per_set!==undefined">每{{row.unit || '套'}}需 {{child.per_set}} {{child.unit}}</span><span v-if="child.required!==undefined">需 {{child.required}}</span><span v-if="child.missing" class="status orange">本单尚未领用 {{child.missing}}</span><span v-if="row.source_kind==='stock'" class="muted">本入口已核实 {{child.verified_quantity || 0}}；已预占给订单的数量另列</span></div>
                   <div v-for="output in row.outputs" :key="output.product_id" class="toolbar-group" style="margin-top:8px">
                     <strong>{{output.product_name}}</strong><input class="input" type="number" min="0" :max="row.expected_outputs[output.product_id]" step="1" v-model.number="output.quantity" :aria-label="output.product_name+'实际组套数量'" style="width:90px" /><span>{{output.unit}}（最多{{row.expected_outputs[output.product_id]}}）</span>
                     <select v-model="output.location_id" class="select" :aria-label="output.product_name+'成套位置'" style="max-width:360px"><option :value="null">选择成套实际位置</option><option v-for="loc in assemblyLocations" :key="loc.id" :value="loc.id">{{loc.name}}</option></select>
                   </div>
                   <details v-if="row.excluded_sources?.length" class="assembly-excluded"><summary>待核对批次（{{row.excluded_sources.length}}）</summary><div v-for="source in row.excluded_sources" :key="source.lot_id" style="margin:6px 0;white-space:normal">{{source.lot_number || source.lot_id}} · {{source.available}}：{{source.reason}}<button v-if="hasPermission('warehouse.view')" class="btn small" type="button" @click="openAssemblyInventoryReview(source)">库存核对</button></div></details>
                   <button v-if="row.error && row.parent_product_id && canEditProducts" class="btn small" type="button" @click="openProduct({id:row.parent_product_id})">维护父件BOM</button>
-                  <details open v-if="row.sources?.length" style="margin:8px 0"><summary>{{row.source_kind==='stock'?'子件库存与位置':'本次组套子件与位置'}}</summary><div v-for="source in row.sources" :key="source.lot_id">{{source.product_code}} · {{source.product_name}} · {{source.quantity}} {{source.unit}} · {{source.location}}</div></details>
+                  <div v-if="row.sources?.length" style="margin:8px 0"><strong>{{row.source_kind==='stock'?'子件库存与位置':'本次组套子件与位置'}}</strong><div v-for="source in row.sources" :key="source.lot_id+'-'+source.product_id">{{source.product_code}} · {{source.product_name}} · {{source.quantity}} {{source.unit}} · {{source.location}}<span v-if="source.location_issue" class="status orange">{{source.location_issue}}</span></div></div>
                    <button v-if="row.source_kind!=='stock' && !row.error && canProductionExecute" class="btn success" :disabled="assemblyLoading || productionBusy || !row.outputs.some(o=>Number(o.quantity)>0) || row.outputs.some(o=>!o.location_id)" @click="confirmPendingAssembly(row)">组套完成并入库</button>
                    <button v-if="row.source_kind==='stock' && row.parent_product_id && canAdmin" class="btn success" :disabled="assemblyLoading || productionBusy || !row.can_assemble_stock" @click="openStockAssembly(row)">组套入库</button><span v-if="row.source_kind==='stock' && row.assembly_block" class="status orange">{{row.assembly_block}}</span>
-                </article>
+                  </div>
+                </details>
               </section>
               <div v-if="productionTab==='pending'" class="toolbar-group production-desk-filters" style="margin-bottom:10px">
                 <span class="status orange">旧流程历史待核对；不会批量改成成品，也不会隐藏未完成任务。</span>

@@ -6,10 +6,11 @@ from sqlalchemy import select
 from app.models.product import Product
 from app.models.product_bom import ProductBomComponent
 from app.models.multilevel_bom import ProductBomInventoryRelation
-from app.models.warehouse_inventory import InventoryLot, WarehouseLocation
+from app.models.warehouse_inventory import InventoryLot
 from app.models.warehouse_goods import WarehouseGoodsProfile
 from app.services.multilevel_bom_master import load_master_structure
 from app.services.multilevel_bom_plan import BomPlanError
+from app.services.bom_pending_locations import pending_source_locations
 
 
 def pending_stock(db, scope):
@@ -43,6 +44,7 @@ def pending_stock(db, scope):
             lots_by_product[pid].append(lot)
     if not lots_by_product:
         return []
+    source_locations = pending_source_locations(db, {lot.id: lot for lots in lots_by_product.values() for lot in lots}.values())
     parents = db.scalars(select(ProductBomComponent.parent_product_id).join(
         ProductBomInventoryRelation, ProductBomInventoryRelation.bom_component_id == ProductBomComponent.id
     ).where(ProductBomComponent.component_product_id.in_(lots_by_product), ProductBomInventoryRelation.relation == 'assembly').distinct())
@@ -67,7 +69,8 @@ def pending_stock(db, scope):
         except BomPlanError as error:
             result.append(dict(key=f'stock:{parent_id}', source_kind='stock', customer_name=parent.customer.chinese_short_name or parent.customer.name,
                 parent_product_id=parent_id,can_assemble_stock=False,assembly_block=str(error),
-                order_number='备库 · '+parent.product_code, error=str(error), outputs=[], sources=[]))
+                order_number='备库 · '+parent.product_code, product_code=parent.product_code,
+                product_name=parent.product_name, error=str(error), outputs=[], sources=[]))
             continue
         edges = [e for e in structure['edges'] if e['parent_id'] == parent_id and e['relation'] == 'assembly']
         sources, children, capacities = [], [], []
@@ -80,9 +83,8 @@ def pending_stock(db, scope):
             children.append(dict(product_id=child.id, product_code=child.product_code, product_name=child.product_name,
                 per_set=edge['quantity'], quantity=total, unit=product_unit_label(child)))
             for lot in candidates:
-                location = db.get(WarehouseLocation, lot.warehouse_location_id)
                 sources.append(dict(lot_id=lot.id, product_id=child.id, product_name=child.product_name, product_code=child.product_code,
-                    quantity=lot.quantity_available, unit=product_unit_label(child), location=location.location_name if location else '位置待核对'))
+                    quantity=lot.quantity_available, unit=product_unit_label(child), **source_locations[lot.warehouse_location_id]))
         if not sources:
             continue
         capacity = min(capacities, default=0)
@@ -105,7 +107,7 @@ def pending_stock(db, scope):
         result.append(dict(key=f'stock:{parent_id}', source_kind='stock', customer_id=parent.customer_id,
             parent_product_id=parent_id,can_assemble_stock=can_assemble,assembly_block=assembly_block,
             customer_name=parent.customer.chinese_short_name or parent.customer.name,
-            order_number='备库 · '+parent.product_code, product_name=parent.product_name,
+            order_number='备库 · '+parent.product_code, product_code=parent.product_code, product_name=parent.product_name,
             available_sets=verified_capacity,reference_available_sets=capacity,verified_available_sets=verified_capacity,
             unit=product_unit_label(parent),verified_output_unit=(verified or {}).get('output_unit'),
             children=children, sources=sources, excluded_sources=(verified or {}).get('excluded_sources',[]), outputs=[],

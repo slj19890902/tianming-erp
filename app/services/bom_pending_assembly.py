@@ -4,7 +4,8 @@ from app.models.order import Order, OrderItem
 from app.models.customer import Customer
 from app.models.product import Product
 from app.models.multilevel_bom import OrderBomGraph
-from app.models.warehouse_inventory import InventoryLot, InventoryReservation, WarehouseLocation
+from app.models.warehouse_inventory import InventoryLot, InventoryReservation
+from app.services.bom_pending_locations import pending_source_locations
 from app.services.multilevel_bom_orders import read_compiled_order_bom
 from app.services.multilevel_bom_receipts import own_output_lots, assemble_graph_order_receipt
 from app.services.multilevel_bom_inventory import assemble_order_inventory
@@ -73,6 +74,7 @@ def preview(db, item_id):
     if compiled is None:
         raise SubkitError('订单没有冻结组合BOM')
     lots, free = source_selection(db, item_id, compiled)
+    source_locations = pending_source_locations(db, lots)
     versions = {lot.id: lot.version for lot in lots}
     quantities = assemble_order_inventory(db, order_item_id=item_id,
         source_lot_versions=versions, target_locations={}, operation_key='read-only-preview',
@@ -109,11 +111,10 @@ def preview(db, item_id):
             pid=mapped[0]
         if pid not in child_ids:
             continue
-        location = db.get(WarehouseLocation, lot.warehouse_location_id)
         sources.append(dict(lot_id=lot.id, product_name=nodes[pid].name + ('（未组装本体）' if is_body_lot(lot) else ''),
             product_id=pid, product_code=detail.inventory_code_snapshot if detail else db.get(Product,pid).product_code,
             quantity=(lot.quantity_available if lot.id in free else 0) + reserved_by_lot.get(lot.id, 0), unit=nodes[pid].unit,
-            location=location.location_name if location else '位置待核对'))
+            **source_locations[lot.warehouse_location_id]))
     customer = db.get(Customer, order.customer_id)
     sources = [source for source in sources if source['quantity'] > 0]
     from app.services.multilevel_bom_plan import plan_bom
@@ -132,6 +133,7 @@ def preview(db, item_id):
         missing=max(0, required.get(pid,0)-sum(s['quantity'] for s in sources if s['product_id']==pid))) for pid in sorted(child_ids)]
     return dict(key=f'order:{item.id}', source_kind='order', order_item_id=item.id, order_number=order.order_number, customer_order_number=order.customer_po,
         customer_id=order.customer_id, customer_name=customer.chinese_short_name or customer.name,
+        product_code=item.snapshot_product_code, product_name=item.snapshot_product_name,
         outputs=outputs, sources=sources, children=children, source_lot_versions=versions, available_lot_ids=free,
         expected_outputs=quantities)
 
@@ -155,7 +157,14 @@ def pending(db, scope):
             row = preview(db, item_id)
         except (SubkitError, ValueError) as error:
             # Surface invalid plans, never silently hide a blocked order.
-            rows.append(dict(order_item_id=item_id, error=str(error), outputs=[]))
+            item = db.get(OrderItem, item_id)
+            order = db.get(Order, item.order_id)
+            customer = db.get(Customer, order.customer_id)
+            rows.append(dict(key=f'order:{item_id}', source_kind='order', order_item_id=item_id,
+                order_number=order.order_number, customer_order_number=order.customer_po,
+                customer_name=customer.chinese_short_name or customer.name,
+                product_code=item.snapshot_product_code, product_name=item.snapshot_product_name,
+                error=str(error), outputs=[]))
             continue
         if row['sources'] or any(o['quantity'] for o in row['outputs']):
             rows.append(row)

@@ -3544,7 +3544,10 @@ def complete_production_batch(
             )
         if int(task.version) != command.expected_version:
             raise ProductionWorkflowError("生产任务版本已变化，请刷新后重试", 409)
-        if command.completion_type == "primary" and int(item.delivered_quantity or 0) > 0:
+        from app.services.unfinished_finished_delivery import dispatched_finished_coverage_allows_primary
+        if (command.completion_type == "primary"
+                and int(item.delivered_quantity or 0) > 0
+                and not dispatched_finished_coverage_allows_primary(db, task, item)):
             raise ProductionWorkflowError("订单明细已送货，不能再执行主生产确认", 409)
         if command.completion_type == "primary":
             existing_primary = db.scalar(

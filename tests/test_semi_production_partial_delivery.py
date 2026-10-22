@@ -167,3 +167,90 @@ def test_closed_item_and_wrong_customer_cannot_use_partial_stock(n029_delivery_a
         result=client.post('/api/deliveries',json={'customer_id':ids['customer'],
             'items':[{'order_item_id':ids['task_pending'],'delivered_quantity':1}]})
         assert result.status_code in (400,409),result.text
+
+
+def dispatch_stock(client, did, key):
+    preview = client.get(f'/api/deliveries/{did}/dispatch-snapshot')
+    assert preview.status_code == 200, preview.text
+    packet = preview.json()
+    response = client.put(f'/api/deliveries/{did}/dispatch', json={
+        'expected_actor_id': packet['current_actor_id'], 'idempotency_key': key,
+        'expected_version': packet['snapshot']['delivery']['version'],
+        'snapshot_hash': packet['snapshot_hash'], 'snapshot': packet['snapshot'],
+        'confirm_pick_exception': False,
+    })
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize('proof', ['valid', 'missing', 'reversed', 'insufficient_coverage'])
+def test_partial_dispatch_then_remaining_semi_production(n029_delivery_app, proof):
+    from app.models import (Order, OrderItem, Customer, Product, WarehouseLocation,
+                            InventoryLot, ProductionTask, DeliveryInventoryAllocation)
+    from app.api.deliveries import _delivery_remaining_quantity
+    from test_n029_production_service import _semi_reserved
+    app, factory, ids = n029_delivery_app
+    lotid, _rid, tid = seed_partial(factory, ids)
+    with factory() as db:
+        item = db.get(OrderItem, ids['task_pending'])
+        _, semi, _ = _semi_reserved(db, key='PARTIAL-COMPLETE',
+            order=db.get(Order, item.order_id), item=item,
+            customer=db.get(Customer, ids['customer']), product=db.get(Product, item.product_id),
+            location=db.get(WarehouseLocation, ids['return_location']), credit=97)
+        semi_id = semi.id
+        db.commit()
+    with TestClient(app) as client:
+        _login(client)
+        first = client.post('/api/deliveries', json={'customer_id': ids['customer'],
+            'items': [{'order_item_id': ids['task_pending'], 'delivered_quantity': 3}]})
+        assert first.status_code == 201, first.text
+        dispatch_stock(client, first.json()['id'], 'partial-before-production')
+        with factory() as db:
+            task = db.get(ProductionTask, tid)
+            expected_version = task.version
+            if proof == 'insufficient_coverage':
+                task.finished_coverage_snapshot = 2
+            if proof in {'missing', 'reversed'}:
+                allocation = db.scalar(select(DeliveryInventoryAllocation))
+                if proof == 'missing':
+                    db.delete(allocation)
+                else:
+                    allocation.reversed_stock_quantity = allocation.consumed_stock_quantity
+                    allocation.reversed_requirement_quantity = allocation.credited_requirement_quantity
+                    allocation.status = 'reversed'
+            db.commit()
+        command = {'idempotency_key': 'complete-after-partial', 'items': [{
+            'task_id': tid, 'expected_version': expected_version, 'disposition': 'stock',
+            'location_id': ids['temporary_location'], 'material_input_quantity': 97,
+            'actual_output_quantity': 97}]}
+        completed = client.post('/api/production/completion-batches', json=command)
+        if proof != 'valid':
+            assert completed.status_code == 409, completed.text
+            assert '已送货' in completed.text
+            with factory() as db:
+                assert db.get(ProductionTask, tid).status == 'pending'
+                assert db.get(InventoryLot, semi_id).quantity_consumed == 0
+            return
+        assert completed.status_code in (200, 201), completed.text
+        replay = client.post('/api/production/completion-batches', json=command)
+        assert replay.status_code in (200, 201), replay.text
+        with factory() as db:
+            assert db.get(ProductionTask, tid).status == 'completed'
+            item = db.get(OrderItem, ids['task_pending'])
+            assert (item.quantity, item.delivered_quantity) == (100, 3)
+            assert _delivery_remaining_quantity(db, item) == 97
+            assert db.get(InventoryLot, semi_id).quantity_consumed == 97
+        # A fresh command cannot repeat primary completion, even after the
+        # original idempotent replay correctly returns its existing result.
+        command['idempotency_key'] = 'duplicate-primary-after-partial'
+        duplicate = client.post('/api/production/completion-batches', json=command)
+        assert duplicate.status_code == 409, duplicate.text
+        second = client.post('/api/deliveries', json={'customer_id': ids['customer'],
+            'items': [{'order_item_id': ids['task_pending'], 'delivered_quantity': 97}]})
+        assert second.status_code == 201, second.text
+        dispatch_stock(client, second.json()['id'], 'partial-after-production')
+    with factory() as db:
+        item = db.get(OrderItem, ids['task_pending'])
+        assert (item.quantity, item.delivered_quantity) == (100, 100)
+        assert db.get(InventoryLot, lotid).quantity_consumed == 3
+        assert db.get(InventoryLot, semi_id).quantity_consumed == 97
+        assert _delivery_remaining_quantity(db, item) == 0

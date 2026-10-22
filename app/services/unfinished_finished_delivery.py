@@ -40,3 +40,45 @@ def unfinished_finished_quantities(db, item_ids):
         credits[item_id]=credits.get(item_id,Fraction())+Fraction(int(credit),int(denominator))
         remaining[item_id]=max(int(ordered)-int(delivered or 0),0)
     return {item_id:min(int(credit),remaining[item_id]) for item_id,credit in credits.items()}
+
+
+def dispatched_finished_coverage_allows_primary(db, task, item):
+    """Prove earlier dispatch consumed the task's existing finished coverage.
+
+    Called under the production order lock. A delivered counter alone cannot
+    authorize production: every delivered customer unit must have an active,
+    unreversed allocation against this same main item's finished reservation.
+    Component, semi-finished and unallocated historical deliveries fail closed.
+    """
+    from app.models import Delivery, DeliveryItem, DeliveryInventoryAllocation
+
+    delivered = int(item.delivered_quantity or 0)
+    if (task.sales_order_item_bom_component_id is not None
+            or delivered <= 0
+            or delivered > int(task.finished_coverage_snapshot or 0)):
+        return False
+    allocation = DeliveryInventoryAllocation
+    credit = (allocation.credited_requirement_quantity
+              - allocation.reversed_requirement_quantity)
+    stock = allocation.consumed_stock_quantity - allocation.reversed_stock_quantity
+    rows = db.execute(
+        select(credit, allocation.requirement_quantity_denominator)
+        .join(DeliveryItem, DeliveryItem.id == allocation.delivery_item_id)
+        .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+        .join(InventoryReservation, InventoryReservation.id == allocation.reservation_id)
+        .join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
+        .where(
+            DeliveryItem.order_item_id == item.id,
+            DeliveryItem.is_current.is_(True),
+            Delivery.status == 'dispatched',
+            InventoryReservation.order_id == item.order_id,
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            InventoryReservation.reservation_type == 'finished_order',
+            InventoryLot.inventory_type == 'finished',
+            allocation.status.in_(('active', 'partial')),
+            credit > 0, stock > 0,
+        )
+    )
+    return sum((Fraction(int(value), int(denominator))
+                for value, denominator in rows), Fraction()) == delivered

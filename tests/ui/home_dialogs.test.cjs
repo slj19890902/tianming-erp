@@ -10,7 +10,7 @@ test('global mixin does not evaluate root permission data on child dialogs',()=>
  assert.deepEqual(mixin.computed.homeLaunchers.call({$parent:{}}),[]);
 });
 test('unauthorized dialog does not open; allowed opening and closing preserve query and customer',()=>{
- const c={homeDialog:'',homeCustomer:7,homeQuery:'PO42',homeStockPage:3,homeLaunchers:[{key:'stock'}],$nextTick:fn=>fn(),homeMeasure(){}};
+ const c={homeDialog:'',homeCustomer:7,homeQuery:'PO42',homeStockPage:3,homeLaunchers:[{key:'stock'}],homeLoadDialog:mixin.methods.homeLoadDialog,$nextTick:fn=>fn(),homeMeasure(){}};
  mixin.methods.homeOpenDialog.call(c,'finance');assert.equal(c.homeDialog,'');
  mixin.methods.homeOpenDialog.call(c,'stock');assert.equal(c.homeDialog,'stock');assert.equal(c.homeWorkspace,'stock');
  c.homePreferenceBusy=true;mixin.methods.homeCloseDialog.call(c);assert.equal(c.homeDialog,'stock');

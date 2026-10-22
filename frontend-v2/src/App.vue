@@ -216,7 +216,7 @@ async function handleLogout() {
 }
 
 onMounted(() => {
-  document.title = '天明包装 ERP · v2'
+  document.title = '天明包装 ERP'
 })
 </script>
 
@@ -232,7 +232,7 @@ onMounted(() => {
         <div class="brand">
           <img class="brand-logo" :src="'/static/assets/tianming-brand-symbol.png'" alt="天明包装" />
           <div>
-            <div class="brand-title">天明包装 <span class="v2-badge">ERP · v2</span></div>
+            <div class="brand-title">天明包装 <span class="erp-badge">ERP</span></div>
             <div class="brand-subtitle">TIANMING PACKAGING</div>
           </div>
         </div>
@@ -423,7 +423,7 @@ onMounted(() => {
   gap: 8px;
 }
 
-.v2-badge {
+.erp-badge {
   font-size: 11px;
   font-weight: 800;
   padding: 2px 8px;
@@ -630,7 +630,7 @@ onMounted(() => {
   .shell-large .module-link { padding-inline:10px; }
 }
 @media (max-width: 640px) {
-  .v2-badge { display: none; }
+  .erp-badge { display: none; }
   .brand-logo { width: 34px; height: 34px; }
   .brand-title { font-size: 15px; letter-spacing: 0; }
   .brand-subtitle { font-size: 10px; }

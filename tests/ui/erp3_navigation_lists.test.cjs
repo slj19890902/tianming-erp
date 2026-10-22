@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const source=file=>process.env.ERP3_FRONTEND_BASELINE ? require('node:child_process').execFileSync('git',['show',`${process.env.ERP3_FRONTEND_BASELINE}:${file}`],{encoding:'utf8',maxBuffer:8*1024*1024}) : fs.readFileSync(file,'utf8');
 const html=source('static/index.html');
-const browser={};const runtime=vm.createContext({console});
+const browser={};vm.runInNewContext(fs.readFileSync('static/js/list-read-state.js','utf8'),{window:browser});const runtime=vm.createContext({console});
 vm.runInContext(fs.readFileSync('static/vendor/vue-3.5.40.global.prod.js','utf8'),runtime);
 const Vue=runtime.Vue;
 const tick=()=>new Promise(setImmediate);
@@ -14,7 +14,7 @@ function requests(){const pending=[];return {pending,axios:{get(url,config){retu
 function list(){
  const r=requests(),controllers=new Map();
  const state=Vue.reactive({activePage:'products',productTab:'products',authGeneration:1,user:{id:1},selectedProductCustomer:{id:7,customer_code:'TEST'},
-  filters:{},pages:{products:1},products:[{id:11,product_code:'TEST-OLD',product_name:'Old product',is_active:true,version:2}],productsTotal:1,productsLoading:false,productsError:'',productsListIdentity:'1:1:7',
+  filters:{},pages:{products:1},products:[{id:11,product_code:'TEST-OLD',product_name:'Old product',is_active:true,version:2}],productsTotal:1,productsLoading:false,productsError:'',listReadStates:{'products:list':{identity:'1:1:7',loaded:true,loading:false,error:''}},
   productListPageSize:()=>10,productLifecycleBusy:()=>false,errorMessage:e=>e.message,
   ...methods(['beginLatestRequest','finishLatestRequest','isCancelledRequest','loadProducts'],{axios:r.axios,latestRequestControllers:controllers})});
  return {...r,state,controllers};
@@ -46,7 +46,7 @@ test('late product responses cannot repaint after leaving, changing customer, or
 function renderProductList(state){
  // Execute the real shipped Vue compiler/render pipeline against an in-memory host.
  // Browser geometry is verified separately in isolated Chrome, not faked here.
- const start=html.indexOf('                  <div v-if="productsLoading');
+ const start=html.indexOf('                  <list-read-status');
  const end=html.indexOf('\n                </template>',start);assert.ok(start>=0&&end>start);
  const template='<section>'+html.slice(start,end)+'</section>';
  const node=(tag,text='')=>({tag,text,children:[],props:{},parent:null});
@@ -55,16 +55,21 @@ function renderProductList(state){
  const data=Object.assign(state,{canViewSalesAmounts:true,canEditProducts:true,canRequisition:true,canEditStockAlerts:true,canDeactivateProducts:true,canDeleteProducts:true,
   plainProductText:x=>x||'',productUnitLabel:()=> '片',spec:()=> '100×80',productMaterialCell:()=>({text:'材料'}),materialFullStructure:()=> '材料',unitPrice:()=> '1.00',commonBoxPriceLabel:()=> '单价',commonBoxReadiness:()=>({ready:false}),commonBoxReadinessTitle:()=> '缺材质',productLifecyclePending:()=>false,
   positionProductRowActions(){},closeProductRowActions(){},leaveProductRowActions(){},openProduct(){},previewProductDrawing(){},openProductStockPolicy(){},openMasterVersionHistory(){},toggleProductStatus(){},deleteProduct(){},runExplicitPageListLoad(){}});
- const root=node('root'),app=renderer.createApp({setup:()=>data,render:Vue.compile(template,{decodeEntities:s=>s})});app.mount(root);
+ const root=node('root'),app=renderer.createApp({setup:()=>data,render:Vue.compile(template,{decodeEntities:s=>s})});
+ app.component('list-read-status',{...browser.ERPListRead.component,render:Vue.compile(browser.ERPListRead.component.template,{decodeEntities:s=>s})});app.mount(root);
  const all=(tag,n=root)=>[...(n.tag===tag?[n]:[]),...n.children.flatMap(c=>all(tag,c))];
- return {root,all,app,data};
+ const text=(n=root)=>n.text+n.children.map(c=>text(c)).join('');
+ return {root,all,app,data,text};
 }
 test('actual Vue list retains table through refresh/error, and keeps permission-bound auxiliary actions outside the table cell layout',async()=>{
  const f=list(),h=renderProductList(f.state);const table=h.all('table')[0];assert.ok(table);
- f.state.productsLoading=true;await Vue.nextTick();assert.equal(h.all('table')[0],table);
- f.state.productsLoading=false;f.state.productsError='offline';await Vue.nextTick();assert.equal(h.all('table')[0],table);
+ f.state.listReadStates['products:list'].loading=true;await Vue.nextTick();assert.equal(h.all('table')[0],table);assert.match(h.text(),/正在更新，以下保留上次结果/);
+ f.state.listReadStates['products:list'].loading=false;f.state.listReadStates['products:list'].error='offline';await Vue.nextTick();assert.equal(h.all('table')[0],table);assert.match(h.text(),/更新失败，以下保留上次结果：offline/);
  const cells=h.all('td');assert.ok(cells.every(c=>c.props.class!=='toolbar-group'));
- assert.equal(h.all('summary').length,1);assert.equal(h.all('details').length,1);h.app.unmount();
+ assert.equal(h.all('summary').length,1);assert.equal(h.all('details').length,1);
+ f.state.canDeactivateProducts=false;f.state.canDeleteProducts=false;await Vue.nextTick();assert.doesNotMatch(h.text(),/移入垃圾站|停用/);
+ f.state.products=[];await Vue.nextTick();assert.equal(h.all('table').length,0);assert.match(h.text(),/读取失败：offline/);assert.doesNotMatch(h.text(),/该客户当前没有符合条件/);
+ f.state.listReadStates['products:list'].error='';await Vue.nextTick();assert.match(h.text(),/该客户当前没有符合条件的常用箱/);h.app.unmount();
 });
 
 test('page-scoped GETs cancel and reject stale success, while mutation guards follow the original request',()=>{

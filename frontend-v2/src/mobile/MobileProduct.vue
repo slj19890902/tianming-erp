@@ -16,11 +16,13 @@ import {
   shortCode,
   shortLocation,
 } from "./format";
+import { useAuthStore } from "../stores/auth";
 import { useMobileStore } from "./store";
 import MobileIcon from "./components/MobileIcon.vue";
 import MobileSheet from "./components/MobileSheet.vue";
 const route = useRoute(),
-  mobile = useMobileStore();
+  mobile = useMobileStore(),
+  auth = useAuthStore();
 const detail = ref<ProductDetail | null>(null),
   loading = ref(false),
   error = ref(""),
@@ -103,7 +105,7 @@ function stocktake() {
     window.location.assign(stocktakeUrl(positions.value[0]!.location_id));
   else locationOpen.value = true;
 }
-watch(() => route.params.id, load, { immediate: true });
+watch(() => [route.params.id, auth.user?.id], load, { immediate: true });
 onBeforeUnmount(() => controller?.abort());
 </script>
 <template>
@@ -123,6 +125,7 @@ onBeforeUnmount(() => controller?.abort());
         {{ compactText(product.specification) }}
       </div>
       <section class="m-card m-stockcard">
+        <div v-if="detail?.inventory.visibility === 'hidden_by_permission'" class="m-notice">当前账号无权查看库存</div>
         <span class="m-label">可用库存</span>
         <div class="m-stock-number">
           {{ quantity(stock?.available) }}

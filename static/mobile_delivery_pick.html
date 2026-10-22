@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes,viewport-fit=cover">
   <title>预送货拿货</title>
   <style>
     :root { --ink:#17211b; --muted:#68736c; --paper:#f4f1e8; --green:#197447; --orange:#d8661f; --red:#be3d32; --line:#d9d5c9; }
@@ -26,8 +26,8 @@
     details.exception-tools { margin-top:12px; padding:0 10px 10px; background:#fffdf8; border:1px solid var(--line); border-radius:11px; } details.exception-tools > summary { padding:13px 2px; color:#6c4631; font-weight:800; cursor:pointer; } .exception-help { margin:0 0 8px; color:var(--muted); font-size:12px; }
     .error { color:var(--red); margin-top:8px; font-size:13px; } .toast { position:fixed; left:50%; bottom:20px; z-index:10; transform:translateX(-50%); padding:10px 15px; color:white; background:#17211be8; border-radius:10px; }
   </style>
-</head>
-<body>
+<link rel="stylesheet" href="/static/ui/mobile-shell.css?v=20261022-3"><script defer src="/static/ui/mobile-shell.js?v=20261022-3"></script></head>
+<body data-mobile-page="more" data-mobile-title="预送货拿货">
   <header><h1>预送货拿货</h1><p id="taskMeta">只处理分配给本账号的任务；拿齐后仍需电脑端发货打印</p></header>
   <main>
     <section id="loginBox" class="message" hidden>
@@ -71,7 +71,9 @@
     let mapFloors=[], mapData=null, mapGeneration=0, mapController=null;
     let listGeneration=0, listController=null, detailGeneration=0, detailController=null;
     const listPageSize=20; let listPage=0, listTotal=0, listRows=[], listHasMore=false, listLoading=false, listAsOf="";
+    let taskListScrollY=0;
     const busyItems=new Set(); let scanUserId=null; let taskActionBusy=false; let loginBusy=false;
+    window.addEventListener("tm-mobile-shell-navigate",event=>{if(taskActionBusy||busyItems.size)event.preventDefault()});
     const statusOf = item => item.pick_status || "pending";
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
     const toast = text => { const node=document.getElementById("toast"); node.textContent=text; node.hidden=false; setTimeout(()=>node.hidden=true,2200); };
@@ -125,25 +127,33 @@
       const footer=listRows.length?`<div class="task-list-footer"><div class="task-list-progress">已显示 ${listRows.length} / ${listTotal} 单</div>${listHasMore?`<button id="loadMoreTasksButton" type="button" ${listLoading?"disabled":""}>${listLoading?"读取中…":"继续加载 20 单"}</button>`:""}</div>`:"";
       chooser.innerHTML=cards+footer; const more=document.getElementById("loadMoreTasksButton"); if(more)more.addEventListener("click",()=>loadTaskList({append:true}));
     }
-    async function loadTaskList({append=false}={}) {
+    async function loadTaskList({append=false,restorePages=1}={}) {
       if(append&&(!listHasMore||listLoading))return false;
       const generation=++listGeneration; listController?.abort(); const controller=new AbortController(); listController=controller;
-      const chooser=document.getElementById("taskChooser"); chooser.hidden=false; listLoading=true; if(append)renderTaskChooser(); else chooser.innerHTML='<div class="message">正在读取待拿货任务（前 20 单）…</div>'; document.getElementById("error").textContent="";
+      const chooser=document.getElementById("taskChooser"); chooser.hidden=false; listLoading=true; if(append||restorePages>1)renderTaskChooser(); else chooser.innerHTML='<div class="message">正在读取待拿货任务（前 20 单）…</div>'; document.getElementById("error").textContent="";
       try {
-        const requestedPage=append?listPage+1:1;
-        const body=await request(`/api/delivery-picks?response_mode=summary&include_dispatched=false&page=${requestedPage}&page_size=${listPageSize}`,{signal:controller.signal});
-        if(generation!==listGeneration) return false;
-        const incoming=body.items||[]; const combined=append?[...listRows,...incoming]:incoming; const seen=new Set(); listRows=combined.filter(row=>{const key=String(row.id);if(seen.has(key))return false;seen.add(key);return true;});
+        let requestedPage=append?listPage+1:1,body;const incoming=[];
+        const endPage=append?requestedPage:Math.max(1,restorePages);
+        for(;requestedPage<=endPage;requestedPage++){
+          body=await request(`/api/delivery-picks?response_mode=summary&include_dispatched=false&page=${requestedPage}&page_size=${listPageSize}`,{signal:controller.signal});
+          if(generation!==listGeneration) return false;
+          incoming.push(...(body.items||[]));
+          if(requestedPage*listPageSize>=Number(body.total||0)||requestedPage===endPage)break;
+        }
+        const combined=append?[...listRows,...incoming]:incoming; const seen=new Set(); listRows=combined.filter(row=>{const key=String(row.id);if(seen.has(key))return false;seen.add(key);return true;});
         listPage=Number(body.page||requestedPage); listTotal=Number(body.total||listRows.length); listHasMore=listRows.length<listTotal; listAsOf=String(body.as_of||"");
         listLoading=false; renderTaskChooser();
         return true;
       } catch(error) {
         if(error?.name==="AbortError"||generation!==listGeneration) return false; if(handleAuthError(error)) return false;
-        if(append&&listRows.length){renderTaskChooser();toast(error.message||"后续任务读取失败");}else{chooser.innerHTML=`<div class="message">${escapeHtml(error.message||"待拿货任务读取失败")}<div style="margin-top:10px"><button id="taskListRetryButton" class="primary">重试</button></div></div>`;document.getElementById("taskListRetryButton").addEventListener("click",()=>loadTaskList());}
-        document.getElementById("error").textContent=error.message; return false;
-      } finally { if(generation===listGeneration){listController=null;listLoading=false;if(append&&listRows.length)renderTaskChooser();} }
+        if((append||restorePages>1)&&listRows.length){renderTaskChooser();toast(error.message||"后续任务读取失败");}else{chooser.innerHTML=`<div class="message">${escapeHtml(error.message||"待拿货任务读取失败")}<div style="margin-top:10px"><button id="taskListRetryButton" class="primary">重试</button></div></div>`;document.getElementById("taskListRetryButton").addEventListener("click",()=>loadTaskList());}
+        const errorNode=document.getElementById("error");errorNode.textContent=error.message+(restorePages>1?"；列表尚未刷新，保留原浏览位置，请重新读取。":"");
+        if(restorePages>1&&listRows.length){const retry=document.createElement("button");retry.type="button";retry.textContent="重新读取任务列表";retry.onclick=()=>loadTaskList({restorePages});errorNode.append(retry);}return false;
+      } finally { if(generation===listGeneration){listController=null;listLoading=false;if((append||restorePages>1)&&listRows.length)renderTaskChooser();} }
     }
     async function selectTask(id) {
+      if(!taskId)taskListScrollY=window.scrollY;
+      listGeneration++;listController?.abort();listLoading=false;
       closeTaskMap({restoreScroll:false});
       const selectedId=String(id); taskId=selectedId; const url=new URL(location.href); url.searchParams.set("task_id",taskId); history.replaceState(null,"",url);
       const generation=++detailGeneration; detailController?.abort(); const controller=new AbortController(); detailController=controller; task=null; showTaskLoading();
@@ -162,7 +172,7 @@
         if(error?.name==="AbortError"||generation!==detailGeneration||taskId!==selectedId) return false; if(handleAuthError(error)) return false; showTaskFailure(error); return false;
       } finally { if(generation===detailGeneration) detailController=null; }
     }
-    async function showTaskList() { if(taskActionBusy||busyItems.size) return; closeTaskMap({restoreScroll:false}); detailGeneration+=1; detailController?.abort(); detailController=null; task=null; taskId=null; const url=new URL(location.href); url.searchParams.delete("task_id"); history.replaceState(null,"",url); await loadTaskList(); }
+    async function showTaskList() { if(taskActionBusy||busyItems.size) return; closeTaskMap({restoreScroll:false}); detailGeneration+=1; detailController?.abort(); detailController=null; task=null; taskId=null; const url=new URL(location.href); url.searchParams.delete("task_id"); history.replaceState(null,"",url); const pages=Math.max(1,listPage);await loadTaskList({restorePages:pages});if(!taskId)window.requestAnimationFrame(()=>window.scrollTo({top:taskListScrollY})); }
     function render() {
       if(!task) return;
       const pickedAwaitingCollection=(task.items||[]).length&&(task.items||[]).every(x=>statusOf(x)==="picked")&&(task.items||[]).some(x=>x.staging_required&&Number(x.staged_quantity||0)<Number(x.picked_quantity||0));
@@ -271,7 +281,7 @@
       finally { taskActionBusy=false; if(task)render(); }
     }
     async function loadTask() { try { if(taskId) await selectTask(taskId); else await loadTaskList(); } catch(error) { document.getElementById("error").textContent=error.message; } }
-    async function login(event) { event.preventDefault(); if(loginBusy)return; loginBusy=true; const button=document.getElementById("loginButton"); button.disabled=true; const error=document.getElementById("loginError"); error.textContent=""; try { await request("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:document.getElementById("username").value,password:document.getElementById("password").value,remember_me:false})}); await boot(); } catch(exception) { error.textContent=exception.message; } finally { loginBusy=false; button.disabled=false; } }
+    async function login(event) { event.preventDefault(); if(loginBusy)return; loginBusy=true; const button=document.getElementById("loginButton"); button.disabled=true; const error=document.getElementById("loginError"); error.textContent=""; try { await request("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:document.getElementById("username").value,password:document.getElementById("password").value,remember_me:false})}); window.TmMobileShell?.refresh();await boot(); } catch(exception) { error.textContent=exception.message; } finally { loginBusy=false; button.disabled=false; } }
     async function boot() { try { scanUserId=(await request("/api/auth/me")).id; document.getElementById("loginBox").hidden=true; document.getElementById("app").hidden=false; if(!taskId) await loadTaskList(); else await selectTask(taskId); } catch(error) { if(!handleAuthError(error)){document.getElementById("error").textContent=error.message;document.getElementById("app").hidden=false;} } }
     boot();
   </script>

@@ -23,8 +23,8 @@
     .btn-danger { background: #b91c1c; color: #fff; border: none; border-radius: 10px; min-height: 44px; padding: 0 16px; font-weight: 700; }
   </style>
   <link rel="stylesheet" href="/static/vendor/tailwindcss-3.4.17-incoming.min.css?v=77e10624d5e1">
-<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script></head>
-<body class="min-h-screen bg-slate-100 text-slate-900">
+<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script><link rel="stylesheet" href="/static/ui/mobile-shell.css?v=20261022-3"><script defer src="/static/ui/mobile-shell.js?v=20261022-3"></script></head>
+<body data-mobile-page="more" data-mobile-title="收料" data-mobile-embedded-only="1" class="min-h-screen bg-slate-100 text-slate-900">
   <header class="sticky top-0 z-20 border-b border-slate-300 bg-slate-900 px-4 py-3 text-white shadow">
     <div class="mx-auto flex max-w-2xl items-center justify-between gap-3">
       <div>
@@ -168,6 +168,7 @@
     const requestControllers = new Map();
     const hasPermission = (code) => state.user?.role === "admin" || state.permissions.includes(code);
     const canOperate = () => hasPermission("incoming.execute");
+    window.addEventListener("tm-mobile-shell-navigate", event => { if(state.busyItemIds.size || state.revertSubmitting) event.preventDefault(); });
     const incomingPerformancePrefix = "tm.mobile.incoming.";
 
     function markIncomingPerformance(stage) {

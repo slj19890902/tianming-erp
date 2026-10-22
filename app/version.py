@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.713"
+APP_VERSION = "v0.22.714"
 APP_VERSION_NAME = "ERP 3.0 首页提速与统一查询体验"
 APP_BUILD_DATE = "2026-10-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -6996,6 +6996,20 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.712：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
+
+APP_CHANGES = [
+    "手机主入口与扫码、盘点、拿货、模具入口统一触控、导航和返回；保留真实货位上下文和原业务执行器。",
+    "查询详情返回保留条件与页码，货位和产品候选支持完整分页；旧响应不覆盖当前资料，读取失败明确可重试。",
+    "位置不符上报可核对原成功回执；同键不同内容拒绝、并发只登记一次，回执构造失败回滚。",
+    "提供带快照来源和规则版本的数据质量待核对清单；不删除、合并或改写历史业务数据，无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "手机刷新进入首页，查询一个真实产品，翻页打开详情再返回，核对查询条件和页码仍在。",
+    "从真实货位或模具扫码进入，查看统一返回与底部入口；按正常业务操作，确认原盘点或待核对保护仍在。",
+    "在原先已提交但未收到结果的位置不符上报中核对原请求；不要为验收新造库存或报告。",
+]
+APP_CHANGELOG = [*(f"v0.22.713：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
 APP_CHANGES = [
     "首页先显示搜索、个人待办和共享文件，业务清单按区域读取；未读取、正在更新和读取失败分别显示，不再等待整页重型统计。",
     "查询时可继续切换页面；客户、订单和常用箱统一读取提示，同范围刷新失败保留原结果，旧请求和旧账号资料不覆盖当前页面。",
@@ -7008,4 +7022,5 @@ APP_VERIFICATION_STEPS = [
     "进入常用箱或订单查询，核对筛选与翻页；切换页面再返回，确认保留当前操作上下文，失败时有重试提示。",
     "按真实业务选择客户和产品下单，确认停用资料不会混进候选；旧单、库存及原PDF核对流程仍可正常查看。",
 ]
-APP_CHANGELOG = [*(f"v0.22.713：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.714：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+

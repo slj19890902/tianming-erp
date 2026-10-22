@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { mobilePage } from "./navigation";
+import { useAuthStore } from "../stores/auth";
 import { mobileApi, backendUrl, type Product, type Unfulfilled } from "./api";
 import {
   safeMessage,
@@ -15,14 +17,15 @@ import MobileIcon from "./components/MobileIcon.vue";
 import MobileScanner from "./components/MobileScanner.vue";
 const router = useRouter(),
   route = useRoute();
-const tab = ref("product"),
+const auth = useAuthStore();
+const tab = ref(["product", "board", "location"].includes(String(route.query.tab)) ? String(route.query.tab) : "product"),
   query = ref(String(route.query.q || "")),
   length = ref(String(route.query.length || "")),
   width = ref(String(route.query.width || "")),
   height = ref(String(route.query.height || "")),
-  productTolerance = ref(20),
+  productTolerance = ref([5,10,20,50,100].includes(Number(route.query.tolerance)) ? Number(route.query.tolerance) : 20),
   tolerance = ref(5),
-  searchMode = ref<"keyword" | "dimensions">("keyword");
+  searchMode = ref<"keyword" | "dimensions">(route.query.mode === "dimensions" ? "dimensions" : "keyword");
 const orderItems = ref<Unfulfilled[]>([]);
 const products = ref<Product[]>([]),
   locations = ref<
@@ -39,10 +42,20 @@ const loading = ref(false),
   error = ref(""),
   searched = ref(false),
   scanner = ref(false),
-  page = ref(1),
+  page = ref(mobilePage(route.query.page)),
   total = ref(0);
 let controller: AbortController | null = null;
+function remember(nextPage: number, mode = searchMode.value) {
+  void router.replace({ path: "/mobile/query", query: route.query.unfulfilled === "1"
+    ? { unfulfilled: "1", page: String(nextPage) }
+    : { tab: tab.value, mode, q: query.value.trim() || undefined, length: length.value || undefined,
+        width: width.value || undefined, height: height.value || undefined,
+        tolerance: String(productTolerance.value), page: String(nextPage) } });
+}
 async function loadOrders(nextPage = 1) {
+  page.value = nextPage;
+  total.value = 0;
+  remember(nextPage);
   controller?.abort();
   controller = new AbortController();
   const current = controller;
@@ -53,6 +66,8 @@ async function loadOrders(nextPage = 1) {
   try {
     const result = await mobileApi.unfulfilled(nextPage, current.signal);
     if (!current.signal.aborted) {
+      const lastPage = Math.max(1, Math.ceil((result.groups[0]?.total || 0) / 12));
+      if (nextPage > lastPage) { await loadOrders(lastPage); return; }
       orderItems.value = result.groups[0]?.items || [];
       total.value = result.groups[0]?.total || 0;
       page.value = result.groups[0]?.page || nextPage;
@@ -66,6 +81,8 @@ async function loadOrders(nextPage = 1) {
 async function search(nextPage = 1, mode = searchMode.value) {
   if (tab.value === "location" || mode === "keyword") { if (!query.value.trim()) return; }
   searchMode.value = mode;
+  page.value = nextPage;
+  remember(nextPage, mode);
   controller?.abort();
   controller = new AbortController();
   const current = controller;
@@ -80,10 +97,14 @@ async function search(nextPage = 1, mode = searchMode.value) {
       const result = await mobileApi.locations(
         query.value.trim(),
         current.signal,
+        nextPage,
       );
       if (!current.signal.aborted) {
+        const lastPage = Math.max(1, Math.ceil(result.total / 12));
+        if (nextPage > lastPage) { await search(lastPage, mode); return; }
         locations.value = result.items;
         total.value = result.total;
+        page.value = nextPage;
       }
     } else {
       const result = await mobileApi.products(
@@ -96,6 +117,8 @@ async function search(nextPage = 1, mode = searchMode.value) {
         current.signal,
       );
       if (!current.signal.aborted) {
+        const lastPage = Math.max(1, Math.ceil(result.total / 12));
+        if (nextPage > lastPage) { await search(lastPage, mode); return; }
         products.value = result.items;
         total.value = result.total;
         page.value = nextPage;
@@ -151,20 +174,28 @@ function scanned(value: string) {
 }
 watch(tab, () => {
   controller?.abort();
+  loading.value = false;
+  total.value = 0;
+  page.value = 1;
   products.value = [];
   locations.value = [];
   error.value = "";
   searched.value = false;
 });
-if (route.query.unfulfilled === "1") void loadOrders();
-else if (query.value) void search(1, "keyword");
+watch(() => auth.user?.id, () => {
+  controller?.abort(); loading.value = false;
+  products.value = []; locations.value = []; orderItems.value = [];
+  total.value = 0; searched.value = false;
+});
+if (route.query.unfulfilled === "1") void loadOrders(page.value);
+else if (query.value || (searchMode.value === "dimensions" && length.value && width.value)) void search(page.value);
 onBeforeUnmount(() => controller?.abort());
 </script>
 <template>
   <section>
     <template v-if="route.query.unfulfilled === '1'"
       ><h2>未送齐订单</h2>
-      <div v-if="error" class="m-status">{{ error }}</div>
+      <div v-if="error" class="m-status" role="alert">{{ error }}<button @click="loadOrders(page)">重试</button></div>
       <div v-if="loading" class="m-empty">加载中…</div>
       <div v-else-if="!orderItems.length && !error" class="m-empty">暂无未送齐订单</div>
       <RouterLink
@@ -172,7 +203,7 @@ onBeforeUnmount(() => controller?.abort());
         :key="item.order_item_id"
         :to="
           item.product_id
-            ? `/mobile/products/${item.product_id}`
+            ? { path: `/mobile/products/${item.product_id}`, query: { from: route.fullPath } }
             : '/mobile/query'
         "
         class="m-product-row"
@@ -187,10 +218,10 @@ onBeforeUnmount(() => controller?.abort());
         ></RouterLink
       >
       <div v-if="total > 12" class="m-pagination">
-        <button :disabled="page === 1" @click="loadOrders(page - 1)">
+        <button :disabled="loading || page === 1" @click="loadOrders(page - 1)">
           上一页</button
         ><span>{{ page }} / {{ Math.ceil(total / 12) }}</span
-        ><button :disabled="page * 12 >= total" @click="loadOrders(page + 1)">
+        ><button :disabled="loading || page * 12 >= total" @click="loadOrders(page + 1)">
           下一页
         </button>
       </div></template
@@ -263,7 +294,7 @@ onBeforeUnmount(() => controller?.abort());
           <MobileIcon name="scan" />
         </button>
       </form>
-      <div v-if="error" class="m-status" role="alert">{{ error }}</div>
+      <div v-if="error" class="m-status" role="alert">{{ error }}<button @click="search(page)">重试</button></div>
       <div v-else-if="loading" class="m-empty" role="status">查询中…</div>
       <div
         v-else-if="searched && !products.length && !locations.length"
@@ -292,10 +323,10 @@ onBeforeUnmount(() => controller?.abort());
           }}<MobileIcon name="chevron"
         /></RouterLink>
       </div>
-      <div v-if="total > 12 && products.length" class="m-pagination">
-        <button :disabled="page === 1" @click="search(page - 1)">上一页</button
+      <div v-if="total > 12 && (products.length || locations.length)" class="m-pagination">
+        <button :disabled="loading || page === 1" @click="search(page - 1)">上一页</button
         ><span>{{ page }} / {{ Math.ceil(total / 12) }}</span
-        ><button :disabled="page * 12 >= total" @click="search(page + 1)">
+        ><button :disabled="loading || page * 12 >= total" @click="search(page + 1)">
           下一页
         </button>
       </div> </template

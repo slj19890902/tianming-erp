@@ -183,10 +183,10 @@ export const mobileApi = {
       `/api/mobile/erp/search?${new URLSearchParams({ category: "orders", unfulfilled_only: "true", page: String(page), page_size: "12" })}`,
       signal,
     ),
-  shell: () => get<Shell>("/api/mobile/erp/shell"),
-  overview: () => get<Overview>("/api/dashboard/overview"),
-  margin: () =>
-    get<Margin>("/api/dashboard/customer-delivery-margin?page_size=1"),
+  shell: (signal?: AbortSignal) => get<Shell>("/api/mobile/erp/shell", signal),
+  overview: (signal?: AbortSignal) => get<Overview>("/api/dashboard/overview", signal),
+  margin: (signal?: AbortSignal) =>
+    get<Margin>("/api/dashboard/customer-delivery-margin?page_size=1", signal),
   products: (params: URLSearchParams, signal?: AbortSignal) =>
     get<{ items: Product[]; total: number; page: number; page_size: number }>(
       `/api/product-workbench/search?${params}`,
@@ -197,9 +197,10 @@ export const mobileApi = {
       `/api/product-workbench/products/${encodeURIComponent(id)}`,
       signal,
     ),
-  floors: () =>
+  floors: (signal?: AbortSignal) =>
     get<{ floors: Floor[]; can_execute: boolean; can_correct: boolean }>(
       "/api/mobile/erp/warehouse/map/floors",
+      signal,
     ),
   overviewMap: (floor: string, signal?: AbortSignal) =>
     get<{ areas: Area[]; map_status: string }>(
@@ -211,7 +212,7 @@ export const mobileApi = {
       `/api/mobile/erp/warehouse/map/floors/${encodeURIComponent(floor)}?area_code=${encodeURIComponent(area)}`,
       signal,
     ),
-  locations: (q: string, signal?: AbortSignal) =>
+  locations: (q: string, signal?: AbortSignal, page = 1) =>
     get<{
       items: {
         location_id: number;
@@ -221,7 +222,7 @@ export const mobileApi = {
       }[];
       total: number;
     }>(
-      `/api/mobile/erp/warehouse/map/locations-search?${new URLSearchParams({ q, page_size: "12" })}`,
+      `/api/mobile/erp/warehouse/map/locations-search?${new URLSearchParams({ q, page: String(page), page_size: "12" })}`,
       signal,
     ),
   pending: (signal?: AbortSignal) =>

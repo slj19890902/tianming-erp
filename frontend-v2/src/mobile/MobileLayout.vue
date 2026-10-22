@@ -6,10 +6,13 @@ import { useAuthStore } from "../stores/auth";
 import MobileIcon from "./components/MobileIcon.vue";
 import { safeMessage } from "./format";
 import "./mobile.css";
+import { mobileParent, mobileSection } from "./navigation";
 const route = useRoute(),
   mobile = useMobileStore(),
   auth = useAuthStore();
 const title = computed(() => String(route.meta.title || "天明包装"));
+const back = computed(() => mobileParent(route.path, route.query.from));
+const activeSection = computed(() => mobileSection(route.path, route.query.from));
 const nav = computed(() =>
   [
     { title: "首页", path: "/mobile", icon: "home", allowed: true },
@@ -51,9 +54,9 @@ onMounted(() => {
     <header class="m-appbar">
       <RouterLink
         v-if="route.path !== '/mobile'"
-        to="/mobile"
+        :to="back"
         class="m-icon-btn"
-        aria-label="返回首页"
+        :aria-label="back === '/mobile' ? '返回首页' : '返回列表'"
         ><MobileIcon name="back"
       /></RouterLink>
       <h1>{{ title }}</h1>
@@ -71,12 +74,10 @@ onMounted(() => {
       <RouterLink
         v-for="item in nav"
         :key="item.path"
+        :aria-current="activeSection === item.path ? 'page' : undefined"
         :to="item.path"
         :class="{
-          active:
-            item.path === '/mobile'
-              ? route.path === item.path
-              : route.path.startsWith(item.path),
+          active: activeSection === item.path,
         }"
         ><MobileIcon :name="item.icon" /><span>{{
           item.title

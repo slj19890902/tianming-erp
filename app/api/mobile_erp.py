@@ -2789,6 +2789,7 @@ def search_products(
     response: Response,
     q: str = Query(min_length=1, max_length=100),
     limit: int = Query(default=12, ge=1, le=30),
+    offset: int = Query(default=0, ge=0),
     include_zero: bool = Query(default=False),
     db: Session = Depends(get_db),
     user: User = Depends(can_read_inventory),
@@ -2839,16 +2840,24 @@ def search_products(
                 Customer.name,
                 Product.customer_material_code,
                 Product.id,
-            ).limit(limit)
+            ).offset(offset).limit(limit)
         ).all()
     )
     summaries = _product_inventory_summaries(db, products)
     drawing_items = _attach_mobile_product_drawings(db, user, [
         _product_payload(product, inventory_summary=summaries[product.id]) for product in products
     ])
+    total = matched_product_count if include_zero else stocked_product_count
+    next_offset = offset + len(products)
+    has_more = bool(products) and next_offset < total
     return {
         "query": keyword,
         "count": len(products),
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": has_more,
+        "next_offset": next_offset if has_more else None,
         "matched_product_count": matched_product_count,
         "zero_stock_match_count": max(
             matched_product_count - stocked_product_count, 0
@@ -4280,6 +4289,49 @@ def _mobile_discrepancy_payload(
     }
 
 
+def _mobile_discrepancy_replay(
+    db: Session,
+    payload: MobileWarehouseDiscrepancyPayload,
+    *,
+    lot: InventoryLot,
+) -> dict | None:
+    """Read an exact original report after checking the lot's current scope.
+
+    Current inventory/map eligibility applies to new reports only. Do not infer
+    a missing historical layout snapshot from today's map or replace the actor
+    recorded on the original report when another authorized reader checks it.
+    """
+    with db.no_autoflush:
+        existing = db.scalar(
+            select(WarehouseLocationDiscrepancy).where(
+                WarehouseLocationDiscrepancy.idempotency_key == payload.idempotency_key
+            )
+        )
+        if existing is None:
+            return None
+        if (
+            existing.inventory_lot_id != lot.id
+            or existing.reported_lot_version != payload.expected_lot_version
+            or existing.observed_location_id != payload.observed_location_id
+            or existing.observed_location_layout_version
+            != payload.observed_location_layout_version
+            or existing.reported_quantity != payload.reported_quantity
+            or existing.reason != payload.reason
+        ):
+            raise HTTPException(status_code=409, detail="同一请求标识已用于其他位置不符上报，请保留原请求并核对")
+        registered = db.get(WarehouseLocation, existing.registered_location_id)
+        observed = db.get(WarehouseLocation, existing.observed_location_id)
+        if registered is None or observed is None:
+            raise HTTPException(status_code=409, detail="位置不符报告关联的位置已失效")
+        return {
+            "message": "原位置不符上报已登记，当前处理结果已核对",
+            "idempotent_replay": True,
+            "report": _mobile_discrepancy_payload(
+                db, existing, lot=lot, registered=registered, observed=observed
+            ),
+        }
+
+
 @router.post("/warehouse/location-discrepancies", status_code=201)
 def report_mobile_warehouse_location_discrepancy(
     payload: MobileWarehouseDiscrepancyPayload,
@@ -4293,6 +4345,9 @@ def report_mobile_warehouse_location_discrepancy(
     lot = _require_mobile_lot(
         db, lot_id=payload.inventory_lot_id, visible_customer_ids=visible_customer_ids
     )
+    replay = _mobile_discrepancy_replay(db, payload, lot=lot)
+    if replay is not None:
+        return replay
     if lot.inventory_type != "finished" or lot.status != "active":
         raise HTTPException(status_code=409, detail="当前只允许上报有效成品库存的位置不符")
     if int(lot.version) != payload.expected_lot_version:
@@ -4320,6 +4375,10 @@ def report_mobile_warehouse_location_discrepancy(
             .options(selectinload(WarehouseLocation.floor3_layout))
             .where(WarehouseLocation.id == payload.observed_location_id)
         )
+    # A concurrent request may have finished while we acquired the floor claim.
+    replay = _mobile_discrepancy_replay(db, payload, lot=lot)
+    if replay is not None:
+        return replay
     if observed is None or not _mobile_location_is_published(db, observed):
         raise HTTPException(status_code=409, detail="现场观察位置尚未正式发布")
     if (
@@ -4333,37 +4392,6 @@ def report_mobile_warehouse_location_discrepancy(
         )
     if observed.id == registered.id:
         raise HTTPException(status_code=409, detail="观察位置与系统登记位置相同")
-    existing = db.scalar(
-        select(WarehouseLocationDiscrepancy).where(
-            WarehouseLocationDiscrepancy.idempotency_key == payload.idempotency_key
-        )
-    )
-    if existing is not None:
-        if (
-            existing.inventory_lot_id != lot.id
-            or existing.observed_location_id != observed.id
-            or existing.observed_location_layout_version
-            != payload.observed_location_layout_version
-            or existing.reported_quantity != payload.reported_quantity
-        ):
-            raise HTTPException(status_code=409, detail="同一请求标识已用于其他位置不符上报")
-        existing_registered = db.get(
-            WarehouseLocation, existing.registered_location_id
-        )
-        existing_observed = db.get(WarehouseLocation, existing.observed_location_id)
-        if existing_registered is None or existing_observed is None:
-            raise HTTPException(status_code=409, detail="位置不符报告关联的位置已失效")
-        return {
-            "message": "位置不符已上报，尚未改变库存位置",
-            "idempotent_replay": True,
-            "report": _mobile_discrepancy_payload(
-                db,
-                existing,
-                lot=lot,
-                registered=existing_registered,
-                observed=existing_observed,
-            ),
-        }
     row = WarehouseLocationDiscrepancy(
         inventory_lot_id=lot.id,
         registered_location_id=registered.id,
@@ -4403,18 +4431,30 @@ def report_mobile_warehouse_location_discrepancy(
                 "reported_quantity": payload.reported_quantity,
             },
         )
+        # Construct the complete receipt before commit so a projection/read
+        # failure cannot leave a successful report looking like a rejected one.
+        result = {
+            "message": "位置不符已上报，尚未改变库存位置",
+            "idempotent_replay": False,
+            "report": _mobile_discrepancy_payload(
+                db, row, lot=lot, registered=registered, observed=observed
+            ),
+        }
         db.commit()
     except IntegrityError as error:
         db.rollback()
+        lot = _require_mobile_lot(
+            db, lot_id=payload.inventory_lot_id,
+            visible_customer_ids=_visible_customer_ids(user, db),
+        )
+        replay = _mobile_discrepancy_replay(db, payload, lot=lot)
+        if replay is not None:
+            return replay
         raise HTTPException(status_code=409, detail="位置不符已被提交，请刷新重试") from error
-    return {
-        "message": "位置不符已上报，尚未改变库存位置",
-        "idempotent_replay": False,
-        "report": _mobile_discrepancy_payload(
-            db,
-            row, lot=lot, registered=registered, observed=observed
-        ),
-    }
+    except Exception:
+        db.rollback()
+        raise
+    return result
 
 
 @router.get("/warehouse/location-discrepancies")

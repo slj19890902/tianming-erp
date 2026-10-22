@@ -1,13 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
+import { useAuthStore } from "../stores/auth";
 import { mobileApi, warehouseAreaUrl, type Floor, type Area } from "./api";
 import { compactText, safeMessage, shortLocation } from "./format";
-const route = useRoute();
+const route = useRoute(), auth = useAuthStore();
 const floors = ref<Floor[]>([]), floor = ref(""), areas = ref<Area[]>([]);
 const viewport = ref<HTMLElement>(), zoom = ref(1), rotated = ref(false);
 const loading = ref(false), error = ref("");
-let controller: AbortController | null = null, sequence = 0;
+let controller: AbortController | null = null, sequence = 0, disposed = false;
+function invalidate() { sequence++; controller?.abort(); controller = null; }
+function isCurrent(current: AbortController, token: number) {
+  return !disposed && token === sequence && !current.signal.aborted;
+}
 const box = computed(() => {
   const points = areas.value.flatMap(a => a.points).filter(p => p.length >= 2 && p.every(Number.isFinite));
   if (!points.length) return { x: 0, y: 0, w: 100, h: 100 };
@@ -28,31 +33,43 @@ function fit() {
   if (el) rotated.value = Math.min(el.clientWidth/b.h, el.clientHeight/b.w) > Math.min(el.clientWidth/b.w, el.clientHeight/b.h);
 }
 async function loadFloor(code: string) {
+  if (disposed || !auth.user) return;
   controller?.abort(); controller = new AbortController(); const current = controller, token = ++sequence;
   floor.value = code; areas.value = []; zoom.value = 1; loading.value = true; error.value = "";
   try {
     const data = await mobileApi.overviewMap(code, current.signal);
-    if (token !== sequence) return;
+    if (!isCurrent(current, token)) return;
     areas.value = data.areas;
     const requested = String(route.query.area || "");
     if (requested && data.areas.some(a => a.area_code === requested)) {
       window.location.assign(warehouseAreaUrl(code, requested, String(route.query.location || "")));
       return;
     }
-    await nextTick(); fit();
-  } catch (e) { if (!current.signal.aborted) error.value = safeMessage(e); }
-  finally { if (token === sequence) loading.value = false; }
+    await nextTick(); if (isCurrent(current, token)) fit();
+  } catch (e) { if (isCurrent(current, token)) error.value = safeMessage(e); }
+  finally { if (isCurrent(current, token)) loading.value = false; }
 }
 async function load() {
+  if (disposed || !auth.user) return;
+  controller?.abort(); controller = new AbortController(); const current = controller, token = ++sequence;
+  floors.value = []; floor.value = ""; areas.value = [];
   loading.value = true; error.value = "";
   try {
-    const result = await mobileApi.floors(); floors.value = result.floors;
+    const result = await mobileApi.floors(current.signal);
+    if (!isCurrent(current, token)) return;
+    floors.value = result.floors;
     const first = result.floors.find(f => f.floor_code === route.query.floor) || result.floors.find(f => f.floor_number === 3) || result.floors[0];
-    if (first) await loadFloor(first.floor_code); else loading.value = false;
-  } catch (e) { error.value = safeMessage(e); loading.value = false; }
+    if (first) await loadFloor(first.floor_code);
+  } catch (e) { if (isCurrent(current, token)) error.value = safeMessage(e); }
+  finally { if (isCurrent(current, token)) loading.value = false; }
 }
+watch(() => auth.user?.id, () => {
+  invalidate(); floors.value = []; floor.value = ""; areas.value = [];
+  loading.value = false; error.value = ""; zoom.value = 1; rotated.value = false;
+  if (auth.user) void load();
+}, { flush: "sync" });
 onMounted(load);
-onBeforeUnmount(() => { sequence++; controller?.abort(); });
+onBeforeUnmount(() => { disposed = true; invalidate(); });
 </script>
 <template>
   <section class="m-warehouse">

@@ -1,10 +1,13 @@
 <script setup lang="ts">
+import { useRoute } from "vue-router";
+import { mobileReturn } from "../navigation";
+const route = useRoute();
 import type { Product } from "../api";
 import { compactText, quantity, shortCode, shortLocation } from "../format";
 defineProps<{ product: Product }>();
 </script>
 <template>
-  <RouterLink :to="`/mobile/products/${product.id}`" class="m-product-row">
+  <RouterLink :to="{ path: `/mobile/products/${product.id}`, query: { from: mobileReturn(route.fullPath) || undefined } }" class="m-product-row">
     <strong class="m-code">{{ shortCode(product.product_code) }}</strong>
     <span class="m-product-mid"
       ><b>{{ compactText(product.customer_name) }}</b

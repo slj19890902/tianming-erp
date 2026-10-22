@@ -58,7 +58,7 @@ async function loadOrders(node,current){
   finally{delete node.dataset.busy;}
 }
 $('refresh').onclick=load;
-$('login').onsubmit=async e=>{e.preventDefault();$('loginButton').disabled=true;try{await request('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('username').value.trim(),password:$('password').value,remember_me:$('remember').checked})});$('password').value='';await load();}catch(e){$('message').textContent=e.message;}finally{$('loginButton').disabled=false;}};
+$('login').onsubmit=async e=>{e.preventDefault();$('loginButton').disabled=true;try{await request('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('username').value.trim(),password:$('password').value,remember_me:$('remember').checked})});$('password').value='';window.TmMobileShell?.refresh();await load();}catch(e){$('message').textContent=e.message;}finally{$('loginButton').disabled=false;}};
 // Browser back from a stocktake may restore this page from bfcache.
 // Refresh once on that actual navigation, never on a timer or window focus.
 window.addEventListener('pageshow',event=>{if(event.persisted)load();});

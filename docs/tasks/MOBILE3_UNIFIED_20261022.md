@@ -23,7 +23,9 @@
 
 ## 进度
 
-最新正式基线已进一步推进为v0.22.715，2026-10-22 20:31:39 +08:00完整收尾。源码80e2fff6b786d2bb460435d37d3786a01e8e45ff，包318782c43b823369652b4540b95c346ffd654ba0fee648f27f4be472bec8e35a，revision ez1022hc。已核对 `/Library/TianmingERP-Release-erp3-next-20261022-v0-22-715-80e2fff6b786/final-result.json` 的四项完成条件，并比较v714/v715签名清单，部署仅app/version.py变化以修复版本元数据接口回归，手机资产不变。后续以v715为准，保留此补丁，不重复发布手机。
+当前最新正式基线为v0.22.716，2026-10-22 22:09:36 +08:00完整收尾。源码b19e58a0071fab5516908bbf177ece55e888cd20，包507bc02a66bfe96ce427d66d9296f0026db7629a442a19e8d0348f85477651bb，revision ez1022hc。已核对 `/Library/TianmingERP-Release-erp3-next-20261022-v0-22-716-b19e58a0071f/final-result.json` 四项完成条件；比较部署清单确认262个手机/Twin/扫码/frontend-v2构建成员不变，仅五项主档和版本相关文件变化。后续以v716为准，不重复测试或发布本批手机资产。
+
+版本修复历史：v0.22.715于2026-10-22 20:31:39 +08:00完整收尾。源码80e2fff6b786d2bb460435d37d3786a01e8e45ff，包318782c43b823369652b4540b95c346ffd654ba0fee648f27f4be472bec8e35a，revision ez1022hc。已核对 `/Library/TianmingERP-Release-erp3-next-20261022-v0-22-715-80e2fff6b786/final-result.json` 的四项完成条件，并比较v714/v715签名清单，部署仅app/version.py变化以修复版本元数据接口回归，手机资产不变。该补丁已被v716保留。
 
 统一发布历史：ERP3.0统一v0.22.714已于2026-10-22 19:42:06 +08:00完成发布及原生收尾，继承本批08d9db61。已核对Git祖先关系和最终回执 `/Library/TianmingERP-Release-erp3-next-20261022-v0-22-714-c6af868826b2/final-result.json`；源码c6af868826b2b2764949f1039e2b840c7407a5f7，包83407eadc5e786b9d1d131e6d722b67088ed3c464782182b475f73ad8501348b，revision ez1022hc，healthy=true、manual_stop=false、backup_work_retained=false。以下v713记录保留为本任务原始发布历史，不重跑旧事务。
 

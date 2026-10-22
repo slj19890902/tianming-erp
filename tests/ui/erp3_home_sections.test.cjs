@@ -75,3 +75,7 @@ test('production details restore waiting requisition entry and due count without
  const load=s.homeLoadDialog('production');f.pending[0].resolve(response('production',[],{cards:[{key:'pending_material',count:2,waiting_count:4,due_waiting_count:1}]}));await load;
  assert.equal(s.dashboardRequisitionHoldSummary.total,4);assert.equal(s.dashboardRequisitionHoldSummary.due_count,1);assert.match(f.template,/v-if="vm.dashboardRequisitionHoldSummary.total"/);f.stop();
 });
+test('a manual overview refresh cannot repaint a cached home after leaving and returning',async()=>{
+ const f=fixture(),s=f.state;s.pageLoadSequence=3;const previous=s.overview,load=s.loadOverview();s.activePage='orders';s.pageLoadSequence=4;s.activePage='dashboard';s.pageLoadSequence=5;
+ f.pending[0].resolve({data:{mode:'summary',as_of:'obsolete'}});assert.equal(await load,false);assert.equal(s.overview,previous);assert.equal(s.overviewLoading,false);f.stop();
+});

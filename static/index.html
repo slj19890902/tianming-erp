@@ -17545,12 +17545,12 @@
             const requestKey = "dashboard:overview";
             const controller = this.beginLatestRequest(requestKey);
             const generation = this.authGeneration;
-            const page = this.activePage;
+            const page = this.activePage, pageSequence = this.pageLoadSequence;
             this.homeCancelSections?.();
             const userId = this.user?.id ?? null;
             const ownsRequest = () => latestRequestControllers.get(requestKey) === controller
               && generation === this.authGeneration && userId === (this.user?.id ?? null);
-            const isCurrent = () => ownsRequest() && page === this.activePage && !controller.signal.aborted;
+            const isCurrent = () => ownsRequest() && page === this.activePage && pageSequence === this.pageLoadSequence && !controller.signal.aborted;
             this.overviewLoading = true;
             this.overviewError = "";
             this.warehouseCapacitySummary = null;

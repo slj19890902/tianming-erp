@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.716"
-APP_VERSION_NAME = "常用箱结构与外购资料保存修复"
-APP_BUILD_DATE = "2026-10-22"
+APP_VERSION = "v0.22.717"
+APP_VERSION_NAME = "库存读取与客户料号体验升级"
+APP_BUILD_DATE = "2026-10-23"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -7048,3 +7048,16 @@ APP_VERIFICATION_STEPS = [
     "按真实业务编辑全面共用护角的外购资料，核对各方资料与版本；若范围或资料不符，应拒绝保存并保留原事实。",
 ]
 APP_CHANGELOG = [*(f"v0.22.716：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "首页库存区域批量读取相关订单与货物资料，减少重复查询；保留原有库存数量、可用范围和权限规则。",
+    "客户未提供料号时可正常留空，不再把内部编号自动填成客户料号；同名不同内部编号的常用箱可分别保存。",
+    "客户已提供的料号、前导零、内部编号和历史单据仍按原身份核验，已有产品省略客户料号字段时保留原值。",
+    "仅调整客户料号唯一性约束，不回填或清理历史业务；首次启动失败依据完整备份及原事实核验恢复，产生新事实后禁止有损回退。",
+]
+APP_VERIFICATION_STEPS = [
+    "整页刷新后打开首页库存区域，核对库存数量与原有范围；切换页面并返回，确认查询与导航正常。",
+    "按真实业务编辑没有客户料号的常用箱，确认留空保存后仍为空，内部编号保持原值；已有客户料号和前导零不变。",
+    "进入系统备份→账号与公司，确认版本为 v0.22.717，账号、公司和版本说明均正常显示。",
+]
+APP_CHANGELOG = [*(f"v0.22.717：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

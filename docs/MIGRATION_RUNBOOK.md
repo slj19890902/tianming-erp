@@ -943,3 +943,6 @@ ex1021cp→ey1021se仅追加products的supplier_edge_type/base_supplier_edge_typ
 ## 2026-10-23 可选客户料号 fa1023oc（仅隔离验证）
 
 仅用scripts/uat/run_task.py包装scripts/validation/rehearse_optional_customer_code.py --output <新回执路径>。脚本强制有效UAT身份，在runner拥有副本上演练ez1022hc→fa1023oc→ez1022hc→fa1023oc，比较全部原业务字段、其他products原定义、所有FK与原显式对象。只接受专用FK-off迁移连接，未知结构拒绝，普通应用连接不得关闭保护。新允许的空码同名事实存在时禁止降级；正式需新时点备份和精确签名包的真实恢复验证，保留现库向前修复，不恢复旧库覆盖新事实。当前未正式迁移/停服。
+## 2026-10-23 fa1023oc 发布前恢复补充
+
+v717候选新增固定ez1022hc→fa1023oc首次启动恢复。正常启动前关闭schema_authority旧包跨revision例外及previous一键回退；首次启动失败仅凭原签名包、完整备份和演练摘要、全部原事实/附件/结构未变证明执行签名downgrade，不复制旧库覆盖。恢复后必须核对原revision、Manager精确schema指纹及所有事实，再由原Manager恢复旧程序。中断迁移恢复保持旧包禁入；存在新事实时保留现库向前修复。仅历史受管副本与合成验证已完成，本次最新完整副本原生恢复及正式冷备门槛仍待执行，见ERP3_V717_PREPARATION_20261023。

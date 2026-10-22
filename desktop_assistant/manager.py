@@ -1154,6 +1154,10 @@ class Manager:
                 activated_package=candidate['id'], pre_activation_package=old['current'],
                 pre_activation_backup=str(backup), activated_at=datetime.now(CN).isoformat())
             new.update(previous=None, schema_authority=None)
+        if migrate and candidate['revision'] == 'fa1023oc':
+            # The old writer requires a customer code and must not receive
+            # future blank-code identities through the generic schema exception.
+            new.update(previous=None, schema_authority=None)
         # Commit the reader gate and removal of unsafe one-click rollback before
         # starting the new process; failure here never opens new write requests.
         write_json(self.root / 'state.json', new)
@@ -1213,6 +1217,17 @@ class Manager:
                     if new.get('operation')!='migration_failed':new['operation']='update_failed_reader_contract'
                     write_json(self.root/'state.json',new)
                     raise ValueError('待办共享文件首次启动恢复校验未通过，保留现库与现场；未覆盖旧数据') from None
+            if migrate and candidate['revision'] == 'fa1023oc':
+                from desktop_assistant.exact_sales_reader import recover_empty_migration
+                try:
+                    recover_empty_migration(self, candidate['id'], old['current'],
+                        migration_manifest, new, environment=migration_environment,
+                        _optional_customer_code=True)
+                except BaseException:
+                    if new.get('operation') != 'migration_failed':
+                        new['operation'] = 'update_failed_reader_contract'
+                    write_json(self.root / 'state.json', new)
+                    raise ValueError('客户料号首次启动恢复校验未通过，保留现库与现场；未覆盖旧数据') from None
             if not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']):
                 new.update(operation='update_failed_reader_contract', previous=None)
                 write_json(self.root / 'state.json', new)
@@ -1306,6 +1321,8 @@ class Manager:
             old_state = dict(state)
             state.update(current=target, previous=previous, schema_authority=target,
                          operation='migration_recovered', updated_at=datetime.now(CN).isoformat())
+            if manifest['revision'] == 'fa1023oc':
+                state.update(previous=None, schema_authority=None)
             self._activate_dispatch_reader(target, old_state, state, backup)
             write_json(self.root / 'state.json', state)
             try:

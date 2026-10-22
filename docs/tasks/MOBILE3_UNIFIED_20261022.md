@@ -23,7 +23,9 @@
 
 ## 进度
 
-已批准方案：plans/mobile-3.0-20261022/手机端3.0升级方案.md（本地规划附件）。本批实现与定向验证完成，准备 v0.22.713 签名候选；尚未正式发布，发布最终状态以独立NAS回执和受保护 final-result.json 为准。
+已批准方案：plans/mobile-3.0-20261022/手机端3.0升级方案.md（本地规划附件）。本批已于2026-10-22 18:40:24 +08:00以 v0.22.713 完成技术发布与原生收尾，待员工真机验收。已发布源码08d9db6113fb6d4a0f1f87abc18f9ad48d6a14ab，包f20b952f63353e3925965c2baca01a2f6e5db981c5cae43ed56d8a9eff2b2820，revision仍ez1022hc；本任务卡的发布后文档更新不作为另一次应用发布。
+
+最终回执：/Library/TianmingERP-Release-mobile3-unified-20261022-v0-22-713-08d9db6113fb/final-result.json，status=technical_release_and_native_closure_complete、healthy=true、manual_stop=false、backup_work_retained=false。NAS独立回执：04_开发记录/任务回执/20261022-手机端3.0统一升级v713.md。GitHub因未配置认证推送失败，已验证源代码bundle并存NAS；正式签名发布独立完成。用户已授权跨聊天协调，后续由ERP3.0统一合入本版与对账补录三项修复并发布v714，本任务不重复启动停服。
 
 已完成：后端合同/部署/恢复88项；查询/图纸Node43项及新补缩页恢复；静态入口48项回归与11项新行为；Vue和Twin构建、隔离Chrome 320/375/430宽度预览。后续补修覆盖认纸板同页重试、越界页恢复及仓库离页/换账号的迟到响应。4条旧静态断言与已发布基线不符，保留原测试与失败证据，未宣称全仓库通过。
 

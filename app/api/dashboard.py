@@ -274,6 +274,8 @@ def _workflow_projection_rows(
 ) -> list[dict]:
     """Build dashboard rows from the same projection returned by order APIs."""
 
+    if visible_customer_ids is not None and not visible_customer_ids:
+        return []
     query = (
         select(Order)
         .options(
@@ -296,6 +298,7 @@ def _workflow_projection_rows(
                 OrderItem.material_status,
                 OrderItem.snapshot_product_code,
                 OrderItem.supply_mode_snapshot,
+                OrderItem.composite_fulfillment_mode_snapshot,
             ).selectinload(OrderItem.product),
         )
         .where(
@@ -879,14 +882,18 @@ def _authoritative_dashboard_data(
         list_production_task_dashboard_rows,
     )
 
+    # An explicitly empty customer scope cannot contain actionable work.
+    # Avoid invoking eligibility helpers that inspect global inventory before
+    # their final customer filter; None continues to mean unrestricted scope.
+    has_customer_scope = visible_customer_ids is None or bool(visible_customer_ids)
     pending_material_rows = (
         dashboard_pending_requisition_rows(db=db, user=user, include_workbench=True)
-        if can_view_requisition
+        if can_view_requisition and has_customer_scope
         else []
     )
     pending_incoming_rows = (
         dashboard_pending_incoming_rows(db=db, user=user, include_workbench=True)
-        if can_view_incoming
+        if can_view_incoming and has_customer_scope
         else []
     )
     pending_production_rows = (
@@ -895,17 +902,17 @@ def _authoritative_dashboard_data(
             allowed_customer_ids=visible_customer_ids,
             status="pending",
         )
-        if can_view_orders
+        if can_view_orders and has_customer_scope
         else []
     )
     pending_delivery_rows = (
         pending_delivery_customer_summaries(db=db, user=user, include_workbench=True)
-        if can_view_deliveries
+        if can_view_deliveries and has_customer_scope
         else []
     )
 
     pending_receipt_rows: list[dict] = []
-    if can_view_deliveries:
+    if can_view_deliveries and has_customer_scope:
         receipt_query = (
             select(
                 Delivery.id.label("delivery_id"),
@@ -940,11 +947,11 @@ def _authoritative_dashboard_data(
             statement_month=statement_month,
             visible_customer_ids=visible_customer_ids,
         )
-        if can_view_finance and show_reconciliation_reminder
+        if can_view_finance and show_reconciliation_reminder and has_customer_scope
         else []
     )
     statement_rows: list[dict] = []
-    if can_view_finance:
+    if can_view_finance and has_customer_scope:
         statement_query = (
             select(Statement, Customer.name.label("customer_name"))
             .join(Customer, Customer.id == Statement.customer_id)
@@ -996,7 +1003,7 @@ def _authoritative_dashboard_data(
     # Use the same eligibility, frozen settlement party and source-customer
     # scope as the collections workbench. No month or pagination truncation.
     payment_rows = []
-    if can_view_finance:
+    if can_view_finance and has_customer_scope:
         finance = project_customer_months(
             db=db, user=user, all_open=True, workspace="collections",
             balance_type="pending_payment", paginate=False,
@@ -1024,7 +1031,7 @@ def _authoritative_dashboard_data(
 
     waiting_count = 0
     due_waiting_count = 0
-    if can_view_requisition:
+    if can_view_requisition and has_customer_scope:
         business_date = date.fromisoformat(as_of[:10])
         waiting_hold_filters = [
             RequisitionHold.status == "active",

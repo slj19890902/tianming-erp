@@ -3,6 +3,7 @@
 No completion or destination is invented: the existing semi reservation is
 consumed (and reversed) by the normal delivery transaction at its source lot.
 """
+from collections import defaultdict
 from dataclasses import replace
 from sqlalchemy import select
 from app.models.order import OrderItem
@@ -12,24 +13,82 @@ from app.models.warehouse_inventory import InventoryLot, InventoryReservation, O
 from app.services.box_type_rules import box_type_code
 
 
-def liner_direct_coverage(db, item: OrderItem, *, product: Product | None = None) -> int:
+class _LinerListReadContext:
+    """Batched preflight facts for one read-only candidate list.
+
+    The direct reservation/delivery callers continue using fresh per-item
+    queries. This context lives only for one list evaluation and never holds
+    final qualification results or crosses a write boundary.
+    """
+
+    def __init__(self, db, items):
+        self.products = {}
+        product_ids = sorted({item.product_id for item in items if item.product_id})
+        for offset in range(0, len(product_ids), 800):
+            for product in db.scalars(select(Product).where(
+                Product.id.in_(product_ids[offset : offset + 800])
+            )):
+                self.products[product.id] = product
+        candidate_ids = sorted({
+            item.id for item in items
+            if _is_liner_candidate(item, self.products.get(item.product_id))
+        })
+        self.tasks = defaultdict(list)
+        self.posted_completion_ids = set()
+        self.requirements = defaultdict(list)
+        for offset in range(0, len(candidate_ids), 800):
+            chunk = candidate_ids[offset : offset + 800]
+            for task in db.scalars(select(ProductionTask).where(
+                ProductionTask.order_item_id.in_(chunk)
+            )):
+                self.tasks[task.order_item_id].append(task)
+            self.posted_completion_ids.update(db.scalars(
+                select(ProductionCompletion.order_item_id).where(
+                    ProductionCompletion.order_item_id.in_(chunk),
+                    ProductionCompletion.status == "posted",
+                ).distinct()
+            ))
+            for requirement in db.scalars(select(OrderItemSemiRequirement).where(
+                OrderItemSemiRequirement.order_item_id.in_(chunk)
+            )):
+                self.requirements[requirement.order_item_id].append(requirement)
+
+
+def _is_liner_candidate(item, product) -> bool:
+    return bool(
+        product is not None
+        and box_type_code(product.box_style) == "liner"
+        and product.box_category != "die_cut"
+        and not item.composite_fulfillment_mode_snapshot
+    )
+
+
+def liner_direct_coverage(
+    db, item: OrderItem, *, product: Product | None = None,
+    _read_context: _LinerListReadContext | None = None,
+) -> int:
     from app.services.semi_finished_inventory import (
         finished_order_source_coverage, ensure_semi_finished_lot_eligibility, requirement_signature,
     )
     # List and dashboard status projections can pre-load the small product
     # set for many items.  Reuse that authoritative object when available;
     # retaining the lookup fallback keeps direct callers unchanged.
-    product = product if product is not None else db.get(Product, item.product_id)
-    if (product is None or box_type_code(product.box_style) != "liner"
-            or product.box_category == "die_cut" or item.composite_fulfillment_mode_snapshot):
+    if product is None:
+        product = (_read_context.products.get(item.product_id)
+                   if _read_context is not None else db.get(Product, item.product_id))
+    if not _is_liner_candidate(item, product):
         return 0
-    tasks = list(db.scalars(select(ProductionTask).where(ProductionTask.order_item_id == item.id)))
+    tasks = (_read_context.tasks.get(item.id, []) if _read_context is not None
+             else list(db.scalars(select(ProductionTask).where(ProductionTask.order_item_id == item.id))))
     if any(str(t.print_content_snapshot or '').strip() not in {'', '无印刷', '无', '否', '不印刷'} for t in tasks):
         return 0
-    if db.scalar(select(ProductionCompletion.id).where(
-            ProductionCompletion.order_item_id == item.id, ProductionCompletion.status == 'posted').limit(1)):
+    has_posted_completion = (item.id in _read_context.posted_completion_ids
+        if _read_context is not None else db.scalar(select(ProductionCompletion.id).where(
+            ProductionCompletion.order_item_id == item.id, ProductionCompletion.status == 'posted').limit(1)))
+    if has_posted_completion:
         return 0
-    requirements = list(db.scalars(select(OrderItemSemiRequirement).where(OrderItemSemiRequirement.order_item_id == item.id)))
+    requirements = (_read_context.requirements.get(item.id, []) if _read_context is not None
+        else list(db.scalars(select(OrderItemSemiRequirement).where(OrderItemSemiRequirement.order_item_id == item.id))))
     if len(requirements) != 1:
         return 0
     requirement = requirements[0]
@@ -90,4 +149,6 @@ def direct_liner_item_ids(db):
         InventoryReservation.status != 'cancelled',
         OrderItem.delivered_quantity < OrderItem.quantity,
         OrderItem.is_force_closed.is_(False)).distinct()).all()
-    return [item.id for item in items if liner_direct_coverage(db, item) > 0]
+    context = _LinerListReadContext(db, items)
+    return [item.id for item in items
+            if liner_direct_coverage(db, item, _read_context=context) > 0]

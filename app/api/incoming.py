@@ -1958,6 +1958,8 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
         .join(Customer, Customer.id == Order.customer_id)
     )
     visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None and not visible_customer_ids:
+        return []
     if visible_customer_ids is not None:
         query = query.where(Order.customer_id.in_(visible_customer_ids))
     query = _pending_order_item_query(query)
@@ -2249,6 +2251,8 @@ def _rows(
         .outerjoin(receiver, receiver.id == OrderItem.material_received_by)
     )
     visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None and not visible_customer_ids:
+        return []
     if visible_customer_ids is not None:
         query = query.where(Order.customer_id.in_(visible_customer_ids))
     if selected_order_item_ids is not None:
@@ -3376,6 +3380,8 @@ def _receipt_fact_rows(
     include_reversed: bool = False,
 ) -> list[dict]:
     visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None and not visible_customer_ids:
+        return []
     rows: list[dict] = []
     history_facts = receipt_history(
         db,

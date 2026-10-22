@@ -249,7 +249,7 @@ def _supplies(db, *, order_item_ids=None, source_item_ids=None):
     from app.services.stock_purchase_identity import resolve
     from app.services.warehouse_inventory import WarehouseInventoryError
     from sqlalchemy import or_, and_
-    from sqlalchemy.orm import aliased
+    from sqlalchemy.orm import aliased, contains_eager
     raw = aliased(InventoryLot)
     out = aliased(InventoryLot)
     receipt = IncomingReceiptItem
@@ -265,6 +265,10 @@ def _supplies(db, *, order_item_ids=None, source_item_ids=None):
         jobs.status == "completed", out.status == "active", out.quantity_available > 0).exists()
     item_query = select(StockReplenishmentOrderItem).join(StockReplenishmentOrder,
         StockReplenishmentOrder.id == StockReplenishmentOrderItem.replenishment_order_id)
+    # This exact parent is already joined for qualification and FIFO order.
+    # Reuse it for frozen supplier/status facts instead of one lazy read per
+    # source; do not change which sources or demands are eligible.
+    item_query = item_query.options(contains_eager(StockReplenishmentOrderItem.order))
     item_query = item_query.where(StockReplenishmentOrder.source_type.in_(("stock_warning", "customer_request")),
             StockReplenishmentOrder.status != "voided", StockReplenishmentOrder.request_hash.is_not(None),
             StockReplenishmentOrderItem.procurement_route_snapshot == "paperboard",

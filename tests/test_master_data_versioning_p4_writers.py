@@ -4,6 +4,7 @@ from collections.abc import Generator
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 import json
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -28,7 +29,8 @@ def writer_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     from app.services import material_price_adjust
     from app.services.supplier_master import normalize_supplier_identity
 
-    monkeypatch.setenv("ERP_SECRET_KEY", "p4-writer-tests-only")
+    if not os.getenv("ERP_UAT_ROOT"):
+        monkeypatch.setenv("ERP_SECRET_KEY", "p4-writer-tests-only")
     engine = create_sqlite_engine(tmp_path / "p4-writers.sqlite3")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)

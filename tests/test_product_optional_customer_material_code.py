@@ -1,5 +1,7 @@
 """Optional customer identifiers must not borrow internal inventory codes."""
 from datetime import date
+from pathlib import Path
+import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -106,3 +108,38 @@ assert.equal(payload.customer_material_code,'');
 vm.productForm.customer_material_code='000123-X';
 assert.equal(vm.buildProductWritePayload().customer_material_code,'000123-X');
 ''')
+
+
+def test_distinct_same_name_blank_codes_and_clear_work_on_migrated_schema(writer_app, monkeypatch):
+    # Exercise real Alembic downgrade/upgrade of the full ORM schema, then the
+    # same HTTP create/update routes used by the editor (no synthetic code fallback).
+    from alembic import command
+    from tests.test_optional_customer_code_migration import config, PARENT, TARGET
+    with writer_app.state.session_factory() as db:
+        engine = db.get_bind()
+        database = Path(engine.url.database)
+    engine.dispose()
+    with sqlite3.connect(database) as conn:
+        conn.execute('CREATE TABLE alembic_version(version_num VARCHAR(32) PRIMARY KEY)')
+        conn.execute('INSERT INTO alembic_version VALUES(?)', (TARGET,))
+    cfg = config(monkeypatch, database)
+    command.downgrade(cfg, PARENT)
+    command.upgrade(cfg, TARGET)
+    cid = customer(writer_app)
+    with TestClient(writer_app) as client:
+        a = client.post(URL, json=payload(cid, product_code='BLANK-A', customer_material_code=''))
+        b = client.post(URL, json=payload(cid, product_code='BLANK-B', customer_material_code=''))
+        assert a.status_code == b.status_code == 201, (a.text, b.text)
+        c = client.post(URL, json=payload(cid, product_code='CLEAR-C', customer_material_code='000123-X'))
+        assert c.status_code == 201, c.text
+        duplicate = client.post(URL, json=payload(cid, product_code='OTHER', customer_material_code='000123-X'))
+        assert duplicate.status_code == 409
+        internal_duplicate = client.post(URL, json=payload(cid, product_code='BLANK-A', customer_material_code='different'))
+        assert internal_duplicate.status_code == 409
+        # Same actual code with a different name remains the established contract.
+        different_name = client.post(URL, json=payload(cid, product_code='OTHER-NAME', customer_material_code='000123-X', product_name='different name'))
+        assert different_name.status_code == 201, different_name.text
+        cleared, _ = save(client, c.json()['id'], body(client, c.json()['id'], customer_material_code=''))
+        assert cleared['customer_material_code'] == '' and cleared['product_code'] == 'CLEAR-C'
+        rows = client.get(URL, params={'customer_id':cid, 'keyword':'合成纸箱', 'response_mode':'summary'}).json()['items']
+        assert len(rows) == 3 and all(p['customer_material_code'] == '' for p in rows)

@@ -881,3 +881,11 @@ ex1021cp→ey1021se仅追加products的supplier_edge_type/base_supplier_edge_typ
 - 增加home_memos/shared_files/shared_file_versions/home_collaboration_mutations空表及保护触发器；旧表、原有索引/触发器与数量金额不变。
 - 必须复核共享文件全部版本（含回收站）的原件摘要及真实恢复；空表升降升允许，有新事实禁止降级删除。
 - 首启失败按精确签名和冻结数据证据收尾；备份原件、正式回退程序全部保留。参考任务卡HOME_COLLABORATION_20261022。
+
+## 2026-10-23 可选客户料号 fa1023oc
+
+- [x] 唯一线性head fa1023oc，前驱ez1022hc；原产品值/冻结历史不回填。
+- [x] 受管历史副本升降升，333原业务表、772显式对象（270触发器）、其他products定义及所有FK保持，integrity ok/FK0。
+- [x] 42定向全通过；真实空码同名新增/清空、原身份重复拒绝、DDL中途回滚及有损降级SHA不变。
+- [ ] 最新正式事实/草稿窗口、时点备份、精确签名包真实恢复和正式发布。
+- [ ] 管理员人工页面验收。

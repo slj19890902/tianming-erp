@@ -1,6 +1,6 @@
 # 历史常用箱未知结构保留：交付与纠正边界
 
-状态：隔离候选开发中；没有发布、正式业务写入或正式管理员验收。基线为 v715 源码 `80e2fff6b786d2bb460435d37d3786a01e8e45ff`。本任务不改变数据库结构，Alembic head 保持 `ez1022hc`。export 与 delivery facts 工作树保持独立。
+状态：开发验证通过，尚未正式发布；没有正式业务写入或正式管理员验收。基线为 v715 源码 `80e2fff6b786d2bb460435d37d3786a01e8e45ff`。本任务不改变数据库结构，Alembic head 保持 `ez1022hc`。export 与 delivery facts 工作树保持独立。
 
 ## 实现合同
 
@@ -32,6 +32,28 @@
 
 已用 v715 同业务代码真实 HTTP → 隔离合成 SQLite 复现：仅改采购与印刷时 WC 会被写成 A1。候选已验证旧空结构和已知结构保持、正常预览/保存/回读、明确改结构、恢复 null、旧客户端保护、冻结订单不改、无权和客户范围拒绝、旧版本竞争拒绝、晚失败完整回滚，以及印刷/模具/开料相邻守卫。
 
-不以合成测试冒充真实来源副本验收。正规 export 尚未执行，真实业务副本回归、正式发布、管理员页面验收仍未完成。
+本普通修复不依赖 export/facts 的独立管理员导出或事实迁移授权，不新增它们的发布门槛。没有用合成测试冒充真实来源副本验收或管理员页面验收；后续按正常版本整合/发布与人工验收流程推进。
 
 同基线已有三个 `test_master_data_versioning_p4_writers.py` 的旧单位断言失败（预期仅 remark/product_code 或无修改，实际多 unit）；已在未改业务代码的 v715 对应工作树复现相同失败，本候选不修改单位业务或删除断言。前端既有静态断言差异由子任务单独记录，不能当本修复新增失败或声称全套全绿。
+
+## 最终代码和定向结果
+
+- 后端及任务卡：`d0b34217`。
+- UI 整合：`cd27e80f`，来自独立 UI 工作树 `b730b38045e69009c4c95f115a0f6b6a19afde54`。
+- 合并后定向回归：**119 passed**（2026-10-22），覆盖下列六文件；新 HTTP/SQLite 18 项、新前端真实方法与模板 14 项均通过。
+- 子任务另外完成开料/BOM/印刷核心合计 32 项通过；不把重叠测试相加为独立数量。
+- 真实产品 Vue 模板编译、所有内联脚本解析、`git diff --check`、唯一 Alembic head 和 helper SHA 引用一致性通过。
+- helper SHA256：`475bbb9a5e4a57f372dbf85f950890a50a48e1c86d91820bf4e683472800b700`，HTML 引用 `?v=475bbb9a5e4a`。
+
+```text
+tests/test_product_unknown_structure.py
+tests/test_product_unknown_structure_frontend.py
+tests/test_product_unknown_printing_frontend.py
+tests/test_product_unit_labels.py
+tests/test_p1_13_box_type_rules.py
+tests/test_sheet_cutting_product_api.py
+```
+
+子任务扩展前端七文件曾为 51 通过、6 项旧失败；6 项均以 v715 原始 INDEX 内存复现，分别涉及 P1-46 两个旧布局、Q1-01 两个旧订单编辑断言，以及 P1-40A 外购布局/标签预期。不改这些无关实现或移除断言。
+
+复审关闭三项问题：非空跨箱型需全五掩码，恢复后的实际工艺重新校验二次粘合，数字字符串片数避免 int('2.0') 的 500；另外明确 null 箱型允许单项恢复。无未解决的本候选已知阻断。另一个 corner-save 候选也修改 products.py，应由整合负责人串行审查合并，不能把当前提交直接覆盖其文件。

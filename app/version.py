@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.710"
-APP_VERSION_NAME = "待处理子件单行展开与当前库位"
+APP_VERSION = "v0.22.711"
+APP_VERSION_NAME = "片料抵扣结果核对与页面解锁"
 APP_BUILD_DATE = "2026-10-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6971,3 +6971,14 @@ APP_VERIFICATION_STEPS = [
     "折叠后检查其他产品同样只占一行；展开仍能查看待核对批次和按原权限操作。",
 ]
 APP_CHANGELOG = [*(f"v0.22.710：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "修复确认使用库存片料后，明细刷新移除原行导致页面操作锁未释放的问题；成功后无需刷新整页继续操作。",
+    "核对入口接续原批次、张数和同一请求，避免重复抵扣；提交中、结果未知和成功后刷新失败分别提示。",
+    "无数据库迁移，不调整库存数量算法，不修改历史业务记录；保留权限、客户范围、版本和幂等保护。",
+]
+APP_VERIFICATION_STEPS = [
+    "整页刷新到本版后，按真实需求确认使用库存片料，核对成功后可以继续操作，原明细被移除也不会锁住页面。",
+    "若网络异常提示结果待核对，点击核对原请求；确认恢复后库存只记一次，未确认前不要重新抵扣。",
+]
+APP_CHANGELOG = [*(f"v0.22.711：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

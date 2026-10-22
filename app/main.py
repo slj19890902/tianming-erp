@@ -34,6 +34,7 @@ from app.api.deliveries import (
     pick_router,
     router as deliveries_router,
 )
+from app.api.delivery_fulfillment_facts import router as delivery_fulfillment_facts_router
 from app.api.dashboard import router as dashboard_router
 from app.api.home_collaboration import router as home_collaboration_router
 from app.api.finance import router as finance_router
@@ -938,6 +939,12 @@ def create_app() -> FastAPI:
             deliveries_router,
             prefix="/api/deliveries",
             tags=["deliveries"],
+        )
+    if not any(route.path == "/api/deliveries/{delivery_id}/fulfillment-facts/preview" for route in application.routes):
+        application.include_router(
+            delivery_fulfillment_facts_router,
+            prefix="/api/deliveries",
+            tags=["delivery-fulfillment-facts"],
         )
     if not any(route.path == "/api/deliveries/tianhua-preimport/upload" for route in application.routes):
         application.include_router(

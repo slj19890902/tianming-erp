@@ -334,3 +334,4 @@ from app.models.finished_product_label import FinishedProductLabelPrintJob  # no
 from app.models.incoming_actual_spec import IncomingActualSpec  # noqa: E402,F401
 from app.models.customer_sharing import CustomerSharingGroup, CustomerSharingMember  # noqa: E402,F401
 from app.models.scrap_production import ScrapProductionJob  # noqa: E402,F401
+from app.models.delivery_fulfillment_fact import DeliveryFulfillmentRevision, DeliveryFulfillmentSegment  # noqa: E402,F401

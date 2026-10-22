@@ -2272,29 +2272,16 @@ def _order_group_key(order: Order) -> str:
     return f"single::{order.order_number}"
 
 
-def _completion_dates_by_item(
-    db: Session,
-    item_ids: list[int],
-) -> dict[int, date]:
+def _completion_dates_by_item(db: Session, item_ids: list[int]) -> dict[int, date]:
     if not item_ids:
         return {}
-    return {
-        int(item_id): completion_date
-        for item_id, completion_date in db.execute(
-            select(
-                DeliveryItem.order_item_id,
-                func.max(Delivery.delivery_date),
-            )
-            .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
-            .where(
-                DeliveryItem.order_item_id.in_(item_ids),
-                DeliveryItem.is_current.is_(True),
-                Delivery.status == "dispatched",
-            )
-            .group_by(DeliveryItem.order_item_id)
-        ).all()
-        if completion_date is not None
-    }
+    from app.services.delivery_fulfillment_projection import effective_fulfillment_lines
+    physical = effective_fulfillment_lines()
+    return {int(item_id): completed for item_id, completed in db.execute(
+        select(physical.c.order_item_id, func.max(physical.c.actual_date))
+        .join(Delivery, Delivery.id == physical.c.delivery_id)
+        .where(physical.c.order_item_id.in_(item_ids), Delivery.status == "dispatched")
+        .group_by(physical.c.order_item_id)) if completed is not None}
 
 
 def _build_full_order_response_context(

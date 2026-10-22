@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
 import json
 from typing import Any
+from types import SimpleNamespace
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -545,32 +546,55 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
     """
 
     month_start, next_month_start = _month_bounds(month)
-    # The month remains the immutable supplement/fingerprint identity.  A
-    # caller may narrow the physical delivery window inside that month, but
-    # never replace ``month`` with an arbitrary period string.
+    # The requested month selects the physical delivery period. Supplement
+    # identities retain the original document month even when a whole line's
+    # actual fulfillment date moves to another month.
     period_start = max(month_start, date_from) if date_from is not None else month_start
     period_end = min(next_month_start, date_to_exclusive) if date_to_exclusive is not None else next_month_start
+    from app.services.delivery_fulfillment_projection import effective_fulfillment_lines
+    physical = effective_fulfillment_lines()
     delivery_rows = list(
         db.execute(
             select(
                 DeliveryItem,
                 Delivery.delivery_number,
-                Delivery.delivery_date,
+                physical.c.actual_date,
                 Delivery.customer_id,
                 Customer.name,
+                physical.c.quantity,
+                physical.c.cost_allocation_status,
+                physical.c.original_document_date,
             )
             .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+            .join(physical, physical.c.delivery_item_id == DeliveryItem.id)
             .join(Customer, Customer.id == Delivery.customer_id)
             .where(
                 Delivery.status == "dispatched",
                 DeliveryItem.is_current.is_(True),
-                Delivery.delivery_date >= period_start,
-                Delivery.delivery_date < period_end,
+                physical.c.actual_date >= period_start,
+                physical.c.actual_date < period_end,
                 True if visible_customer_ids is None else Delivery.customer_id.in_(visible_customer_ids),
             )
-            .order_by(Delivery.delivery_date, Delivery.id, DeliveryItem.id)
+            .order_by(physical.c.actual_date, Delivery.id, DeliveryItem.id)
         ).all()
     )
+    # A cost source belongs to the original line. Split dates never duplicate
+    # its entire cost in each period. Unknown source-to-segment allocation is a
+    # hard period-close gap and cannot be filled with a historical price guess.
+    pending_split_ids = {int(row[0].id) for row in delivery_rows
+                         if row[6] == "pending_split_source_allocation"}
+    source_month_by_item = {int(row[0].id): row[7].strftime("%Y-%m")
+                            for row in delivery_rows}
+    grouped_rows = {}
+    for item, number, actual_date, customer_id, customer_name, quantity, _, _original_date in delivery_rows:
+        key = int(item.id)
+        if key not in grouped_rows:
+            proxy = SimpleNamespace(**{prop.key:getattr(item,prop.key)
+                                      for prop in item.__mapper__.column_attrs})
+            proxy.delivered_quantity = 0
+            grouped_rows[key] = (proxy, number, actual_date, customer_id, customer_name)
+        grouped_rows[key][0].delivered_quantity += int(quantity)
+    delivery_rows = list(grouped_rows.values())
     delivery_item_ids = [int(row[0].id) for row in delivery_rows]
     items_by_id = {int(row[0].id): row[0] for row in delivery_rows}
     order_item_ids = {item.order_item_id for item in items_by_id.values() if item.order_item_id}
@@ -585,7 +609,7 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
         gap_records.append({"item": items_by_id[item_id], "source": source, "reason": reason,
                             "order_product_id": order_item.product_id if order_item else None,
                             "product_name": items_by_id[item_id].product_name_snapshot or (order_item.snapshot_product_name if order_item else ""),
-                            "month": month, "delivery_number": row_meta[item_id]["delivery_number"],
+                            "month": source_month_by_item[item_id], "delivery_number": row_meta[item_id]["delivery_number"],
                             "quantity": int(source["active_quantity"]) if source else int(items_by_id[item_id].delivered_quantity or 0)})
     row_meta = {
         int(item.id): {
@@ -740,6 +764,15 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
         line_frozen = 0
         line_reasons: set[str] = set()
         line_cost = Decimal("0")
+        if item_id in pending_split_ids:
+            collect_gap(item_id, None, "fulfillment_split_cost_allocation_pending")
+            line_costs[item_id] = Decimal("0")
+            if len(missing_details) < 20:
+                missing_details.append({**row_meta[item_id],
+                    "reason_codes":["fulfillment_split_cost_allocation_pending"],
+                    "reason":"实际交付分批的来源成本份额待核；保留原冻结成本，不按数量均摊",
+                    "can_adopt_cost_supplement":False})
+            continue
         if not sources:
             line_reasons.add("no_delivery_cost_source")
             collect_gap(item_id, None, "no_delivery_cost_source")
@@ -853,11 +886,17 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
         else Decimal("1")
     )
     if _gap_collector is not None:
-        _gap_collector.extend(gap_records)
+        _gap_collector.extend(g for g in gap_records if g["item"].id not in pending_split_ids)
     supplemental = {}
     if _apply_supplements:
         from app.services.material_cost_supplement import summarize
-        supplemental = summarize(db, gap_records, total_lines)
+        supplemental = summarize(db, [g for g in gap_records if g["item"].id not in pending_split_ids], total_lines)
+        if pending_split_ids:
+            supplemental["management_uncovered_lines"] += len(pending_split_ids)
+            supplemental["management_covered_lines"] -= len(pending_split_ids)
+            supplemental["management_cost_ready"] = False
+            supplemental["management_missing_details"] += [dict(delivery_item_id=i,
+                reason="实际交付分批成本份额待核；原成本冻结不变") for i in sorted(pending_split_ids)]
         supplemental["management_material_cost"] = (
             actual_material_cost + supplemental["supplemental_material_cost"]
         ).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
@@ -911,6 +950,8 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
         "month": month,
         "accounting_basis": "按送货日期统计物理出库；人民币金额按收料时冻结的含税采购成本",
         "scope_note": "外币没有人工确认汇率时只显示原币金额并阻止结转；工资、能耗、外协和期间费用继续在成本费用池单独复核。",
+        "fulfillment_split_cost_pending_item_ids": sorted(pending_split_ids),
+        "cost_amount_basis": "known_allocated_cost_only; split_source_costs_remain_frozen_and_unallocated",
         "total_delivery_lines": total_lines,
         "total_delivery_quantity": sum(
             int(meta["delivered_quantity"]) for meta in row_meta.values()

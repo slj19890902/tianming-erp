@@ -5159,9 +5159,9 @@
                   <tr :data-workflow-row="'delivery:'+row.id" :class="{'workflow-current':workflowRowSelected('delivery:'+row.id)}" tabindex="0">
                     <td>{{ row.delivery_number }}<div v-if="row.search_matches?.matched_fields?.length" class="delivery-search-match-summary"><span v-for="field in row.search_matches.matched_fields" :key="field" class="status orange">命中{{ deliverySearchFieldLabel(field) }}：{{ (row.search_matches.matched_values?.[field] || []).join('、') }}</span></div></td>
                     <td>{{ row.customer_name }}</td>
-                    <td>{{ row.delivery_date }}<div v-if="row.is_historical_backfill" class="status blue" style="margin-top:4px">历史补录</div><div v-if="row.created_at" class="muted">ERP录入 {{ formatDateTime(row.created_at) }}</div></td>
-                    <td>{{ deliveryDisplayQuantity(row) }}</td>
-                    <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ row.total_amount == null ? "待核对" : salesMoney(row.total_amount) }}</td>
+                    <td><template v-if="row.actual_fulfillment?.revision">{{ fulfillmentDateText(row) }}<div class="muted">原单 {{ row.delivery_date }}</div></template><template v-else>{{ row.delivery_date }}</template><div v-if="row.is_historical_backfill" class="status blue" style="margin-top:4px">历史补录</div><div v-if="row.created_at" class="muted">ERP录入 {{ formatDateTime(row.created_at) }}</div></td>
+                    <td><template v-if="row.actual_fulfillment?.revision"><strong>{{ row.actual_fulfillment.matched_physical_quantity }}</strong><div class="muted">当前筛选交付<br />原单 {{ row.total_quantity }}</div></template><template v-else>{{ deliveryDisplayQuantity(row) }}</template></td>
+                    <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ row.total_amount == null ? "待核对" : salesMoney(row.total_amount) }}<div v-if="row.actual_fulfillment?.revision" class="muted">原已开票整单金额</div></td>
                     <td><button class="btn small delivery-list-detail-toggle" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${row.item_count ?? (row.items || []).length}）` }}</button></td>
                     <td><span v-if="row.status==='voided'" class="status gray">已删除（留痕）</span><status-tag v-else :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag><span v-if="deliveryLocationCountdown(row)" class="delivery-location-countdown">{{ deliveryLocationCountdown(row) }}</span></td>
@@ -5184,6 +5184,7 @@
                           <a v-if="deliveryLabelRecoveryUrl && Number(deliveryLabelOpenState.deliveryId)===Number(row.id)" class="btn small" :href="deliveryLabelRecoveryUrl" target="_blank" rel="noopener">重新打开标签页</a>
                           <button v-if="canDelivery && (row.status==='pending' || (row.status==='dispatched' && (!row.return_receipt_status || row.return_receipt_status==='cancelled')))" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="editDelivery(row)">{{ row.status==='dispatched' ? '编辑待回单送货单' : '编辑' }}</button>
                           <button v-if="canDelivery && canAdjustReconciliationPeriod && ['pending','dispatched'].includes(row.status)" class="btn small" data-action="correct-delivery-actual-date" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="correctDeliveryActualDate(row)">更正实际日期</button>
+                          <button v-if="canDelivery && canAdjustReconciliationPeriod && hasPermission('finance.view') && row.status==='dispatched' && row.return_receipt_status==='confirmed'" class="btn small" data-action="append-delivery-fulfillment" :id="`fulfillment-button-${row.id}`" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="openDeliveryFulfillment(row)">保留票据更正交付</button>
                           <button v-if="canDelivery && row.status==='pending'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
                           <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="cancelReceipt(row)">{{ receiptOperationState.action==='cancel' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消回单' }}</button>
                           <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="cancelDelivery(row)">{{ deliveryOperationState.action==='cancel' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '撤回中…' : '撤回发货' }}</button>
@@ -5197,6 +5198,12 @@
                       <div v-if="deliveryDetailState[row.id]?.loading" class="empty">正在读取这张送货单的明细…</div>
                       <div v-else-if="deliveryDetailState[row.id]?.error" class="notice warning">明细读取失败：{{ deliveryDetailState[row.id].error }} <button class="btn small" @click="loadDeliveryListDetail(row,{force:true})">重试</button></div>
                       <div v-else class="delivery-list-detail">
+                        <section v-if="row.actual_fulfillment?.revision" class="panel" style="margin:8px 0;padding:12px" aria-label="实际交付分批">
+                          <strong>全单实际交付 · 第 {{ row.actual_fulfillment.revision }} 版</strong>
+                          <p class="muted">当前筛选交付 {{ row.actual_fulfillment.matched_physical_quantity }}，原单合计 {{ row.total_quantity }}。以下列出全单分批，含筛选范围外日期；原回单与发票仍归原单。</p>
+                          <table><thead><tr><th>原明细 / 产品</th><th>实际日期</th><th>交付数量</th><th>成本</th></tr></thead><tbody><tr v-for="segment in row.actual_fulfillment.segments" :key="segment.segment_identity"><td>{{ fulfillmentItemLabel(row,segment.delivery_item_id) }}</td><td>{{ segment.actual_date }}</td><td>{{ segment.quantity }}</td><td>{{ String(segment.cost_allocation_status).startsWith('pending') ? '分批成本分配待核' : '沿用原整行成本' }}</td></tr></tbody></table>
+                          <p class="muted">实际交付日期不表示新增签收证明。分批成本未核定时，保留原成本来源，不按批次均摊。</p>
+                        </section>
                         <table :style="{'--delivery-category-width':deliveryShowsCategory(row)?'48px':'0px','--delivery-price-width':canViewSalesAmounts?'190px':'0px'}">
                           <thead><tr><th class="delivery-detail-sequence">序号</th><th class="delivery-detail-po">客户单号</th><th class="delivery-detail-code">存货编码</th><th class="delivery-detail-name">产品名称</th><th v-if="deliveryShowsCategory(row)" class="delivery-detail-category">类别</th><th class="delivery-detail-drawing">图号</th><th class="delivery-detail-location">库存位置</th><th class="delivery-detail-quantity">送货数量</th><th v-if="canViewSalesAmounts" class="delivery-detail-price">单价</th><th v-if="canViewSalesAmounts" class="delivery-detail-amount">金额</th><th class="delivery-detail-action">操作</th></tr></thead>
                           <tbody><template v-for="(item,itemIndex) in row.items || []" :key="item.id">
@@ -8665,6 +8672,10 @@
                   <button v-if="metric.source" class="btn small" style="margin-top:7px" type="button" @click="openTraceMetricSource(metric)">来源 {{ metric.source.document_number }}</button>
                 </div>
               </div>
+              <section v-if="orderTrace.actual_fulfillment_segments?.length" class="panel" style="margin:10px 0;padding:12px" aria-label="订单实际交付分批">
+                <strong>实际交付分批</strong><p class="muted">以下是原送货数量的实际日期分配；原发货审计、回单和开票记录保留，数量不与下方原发货事件重复相加。</p>
+                <table><thead><tr><th>原送货 / 明细</th><th>实际日期</th><th>交付数量</th><th>原单日期</th><th>成本</th></tr></thead><tbody><tr v-for="segment in orderTrace.actual_fulfillment_segments" :key="segment.segment_identity"><td>#{{ segment.delivery_id }} / #{{ segment.delivery_item_id }}</td><td>{{ segment.actual_date }}</td><td>{{ segment.quantity }} {{ segment.confirmed_physical_unit || '' }}</td><td>{{ segment.original_document_date }}</td><td>{{ String(segment.cost_allocation_status).startsWith('pending') ? '分批成本分配待核' : '沿用原整行成本' }}</td></tr></tbody></table>
+              </section>
               <div v-if="traceCurrentEvent()" class="notice" style="margin:10px 0;display:flex;align-items:center;justify-content:space-between;gap:10px">
                 <div><strong>当前可定位阶段：{{ traceCurrentEvent().stage_label }} · {{ traceCurrentEvent().status_label }}</strong><div class="muted">{{ traceCurrentEvent().document_number }}</div></div>
                 <button class="btn small primary" type="button" @click="openTraceEventDetail(traceCurrentEvent())">查看当前阶段</button>
@@ -10255,6 +10266,57 @@
         </div>
       </div>
 
+      <div v-if="deliveryFulfillmentEditor" class="modal-backdrop" style="z-index:2100" @keydown.esc.prevent="closeDeliveryFulfillment">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="delivery-fulfillment-title" tabindex="-1" ref="deliveryFulfillmentDialog" style="max-width:1000px;max-height:94vh;display:flex;flex-direction:column">
+          <div class="modal-head"><h3 id="delivery-fulfillment-title">保留票据更正实际交付</h3><button class="btn" :disabled="deliveryFulfillmentEditor.saving" @click="closeDeliveryFulfillment">关闭</button></div>
+          <div class="modal-body" style="overflow:auto">
+            <p><strong>{{ deliveryFulfillmentEditor.row.delivery_number }}</strong> · {{ deliveryFulfillmentEditor.row.customer_name }} · 原单日期 {{ deliveryFulfillmentEditor.row.delivery_date }} · 原单合计 {{ deliveryFulfillmentEditor.row.total_quantity }}</p>
+            <p class="notice">逐原明细填写实际交付日期和分批数量，合计须与原送货、回单、对账一致。原发票、应收与库存成本保留，分批成本来源另行核对。</p>
+            <fieldset :disabled="deliveryFulfillmentEditor.saving || deliveryFulfillmentEditor.uncertain || deliveryFulfillmentEditor.hashing" style="border:0;margin:0;padding:0" @input="invalidateDeliveryFulfillmentPreview" @change="invalidateDeliveryFulfillmentPreview">
+              <div v-for="line in deliveryFulfillmentEditor.lines" :key="line.id" class="panel" style="padding:12px;margin-bottom:12px">
+                <div class="toolbar"><strong>{{ line.label }} · 原送 {{ line.original_quantity }}</strong><button class="btn small" type="button" @click="addDeliveryFulfillmentSegment(line)">增加分批</button></div>
+                <div v-for="(segment,index) in line.segments" :key="segment.key" class="form-grid" style="grid-template-columns:1fr 1fr auto;margin:8px 0">
+                  <div class="field"><label :for="`fulfillment-date-${segment.key}`">第 {{ index+1 }} 批实际日期</label><input :id="`fulfillment-date-${segment.key}`" class="input" type="date" v-model="segment.actual_date" /></div>
+                  <div class="field"><label :for="`fulfillment-quantity-${segment.key}`">交付数量</label><input :id="`fulfillment-quantity-${segment.key}`" class="input" type="number" min="1" step="1" v-model="segment.quantity" /></div>
+                  <div class="field"><label>&nbsp;</label><button class="btn small" type="button" :disabled="line.segments.length===1" @click="removeDeliveryFulfillmentSegment(line,index)">移除</button></div>
+                </div>
+              </div>
+              <div class="form-grid">
+                <div class="field wide"><label for="fulfillment-source-file">原始来源文件</label><input id="fulfillment-source-file" type="file" accept=".xls,.xlsx,.csv,.pdf" @change="selectDeliveryFulfillmentEvidenceFile($event)" :disabled="deliveryFulfillmentEditor.hashing" /><span class="muted">选择文件后自动读取文件名和校验值；资料留在当前电脑。</span></div>
+                <div class="field"><label for="fulfillment-source-name">来源文件名</label><input id="fulfillment-source-name" class="input" v-model.trim="deliveryFulfillmentEditor.evidence.source_file" /></div>
+                <div class="field"><label for="fulfillment-source-hash">原文件校验值</label><input id="fulfillment-source-hash" class="input" v-model.trim="deliveryFulfillmentEditor.evidence.source_sha256" placeholder="选择原文件后自动填写" /><span class="muted">{{ deliveryFulfillmentEditor.verifiedHash && deliveryFulfillmentEditor.verifiedHash===deliveryFulfillmentEditor.evidence.source_sha256 && deliveryFulfillmentEditor.verifiedFileName===deliveryFulfillmentEditor.evidence.source_file ? '已从本地选择的原文件计算校验值' : '来源摘要由操作者核准' }}</span></div>
+                <div class="field"><label for="fulfillment-source-sheet">工作表 / 页名</label><input id="fulfillment-source-sheet" class="input" v-model.trim="deliveryFulfillmentEditor.evidence.sheet" /></div>
+                <div class="field"><label for="fulfillment-source-rows">来源行号（逗号分隔）</label><input id="fulfillment-source-rows" class="input" v-model.trim="deliveryFulfillmentEditor.sourceRows" placeholder="例如 8,9" /></div>
+                <div class="field"><label for="fulfillment-customer-unit">客户销售单位</label><input id="fulfillment-customer-unit" class="input" v-model.trim="deliveryFulfillmentEditor.evidence.customer_unit" placeholder="例如 只" /></div>
+                <div class="field"><label for="fulfillment-physical-unit">实际交付单位</label><input id="fulfillment-physical-unit" class="input" v-model.trim="deliveryFulfillmentEditor.evidence.physical_unit" placeholder="例如 只" /></div>
+                <label class="field wide"><span><input type="checkbox" v-model="deliveryFulfillmentEditor.evidence.quantity_basis_confirmed" /> 已核对来源，销售与实物为同单位、一比一</span></label>
+                <div class="field wide"><label for="fulfillment-confirmation">客户确认摘要</label><textarea id="fulfillment-confirmation" class="input" rows="2" v-model.trim="deliveryFulfillmentEditor.evidence.confirmation" placeholder="记录已确认的每批日期、数量及确认依据"></textarea></div>
+                <div class="field wide"><label for="fulfillment-reason">更正原因</label><textarea id="fulfillment-reason" class="input" rows="2" v-model.trim="deliveryFulfillmentEditor.reason"></textarea></div>
+              </div>
+            </fieldset>
+            <div v-if="deliveryFulfillmentEditor.error" class="notice warning" role="alert">{{ deliveryFulfillmentEditor.error }}</div>
+            <div v-if="deliveryFulfillmentEditor.uncertain" class="notice warning" role="status">上次提交结果尚未确认。已保留同一操作编号和内容，请按原操作核对结果。</div>
+            <section v-if="deliveryFulfillmentEditor.preview" style="margin-top:16px" aria-label="交付更正预览">
+              <h4>核对预览</h4>
+              <table><thead><tr><th>原明细</th><th>实际日期</th><th>本批数量</th></tr></thead><tbody><tr v-for="segment in deliveryFulfillmentEditor.preview.segments" :key="`${segment.delivery_item_id}:${segment.actual_date}`"><td>{{ fulfillmentItemLabel(deliveryFulfillmentEditor.row,segment.delivery_item_id) }}</td><td>{{ segment.actual_date }}</td><td>{{ segment.quantity }}</td></tr></tbody></table>
+              <h4>以下原票据保留</h4>
+              <table><thead><tr><th>来源</th><th>当前冻结值</th><th>提交后</th></tr></thead><tbody>
+                <tr><td>送货单 #{{ deliveryFulfillmentEditor.row.id }}</td><td>{{ deliveryFulfillmentEditor.preview.before.sales_deliveries[0].delivery_date }} · {{ deliveryFulfillmentEditor.preview.before.sales_deliveries[0].total_quantity }}</td><td>保留原日期、数量与单号</td></tr>
+                <tr v-for="receipt in deliveryFulfillmentEditor.preview.before.finance_return_receipts" :key="`receipt:${receipt.id}`"><td>回单 #{{ receipt.id }}</td><td>{{ receipt.actual_received_date }} · 归属 {{ receipt.reconciliation_month || '原账期' }}</td><td>保留原签收及账期</td></tr>
+                <tr v-for="statement in deliveryFulfillmentEditor.preview.before.finance_statements" :key="`statement:${statement.id}`"><td>{{ statement.statement_number }} / #{{ statement.id }}</td><td>{{ statement.statement_month }} · 应收 {{ statement.total_receivable_exact ?? statement.total_receivable }} · 已开票 {{ statement.invoiced_amount }}</td><td>保留原应收与开票金额</td></tr>
+                <tr v-for="invoice in deliveryFulfillmentEditor.preview.before.finance_invoices" :key="`invoice:${invoice.id}`"><td>发票 {{ invoice.invoice_number }} / #{{ invoice.id }}</td><td>{{ invoice.invoice_date }} · {{ invoice.invoice_amount }}</td><td>保留原发票</td></tr>
+                <tr v-for="lot in deliveryFulfillmentEditor.preview.before.inventory_lots || []" :key="`lot:${lot.id}`"><td>库存批次 {{ lot.lot_number }}</td><td>可用 {{ lot.quantity_available }} / 预占 {{ lot.quantity_reserved }} / 已耗 {{ lot.quantity_consumed }}</td><td>保留原库存余额</td></tr>
+                <tr v-for="cost in deliveryFulfillmentEditor.preview.before.finance_delivery_material_cost_facts || []" :key="`cost:${cost.id}`"><td>原材料成本事实 #{{ cost.id }}</td><td>{{ cost.consumed_quantity }} × {{ cost.unit_material_cost }} = {{ cost.total_material_cost }}</td><td>保留原成本来源</td></tr>
+                <tr v-for="cost in deliveryFulfillmentEditor.preview.before.finance_material_cost_supplements || []" :key="`supplement:${cost.id}`"><td>成本参考 #{{ cost.id }}</td><td>{{ cost.month }} · 数量 {{ cost.quantity_limit }} · 单价 {{ cost.unit_cost }}</td><td>保留原参考，分批归属待核</td></tr>
+              </tbody></table>
+              <p class="notice">此次只追加实际交付事实，不生成新的回单、对账、发票或库存动作；分批来源成本待核，不均摊到各月。</p>
+              <label><input type="checkbox" v-model="deliveryFulfillmentEditor.approved" :disabled="deliveryFulfillmentEditor.saving || deliveryFulfillmentEditor.uncertain" /> 已核对原票据、实际分批与来源依据，确认追加本次事实</label>
+            </section>
+          </div>
+          <div class="modal-foot"><button class="btn" :disabled="deliveryFulfillmentEditor.saving" @click="closeDeliveryFulfillment">{{ deliveryFulfillmentEditor.uncertain ? '关闭并保留待核对提交' : '关闭' }}</button><button class="btn" :disabled="deliveryFulfillmentEditor.saving || deliveryFulfillmentEditor.hashing || deliveryFulfillmentEditor.uncertain" @click="previewDeliveryFulfillment">{{ deliveryFulfillmentEditor.saving==='preview' ? '核对中…' : '预览核对' }}</button><button class="btn primary" :disabled="!!deliveryFulfillmentEditor.saving || (!deliveryFulfillmentEditor.uncertain && (!deliveryFulfillmentEditor.preview || !deliveryFulfillmentEditor.approved))" @click="submitDeliveryFulfillment">{{ deliveryFulfillmentEditor.saving==='submit' ? '提交中…' : (deliveryFulfillmentEditor.uncertain ? '按原操作核对结果' : '确认追加交付事实') }}</button></div>
+        </div>
+      </div>
+
       <div v-if="orderQuantityEditor" class="modal-backdrop" style="z-index:2100">
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="order-quantity-title" style="max-width:480px">
           <div class="modal-header"><h3 id="order-quantity-title">调整订单数量</h3></div>
@@ -10883,6 +10945,7 @@
           return {
             pendingAssemblies: [], assemblyLocations: [], assemblyLoading: false, assemblyError: '', assemblyPage: 1, assemblyTotal: 0,
             user: null, loading: false, pageLoading: false, loginError: "", sessionRestoring:true, sessionUnavailable:false, activePage: "dashboard", uiModeSaving: false, authGeneration: 0, loginAttemptSequence: 0, pageLoadSequence: 0,
+            deliveryFulfillmentEditor:null,
             uiLayoutEffective:null, uiLayoutAdminBusy:"", uiLayoutAdminPreview:false, uiLayoutAdminDirty:false, uiLayoutAdminLoadGeneration:0,
             uiLayoutAdmin:{role_code:"admin",display_mode:"standard",catalog:null,draft:{version:0,base_release_version:0,layout:{catalog_version:"",menus:[],dashboard_cards:[],quick_actions:[]}},published:{version:0,layout:{catalog_version:"",menus:[],dashboard_cards:[],quick_actions:[]}},history:[],can_rollback:false},
             orderNextStepGuide: {visible:false, orderNo:"", count:0, source:""},
@@ -16795,6 +16858,7 @@
             this.deliveryDetailRequestSequence += 1;
             this.deliveryDetailState = {};
             this.deliveryInlineEdit = null;
+            this.deliveryFulfillmentEditor = null;
             this.expandedDeliveryRows = {};
             this.deliveryLabelOpenState = {busy:false,deliveryId:null};
             this.deliveryLabelRecoveryUrl = "";
@@ -23916,6 +23980,7 @@
               this.expandedDeliveryRows = {};
               this.deliveryDetailState = {};
               this.deliveryListState.loaded = true;
+              await this.openDeliveryFulfillmentFromLink?.();
               return true;
             } catch (error) {
               if (requestToken !== this.deliveryListState.request_token) return false;
@@ -32917,11 +32982,17 @@
             try {
               const { data } = await axios.get(`/api/deliveries/${deliveryId}`);
               if (requestToken !== this.deliveryDetailState[deliveryId]?.request_token) return false;
+              if (row.actual_fulfillment && data.actual_fulfillment && row.actual_fulfillment.revision_id !== data.actual_fulfillment.revision_id) {
+                this.deliveryDetailState[deliveryId]={loading:false,error:'实际交付版本已变化，请刷新送货列表后重新查看',request_token:requestToken};
+                return false;
+              }
               this.receiveDeliveryLocationPolicy?.(data);
+              const matchedPhysicalQuantity = row.actual_fulfillment?.matched_physical_quantity;
               Object.assign(row, data, {
                 detail_loaded:true,
                 item_count:Array.isArray(data?.items) ? data.items.length : Number(row.item_count || 0),
               });
+              if (row.actual_fulfillment && matchedPhysicalQuantity != null) row.actual_fulfillment.matched_physical_quantity = matchedPhysicalQuantity;
               this.deliveryDetailState[deliveryId] = {loading:false,error:"",request_token:requestToken};
               return true;
             } catch (error) {
@@ -41933,6 +42004,168 @@
                 this.deliveryOperationState = {action:"",deliveryId:null,deliveryNumber:""};
               }
             }
+          },
+          fulfillmentDateText(row) {
+            return [...new Set((row?.actual_fulfillment?.segments || []).map(segment=>segment.actual_date))].sort().join('、') || row?.delivery_date || '-';
+          },
+          async openDeliveryFulfillmentFromLink() {
+            if (this.activePage!=='deliveries' || this.deliveryFulfillmentEditor) return false;
+            const url=new URL(window.location.href),raw=url.searchParams.get('fulfillment_delivery_id');
+            if (!raw) return false;
+            const deliveryId=Number(raw),actor=Number(this.user?.id),auth=this.authGeneration;
+            url.searchParams.delete('fulfillment_delivery_id');history.replaceState(history.state,'',url);
+            if (!Number.isSafeInteger(deliveryId) || deliveryId<=0 || !this.canDelivery || !this.canAdjustReconciliationPeriod || !this.hasPermission('finance.view')) return false;
+            try {
+              const {data}=await axios.get(`/api/deliveries/${deliveryId}`);
+              if (Number(this.user?.id)!==actor || this.authGeneration!==auth) return false;
+              if (!await this.openDeliveryFulfillment(data)) this.showToast('该原单尚不满足保留票据更正交付的条件，请核对已发货与回单状态',true);
+              return true;
+            } catch(error) { if (Number(this.user?.id)===actor && this.authGeneration===auth) this.showToast(this.errorMessage(error),true);return false; }
+          },
+          fulfillmentItemLabel(row, itemId) {
+            const item=(row?.items || []).find(item=>Number(item.id)===Number(itemId));
+            return item ? `${item.product_code || ''} ${item.product_name || ''}（#${itemId}）`.trim() : `原明细 #${itemId}`;
+          },
+          deliveryFulfillmentCurrent(editor) {
+            return !!editor && this.deliveryFulfillmentEditor===editor && Number(this.user?.id)===editor.actorId && this.authGeneration===editor.authGeneration
+              && this.canDelivery && this.canAdjustReconciliationPeriod && this.hasPermission('finance.view');
+          },
+          async openDeliveryFulfillment(row) {
+            if (!this.canDelivery || !this.canAdjustReconciliationPeriod || !this.hasPermission('finance.view') || row?.status!=='dispatched' || row?.return_receipt_status!=='confirmed'
+                || this.deliveryOperationState.action || this.receiptOperationState?.action || this.deliveryInlineEdit || this.deliveryFulfillmentEditor) return false;
+            const actorId=Number(this.user?.id), authGeneration=this.authGeneration;
+            if (!actorId) return false;
+            if (!await this.loadDeliveryListDetail(row,{force:true}) || Number(this.user?.id)!==actorId || this.authGeneration!==authGeneration) return false;
+            if (!(row.items || []).length) { this.showToast('原送货单没有可核对明细',true); return false; }
+            const storageKey=`tm-erp-delivery-fulfillment:${actorId}:${row.id}`;
+            let pending=null;
+            try {
+              const raw=sessionStorage.getItem(storageKey);
+              if (raw) {
+                pending=JSON.parse(raw);
+                if (pending.version!==1 || pending.actorId!==actorId || pending.deliveryId!==Number(row.id) || pending.body?.customer_id!==Number(row.customer_id)
+                    || !pending.body?.operation_key || !Array.isArray(pending.body?.segments) || pending.body.segments.some(segment=>!(row.items || []).some(item=>Number(item.id)===segment.delivery_item_id))) throw new Error('待核对记录格式与原单不一致，请先核对原操作记录');
+              }
+            } catch(error) { this.showToast(error.message || '不能读取待核对提交，请检查浏览器存储',true); return false; }
+            const evidence=pending?.body?.evidence || {source_file:'',source_sha256:'',sheet:'',rows:[],confirmation:'',quantity_basis_confirmed:false,customer_unit:'',physical_unit:''};
+            const sourceSegments=pending?.body?.segments || row.actual_fulfillment?.segments || [];
+            this.deliveryFulfillmentEditor={row,actorId,authGeneration,storageKey,evidence:{...evidence},sourceRows:(evidence.rows || []).join(','),
+              reason:pending?.body?.reason || '',lines:row.items.map(item=>{
+                const segments=sourceSegments.filter(segment=>Number(segment.delivery_item_id)===Number(item.id));
+                return {id:Number(item.id),label:this.fulfillmentItemLabel(row,item.id),original_quantity:Number(item.delivered_quantity),
+                  segments:(segments.length ? segments : [{actual_date:row.delivery_date,quantity:item.delivered_quantity}]).map(segment=>({key:createIdempotencyKey(),actual_date:segment.actual_date,quantity:segment.quantity}))};
+              }),preview:null,previewPayload:null,previewSignature:'',approved:false,saving:'',hashing:false,error:'',uncertain:!!pending,submitted:pending?.body || null,
+              verifiedHash:'',verifiedFileName:''};
+            this.$nextTick(()=>this.$refs.deliveryFulfillmentDialog?.focus());
+            return true;
+          },
+          closeDeliveryFulfillment() {
+            const editor=this.deliveryFulfillmentEditor;
+            if (!editor || editor.saving) return false;
+            this.deliveryFulfillmentEditor=null;
+            this.$nextTick(()=>document.getElementById(`fulfillment-button-${editor.row.id}`)?.focus());
+            return true;
+          },
+          invalidateDeliveryFulfillmentPreview() {
+            const editor=this.deliveryFulfillmentEditor;
+            if (!editor || editor.saving || editor.uncertain) return;
+            editor.preview=null;editor.previewPayload=null;editor.previewSignature='';editor.approved=false;editor.error='';
+          },
+          addDeliveryFulfillmentSegment(line) {
+            const editor=this.deliveryFulfillmentEditor;
+            if (!this.deliveryFulfillmentCurrent(editor) || editor.saving || editor.uncertain) return;
+            line.segments.push({key:createIdempotencyKey(),actual_date:'',quantity:''});this.invalidateDeliveryFulfillmentPreview();
+          },
+          removeDeliveryFulfillmentSegment(line,index) {
+            const editor=this.deliveryFulfillmentEditor;
+            if (!this.deliveryFulfillmentCurrent(editor) || editor.saving || editor.uncertain || line.segments.length<=1) return;
+            line.segments.splice(index,1);this.invalidateDeliveryFulfillmentPreview();
+          },
+          async selectDeliveryFulfillmentEvidenceFile(event) {
+            const editor=this.deliveryFulfillmentEditor,file=event.target.files?.[0];
+            if (!file || !this.deliveryFulfillmentCurrent(editor) || editor.saving || editor.uncertain || editor.hashing) return;
+            this.invalidateDeliveryFulfillmentPreview();editor.hashing=true;
+            try {
+              if (file.size>50*1024*1024) throw new Error('来源文件超过50MB，请选择原始明细文件');
+              const digest=await crypto.subtle.digest('SHA-256',await file.arrayBuffer());
+              if (!this.deliveryFulfillmentCurrent(editor)) return;
+              const hash=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
+              editor.evidence.source_file=file.name;editor.evidence.source_sha256=hash;editor.verifiedHash=hash;editor.verifiedFileName=file.name;
+            } catch(error) { if (this.deliveryFulfillmentCurrent(editor)) editor.error=error.message || '文件校验失败，请重新选择原文件'; }
+            finally { editor.hashing=false; }
+          },
+          deliveryFulfillmentPayload(editor) {
+            const rows=String(editor.sourceRows || '').split(/[,，、\s]+/).filter(Boolean);
+            if (!rows.length || rows.length>100 || rows.some(value=>!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value)<1)) throw new Error('请填写有效的来源行号');
+            const evidence={...editor.evidence,rows:rows.map(Number)};
+            if (!evidence.source_file?.trim() || !/^[a-f0-9]{64}$/.test(evidence.source_sha256 || '') || !evidence.sheet?.trim() || !evidence.confirmation?.trim() || !String(editor.reason || '').trim()) throw new Error('请完整填写原文件、校验值、工作表、确认摘要和更正原因');
+            if (!evidence.quantity_basis_confirmed || !evidence.customer_unit?.trim() || evidence.customer_unit!==evidence.physical_unit) throw new Error('请核对并确认销售与实物为同单位、一比一');
+            const segments=[];
+            for (const line of editor.lines) {
+              let total=0;const dates=new Set();
+              for (const segment of line.segments) {
+                const quantity=Number(segment.quantity),actual_date=String(segment.actual_date || '');
+                if (!Number.isSafeInteger(quantity) || quantity<1 || quantity>2147483647 || !/^\d{4}-\d{2}-\d{2}$/.test(actual_date) || dates.has(actual_date)) throw new Error(`${line.label}：日期须有效且不重复，数量须为正整数`);
+                dates.add(actual_date);total+=quantity;segments.push({delivery_item_id:line.id,actual_date,quantity,evidence:{...evidence}});
+              }
+              if (total!==line.original_quantity) throw new Error(`${line.label}：分批合计 ${total} 与原送 ${line.original_quantity} 不一致`);
+            }
+            return {customer_id:Number(editor.row.customer_id),segments,reason:String(editor.reason).trim(),evidence};
+          },
+          async previewDeliveryFulfillment() {
+            const editor=this.deliveryFulfillmentEditor;
+            if (!this.deliveryFulfillmentCurrent(editor) || editor.saving || editor.hashing || editor.uncertain) return false;
+            this.invalidateDeliveryFulfillmentPreview();
+            let payload;
+            try { payload=this.deliveryFulfillmentPayload(editor); }
+            catch(error) { editor.error=error.message;return false; }
+            editor.saving='preview';
+            try {
+              const {data}=await axios.post(`/api/deliveries/${editor.row.id}/fulfillment-facts/preview`,payload);
+              if (!this.deliveryFulfillmentCurrent(editor)) return false;
+              if (!data.can_submit || !data.reviewed_hash || !Number.isInteger(data.expected_revision) || data.delivery_id!==Number(editor.row.id) || data.customer_id!==Number(editor.row.customer_id)) throw new Error('预览尚未具备完整提交条件');
+              editor.preview=data;editor.previewPayload=payload;editor.previewSignature=JSON.stringify(payload);editor.approved=false;return true;
+            } catch(error) { if (this.deliveryFulfillmentCurrent(editor)) editor.error=error.response ? this.errorMessage(error) : error.message || '预览失败，请重试';return false; }
+            finally { editor.saving=''; }
+          },
+          async submitDeliveryFulfillment() {
+            const editor=this.deliveryFulfillmentEditor;
+            if (!this.deliveryFulfillmentCurrent(editor) || editor.saving || editor.hashing || this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
+            let body=editor.submitted;
+            if (!editor.uncertain) {
+              if (!editor.preview?.can_submit || !editor.approved) return false;
+              try {
+                if (JSON.stringify(this.deliveryFulfillmentPayload(editor))!==editor.previewSignature) { this.invalidateDeliveryFulfillmentPreview();throw new Error('输入已变化，请重新预览确认'); }
+                body={...editor.previewPayload,expected_revision:editor.preview.expected_revision,reviewed_hash:editor.preview.reviewed_hash,operation_key:`fulfillment-${createIdempotencyKey()}`};
+                sessionStorage.setItem(editor.storageKey,JSON.stringify({version:1,actorId:editor.actorId,deliveryId:Number(editor.row.id),body}));
+                editor.submitted=JSON.parse(JSON.stringify(body));body=editor.submitted;
+              } catch(error) { editor.error=error.message || '无法保存提交核对记录，本次未提交';return false; }
+            }
+            if (!body) return false;
+            editor.saving='submit';editor.error='';
+            const operation={action:'fulfillment',deliveryId:Number(editor.row.id),deliveryNumber:editor.row.delivery_number};this.deliveryOperationState=operation;
+            let saved=false;
+            try {
+              const {data}=await axios.post(`/api/deliveries/${editor.row.id}/fulfillment-facts`,body);
+              if (!data.revision_id || data.delivery_id!==Number(editor.row.id) || data.customer_id!==Number(editor.row.customer_id)) throw new Error('返回结果尚未核实');
+              saved=true;
+              try { sessionStorage.removeItem(editor.storageKey); } catch(_error) {}
+              if (!this.deliveryFulfillmentCurrent(editor)) return true;
+              editor.uncertain=false;editor.submitted=null;editor.saving='';this.invalidateDeliveryListDetail(editor.row.id);this.closeDeliveryFulfillment();
+              this.showToast(`实际交付第 ${data.revision} 版已保存，原票据保留`);
+              const refreshed=await Promise.allSettled([this.loadDeliveries(),this.loadFinance(),this.loadKpi()]);
+              if (refreshed.some(result=>result.status==='rejected') && Number(this.user?.id)===editor.actorId && this.authGeneration===editor.authGeneration) this.showToast('交付事实已保存，部分列表刷新失败，请重新查询',true);
+              return true;
+            } catch(error) {
+              if (!this.deliveryFulfillmentCurrent(editor) || saved) return saved;
+              const status=Number(error.response?.status || 0);
+              if (status>=400 && status<500) {
+                try { sessionStorage.removeItem(editor.storageKey); } catch(_error) {}
+                editor.uncertain=false;editor.submitted=null;editor.preview=null;editor.previewPayload=null;editor.previewSignature='';editor.approved=false;
+                editor.error=`${this.errorMessage(error)}${status===409 ? '；请重新预览并核对，不会自动覆盖原事实。' : ''}`;
+              } else { editor.uncertain=true;editor.error='提交结果尚未确认，请按原操作核对结果。'; }
+              return false;
+            } finally { editor.saving='';if (this.deliveryOperationState===operation) this.deliveryOperationState={action:'',deliveryId:null,deliveryNumber:''}; }
           },
           async correctDeliveryActualDate(row) {
             if (!this.canDelivery || !this.canAdjustReconciliationPeriod || !['pending','dispatched'].includes(row?.status) || this.deliveryOperationState.action || this.receiptOperationState?.action || this.deliveryInlineEdit) return false;

@@ -13,6 +13,8 @@ TABLE_READERS = {
     'contract_seals': 'contract_seal_v1',
     'company_profiles': 'company_profiles_v1',
     'shared_bom_members': 'shared_bom_v1',
+    'delivery_fulfillment_revisions': 'delivery_fulfillment_facts_v1',
+    'delivery_fulfillment_segments': 'delivery_fulfillment_facts_v1',
 }
 
 

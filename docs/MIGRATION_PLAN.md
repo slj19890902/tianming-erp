@@ -272,3 +272,9 @@ ev1020hr→ew1020em只增加六个可空十进制文本字段，不回填旧订�
 ex1021cp→ey1021se仅追加products的supplier_edge_type/base_supplier_edge_type及两类正式报料行各一列supplier_edge_type，全部可空，不回填历史；两类报料毛净快照不可更新。毛净与压线分别保存，实际材质留在收料事实，供应商尺寸/毛净按版本、权限及共用主档协议同步。VCNUV未收料行继续原报料材质。新的auto片料预占冻结full_sheet_output_v1，单组件整张生产保留订单外合格成品及原批次成本，旧预占语义保持。
 
 有新列非NULL或新整张产出合同即在任何DDL前拒绝有损降级。首次启动失败仅当新列均NULL、无新合同、原事实/schema/原件与签名演练证明一致时允许原签名downgrade恢复ex1021cp，不恢复旧数据库。正式前需原Manager完整备份、最新副本迁移及真实Mac正常/失败恢复；不新增NAS备份、不重装未变监督程序。具体运行与人工验收状态见SUPPLIER_SHEET_HOME_20261021任务回执。
+
+## 2026-10-22 保留开票的实际交付分批（隔离候选，未分配 revision）
+
+仅拟新增 `delivery_fulfillment_revisions` 与 `delivery_fulfillment_segments` 两个空表及11个SQLite保护触发器。原送货、回单、对账、发票、应收、订单、库存及成本表均无回填。完整版本逐原明细等量封存，后续只能追加版本；日期与分批读取使用最新有效版本，财务仍只取原回单唯一身份。跨月来源成本未核时阻止成本结转，不均摊。
+
+基线8e1acb82；已知v714源码c6af8688尚无本任务核验的正式回执。候选不进入v714，不创建Alembic head；最终迁移须承接当时真实唯一head。`delivery_fulfillment_facts_v1`候选读取门禁按任一新表存在即要求精确整数1能力；任何新事实都禁止有损降级，不能删除事实恢复旧程序。模型与事务合成SQLite测试不等于新鲜正式副本迁移验收。详见任务卡 `docs/tasks/DELIVERY_FULFILLMENT_FACTS_20261022.md`。

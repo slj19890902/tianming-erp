@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.708"
-APP_VERSION_NAME = "库存待生产入口与成品分批送货"
+APP_VERSION = "v0.22.709"
+APP_VERSION_NAME = "首页功能弹窗与免滚动布局"
 APP_BUILD_DATE = "2026-10-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6945,3 +6945,16 @@ APP_VERIFICATION_STEPS = [
     "按实际业务分批发货后核对剩余待生产任务和库存，其他有成品预占且尚未完工的产品使用相同规则。",
 ]
 APP_CHANGELOG = [*(f"v0.22.708：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "首页库存预警、交付、报料生产、财务、审批及业务进度改为按钮打开原系统功能弹窗，首页不再堆叠长清单。",
+    "库存按客户和产品浏览，交付按待送货/待回单，生产按报料/来料/生产，财务按对账/开票/收款快速筛选。",
+    "待办和共享文件保留首屏摘要，完整列表、完成事项与版本历史在弹窗展示；小屏自动精简摘要，草稿和上传状态保持。",
+    "弹窗支持键盘关闭、分页和原业务入口返回，保留权限和筛选；无数据库迁移，不修改历史业务数量或金额。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新今日工作台，确认首页无需上下滚动；点击库存预警、交付跟进、财务跟进查看弹窗。",
+    "在弹窗筛选客户和环节，进入原业务入口后返回，核对筛选和页码保留；关闭回到首页。",
+    "待办输入文字后查看全部再关闭，确认草稿保留；共享文件全部列表和历史版本正常打开。",
+]
+APP_CHANGELOG = [*(f"v0.22.709：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

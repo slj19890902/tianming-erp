@@ -1,3 +1,5 @@
+2026-10-22 PDF-ORDER-LEARNING：v0.22.712 聚晟达采购单识别与原单核对保护已技术发布，源码901e356f9191543da1530f344f75e4330ac5c00d / 包33a3598d9685e0f0873a7ad3433dbeb6025767d3e98720a5faaf4a9a7890d081，承接v711/5479c6e1；revision ez1022hc不变。停服429.487479秒，真实Mac恢复、正式只读及原生收尾完成，原7份备份和新恢复点保留，人工验收pending。GitHub网络超时未push：正式运行已更新，不能用远端旧v625覆盖。见 `docs/release_reports/PDF_ORDER_LEARNING_20261022.md`；继续任务须实时核对正式状态。
+
 2026-10-22 SHEET-OPERATION-RECOVERY：v0.22.711片料抵扣后锁页与原请求核对已技术发布（7236cf0a / 5479c6e1），承接v710；revision ez1022hc不变，停服377.317918秒。真实Mac恢复、正式只读及原生收尾完成，6份原备份与新恢复点保留，人工验收待反馈。见 `docs/release_reports/SHEET_OPERATION_RECOVERY_V711_20261022.md`；继续任务须实时核对正式状态。
 
 2026-10-22 HOME-DIALOGS：v0.22.709 首页六类功能弹窗与免滚动布局已技术发布（662267fd / 05046587），承接v708，revision ez1022hc不变；真实停服427.018秒。真实Mac失败恢复、正式只读及原生收尾完成，四份原备份保留，人工验收待反馈。见 `docs/release_reports/HOME_DIALOGS_V709_20261022.md`；继续任务须实时核对正式状态。

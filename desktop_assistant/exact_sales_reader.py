@@ -24,7 +24,13 @@ def require_reader(db, manifest):
         raise ValueError('当前数据库已有精确销售金额，目标程序不能保留原始单价与金额；禁止启动或回退')
 
 
-def recover_empty_migration(manager, candidate, previous, manifest, state, environment=None, *, _shared_catalog=False, _supplier_edges=False):
+def has_home_tool_facts(db):
+    tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    return any(table in tables and db.execute('SELECT 1 FROM '+table+' LIMIT 1').fetchone()
+        for table in ('home_memos','shared_files','shared_file_versions','home_collaboration_mutations'))
+
+
+def recover_empty_migration(manager, candidate, previous, manifest, state, environment=None, *, _shared_catalog=False, _supplier_edges=False, _home_tools=False):
     """Undo only a fixed empty additive migration after failed first startup.
 
     The installed previous supervisor cannot recognize a future revision. Return
@@ -42,7 +48,7 @@ def recover_empty_migration(manager, candidate, previous, manifest, state, envir
     from desktop_assistant import migration
     from desktop_assistant.runtime_platform import process_options
 
-    if _shared_catalog and _supplier_edges:
+    if sum(bool(v) for v in (_shared_catalog, _supplier_edges, _home_tools)) > 1:
         raise ValueError('恢复类型不唯一')
     source_revision, target_revision = ('ew1020em','ex1021cp') if _shared_catalog else ('ev1020hr','ew1020em')
     capability = 'shared_product_master_v1' if _shared_catalog else CAPABILITY
@@ -51,6 +57,10 @@ def recover_empty_migration(manager, candidate, previous, manifest, state, envir
         from desktop_assistant.supplier_sheet_reader import CAPABILITY as capability
         source_revision, target_revision = 'ex1021cp', 'ey1021se'
         label, audit_key, prefix = '供应商毛净', 'empty_supplier_edges_recovery', 'empty-supplier-edges-recovery-'
+    if _home_tools:
+        capability = 'home_collaboration_v1'
+        source_revision, target_revision = 'ey1021se', 'ez1022hc'
+        label, audit_key, prefix = '待办共享文件', 'empty_home_tools_recovery', 'empty-home-tools-recovery-'
     root = manager.root
     shared = root / 'shared'
     database = shared / 'data/carton_erp.sqlite3'
@@ -85,7 +95,10 @@ def recover_empty_migration(manager, candidate, previous, manifest, state, envir
             and migration.files(shared) == state.get('migration_files'))
     with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro', uri=True)) as db:
         db.execute('PRAGMA query_only=ON')
-        if _supplier_edges:
+        if _home_tools:
+            for table in ('home_memos','shared_files','shared_file_versions','home_collaboration_mutations'):
+                require(db.execute('SELECT COUNT(*) FROM '+table).fetchone() == (0,))
+        elif _supplier_edges:
             from desktop_assistant.supplier_sheet_reader import COLUMNS as edge_columns, has_facts as edge_facts
             require(not edge_facts(db))
             for table, columns in edge_columns.items():
@@ -121,7 +134,7 @@ def recover_empty_migration(manager, candidate, previous, manifest, state, envir
         source_report_sha256=state['migration_report_sha256'],
         backup_sha256=state['migration_backup_sha256'],
         database_replaced=False, started_at=datetime.now(timezone.utc).isoformat(), log=str(log))
-    audit['new_supplier_edge_facts' if _supplier_edges else ('new_shared_facts' if _shared_catalog else 'new_exact_facts')]=0
+    audit['new_home_tool_facts' if _home_tools else ('new_supplier_edge_facts' if _supplier_edges else ('new_shared_facts' if _shared_catalog else 'new_exact_facts'))]=0
     state.update(operation='migration_running')
     state[audit_key]=audit
     write_json(root/'state.json', state)

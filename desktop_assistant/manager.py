@@ -158,6 +158,9 @@ class Manager:
                 if has_mold_label_text_facts(db) and not self._shared_finished_reader(release, MOLD_LABEL_TEXT_READER):
                     return False
                 from desktop_assistant.exact_sales_reader import has_facts, CAPABILITY
+                from desktop_assistant.exact_sales_reader import has_home_tool_facts
+                if has_home_tool_facts(db) and not self._shared_finished_reader(release, 'home_collaboration_v1'):
+                    return False
                 if has_facts(db) and not self._shared_finished_reader(release, CAPABILITY):
                     return False
         activation = self.state.get('exact_sales_activation')
@@ -1201,6 +1204,15 @@ class Manager:
                     if new.get('operation')!='migration_failed':new['operation']='update_failed_reader_contract'
                     write_json(self.root/'state.json',new)
                     raise ValueError('供应商毛净首次启动恢复校验未通过，保留现库与现场；未覆盖旧数据') from None
+            if migrate and candidate['revision']=='ez1022hc':
+                from desktop_assistant.exact_sales_reader import recover_empty_migration
+                try:
+                    recover_empty_migration(self,candidate['id'],old['current'],
+                        migration_manifest,new,environment=migration_environment,_home_tools=True)
+                except BaseException:
+                    if new.get('operation')!='migration_failed':new['operation']='update_failed_reader_contract'
+                    write_json(self.root/'state.json',new)
+                    raise ValueError('待办共享文件首次启动恢复校验未通过，保留现库与现场；未覆盖旧数据') from None
             if not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']):
                 new.update(operation='update_failed_reader_contract', previous=None)
                 write_json(self.root / 'state.json', new)

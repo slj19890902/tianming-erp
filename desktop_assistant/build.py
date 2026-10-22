@@ -338,6 +338,7 @@ def main():
                                                     'customer_specification_v1': 1,
                                                     'historical_delivery_receivable_v1': 1,
                                                     'exact_sales_decimal_v1': 1,
+                                                    'home_collaboration_v1': 1,
                                                     'shared_finished_v1': 1,
                                                     'shared_finished_management_v1': 1,
                                                     'shared_customer_members_v1': 1,

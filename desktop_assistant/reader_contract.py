@@ -112,7 +112,8 @@ def target_readers(database, source, target, inventory_record, dispatch_record, 
             if db.execute('SELECT 1 FROM finance_customer_charges WHERE historical_source_key IS NOT NULL OR historical_delivery_snapshot_json IS NOT NULL LIMIT 1').fetchone():
                 required.add(HISTORICAL_RECEIVABLE_READER)
         if physical_kit.has_facts(db): required.add(physical_kit.CAPABILITY)
-        from desktop_assistant.exact_sales_reader import has_facts, CAPABILITY
+        from desktop_assistant.exact_sales_reader import has_facts, has_home_tool_facts, CAPABILITY
+        if has_home_tool_facts(db): required.add('home_collaboration_v1')
         if has_facts(db): required.add(CAPABILITY)
     if inventory_record is not None: required.add(inventory.CAPABILITY)
     if dispatch_record is not None: required.add(dispatch.CAPABILITY)

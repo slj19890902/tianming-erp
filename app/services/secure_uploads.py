@@ -151,18 +151,22 @@ def _detected_content_type(content: bytes, extension: str) -> str | None:
         return "image/jpeg"
     if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
         return "image/webp"
-    if extension == ".xlsx" and content.startswith(b"PK\x03\x04"):
+    if extension in {".xlsx", ".docx"} and content.startswith(b"PK\x03\x04"):
         try:
             from io import BytesIO
 
             with zipfile.ZipFile(BytesIO(content)) as archive:
                 names = set(archive.namelist())
-            if "[Content_Types].xml" in names and "xl/workbook.xml" in names:
-                return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            member = "xl/workbook.xml" if extension == ".xlsx" else "word/document.xml"
+            if "[Content_Types].xml" in names and member in names:
+                return ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        if extension == ".xlsx" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         except (OSError, zipfile.BadZipFile):
             return None
     if extension == ".xls" and content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
         return "application/vnd.ms-excel"
+    if extension == ".doc" and content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+        return "application/msword"
     return None
 
 
@@ -198,6 +202,8 @@ def _validate_content(
         ".webp": "image/webp",
         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ".xls": "application/vnd.ms-excel",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     }[extension]
     if supplied_type != expected_by_extension or detected_type != expected_by_extension:
         raise UploadValidationError(f"{policy.label}扩展名、MIME 与文件签名不一致")

@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.706"
-APP_VERSION_NAME = "片料裁切推荐与收料补库优化"
-APP_BUILD_DATE = "2026-10-21"
+APP_VERSION = "v0.22.707"
+APP_VERSION_NAME = "工作台待办共享文件与库料生产优化"
+APP_BUILD_DATE = "2026-10-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -6915,3 +6915,18 @@ APP_VERIFICATION_STEPS = [
     "首页连续操作两款库存补库，保存后保留原列表；核对交付安排的大字文字不再覆盖编码。",
 ]
 APP_CHANGELOG = [*(f"v0.22.706：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "今日工作台增加个人待办：回车添加、就地修改、勾选完成；按账号隔离，切换页面保留草稿。",
+    "新增全员共享文件：上传、下载、更新版本、历史版本与回收站；仅原上传者或管理员可删除恢复，原件和旧版本保留。",
+    "Excel/Word下载后可用本机WPS或Office编辑，再上传更新版本；网络重试幂等、版本冲突不覆盖。",
+    "使用库存片料可在特殊情况调整投入及实产，订单外合格成品留库存，废料补足沿原权限确认，不改变订单数量金额。",
+    "片料推荐显示每张裁余和利用率颜色，缩窄库位列并支持定位原仓库地图后返回。",
+    "新增独立空表，不改历史业务行；新资料进入原件备份校验，有新事实时禁止有损降级。",
+]
+APP_VERIFICATION_STEPS = [
+    "首页添加一条待办、勾选完成；切换账号确认个人待办隔离。",
+    "上传一个公用Excel，用另一员工账号下载；修改后从更新版本上传，核对历史版本仍可下载。",
+    "按实际业务打开使用库料，核对建议数量、每张裁余、利用率和库位定位；正常流程无需开启特殊调整。",
+]
+APP_CHANGELOG = [*(f"v0.22.707：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

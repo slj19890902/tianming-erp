@@ -35,6 +35,7 @@ from app.api.deliveries import (
     router as deliveries_router,
 )
 from app.api.dashboard import router as dashboard_router
+from app.api.home_collaboration import router as home_collaboration_router
 from app.api.finance import router as finance_router
 from app.api.supplier_settlements import router as supplier_settlements_router
 from app.api.cost_accounting import router as cost_accounting_router
@@ -1031,6 +1032,8 @@ def create_app() -> FastAPI:
             prefix="/api/customers",
             tags=["customer-invoice-profiles"],
         )
+    if not any(route.path == "/api/home-tools/memos" for route in application.routes):
+        application.include_router(home_collaboration_router, prefix="/api/home-tools", tags=["home-tools"])
     if not any(route.path == "/api/dashboard/kpi" for route in application.routes):
         application.include_router(
             dashboard_router,

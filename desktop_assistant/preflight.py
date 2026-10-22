@@ -32,6 +32,14 @@ def inspect(database: Path, source: Path, *, managed=False, recorded_root=None, 
                         expected=db.execute('select file_sha256 from pdf_order_training_samples where id=?',(identity,)).fetchone()[0]
                         if not expected or digest.casefold()!=expected.casefold():state='hash_mismatch'
                     checks.append(dict(table=table,id=identity,field=column,status=state,sha256=digest))
+        if 'shared_file_versions' in tables:
+            root=source/'data/private_uploads'
+            for identity,reference,expected,size in db.execute('SELECT id,reference,sha256,size FROM shared_file_versions'):
+                path=(root/reference.removeprefix('private:')).resolve()
+                state='external' if not reference.startswith('private:shared_files/') or not path.is_relative_to(root.resolve()) else 'missing' if (excluded_path and excluded_path(path)) or not path.is_file() else 'ok'
+                digest=sha(path) if state=='ok' else None
+                if state=='ok' and (digest!=expected or path.stat().st_size!=size):state='hash_mismatch'
+                checks.append(dict(table='shared_file_versions',id=identity,field='reference',status=state,sha256=digest))
         for table,column,hash_column,folder in [
             ('finance_invoice_attachments','stored_name','content_hash','invoice_attachments'),
             ('supplier_monthly_invoices','attachment_stored_name','attachment_content_hash','supplier_invoice_attachments')]:
@@ -43,7 +51,7 @@ def inspect(database: Path, source: Path, *, managed=False, recorded_root=None, 
                 if state=='ok' and (not expected or digest.casefold()!=expected.casefold()):state='hash_mismatch'
                 checks.append(dict(table=table,id=identity,field=column,status=state,sha256=digest))
     counts={key:sum(r['status']==key for r in checks) for key in ('ok','missing','external','hash_mismatch')}
-    return {'read_only':True,'scope':'registered drawings, PDF training sources, customer and supplier invoice attachments; standard storage paths only','counts':counts,'checks':checks,'ready_for_takeover':False,'remaining_gates':['external configured paths and other attachments','clean Windows restore, printing, OCR and LAN','signing key custody and cross-revision updater']}
+    return {'read_only':True,'scope':'registered drawings, PDF training sources, shared file versions, customer and supplier invoice attachments; standard storage paths only','counts':counts,'checks':checks,'ready_for_takeover':False,'remaining_gates':['external configured paths and other attachments','clean Windows restore, printing, OCR and LAN','signing key custody and cross-revision updater']}
 
 
 if __name__=='__main__':

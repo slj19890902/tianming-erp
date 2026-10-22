@@ -13,6 +13,7 @@ from app.models.access_control import (  # noqa: E402,F401
     UserPermissionOverride,
 )
 from app.models.audit import OperationLog  # noqa: E402,F401
+from app.models.home_collaboration import HomeMemo, SharedFile, SharedFileVersion, HomeCollaborationMutation  # noqa: E402,F401
 from app.models.ui_layout_revision import UiLayoutRevision  # noqa: E402,F401
 from app.models.ai_assistant import (  # noqa: E402,F401
     AiAnalysisFeedback,

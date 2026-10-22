@@ -292,6 +292,7 @@
       </div>
     </header>
     <product-workbench :vm="vm"></product-workbench>
+    <home-collaboration v-show="!vm.productWorkbenchOpen" :actor-id="Number(vm.user?.id || 0)" :key="Number(vm.user?.id || 0)"></home-collaboration>
     <div v-if="vm.overviewError" class="home-error" role="alert">{{vm.overview.as_of?'更新失败，以下保留上次数据':'首页读取失败'}}：{{vm.overviewError}} <button :disabled="vm.overviewLoading" @click="vm.loadOverview">重新加载</button></div>
     <div v-if="vm.overviewLoading" class="home-loading" role="status">正在更新首页…</div>
     <template v-if="vm.overview.as_of && !vm.productWorkbenchOpen">

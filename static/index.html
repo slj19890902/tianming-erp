@@ -8,7 +8,10 @@
     <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260926-cost-column" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
     <link rel="stylesheet" href="/static/ui/home-workbench.css?v=f21488411581" />
-    <script src="/static/ui/home-workbench.js?v=20261014processed01"></script>
+    <script src="/static/ui/home-workbench.js?v=6d2515c71712"></script>
+    <link rel="stylesheet" href="/static/ui/home-collaboration.css?v=67f9fe0b72b8" />
+    <script src="/static/vendor/element-plus-icons-vue-2.3.2.min.js"></script>
+    <script src="/static/ui/home-collaboration.js?v=fc84bd7d1d48"></script>
     <link rel="stylesheet" href="/static/ui/product-workbench.css?v=085b188293c9" />
     <link rel="stylesheet" href="/static/ui/stock-origins.css?v=20261019origins02" />
     <script src="/static/ui/stock-origins.js?v=20261019origins02"></script>
@@ -3448,8 +3451,10 @@
               </div>
             </section>
 
+            <keep-alive :key="Number(user?.id || 0)">
+              <home-workbench v-if="activePage === 'dashboard'"></home-workbench>
+            </keep-alive>
             <template v-if="activePage === 'dashboard'">
-              <home-workbench></home-workbench>
               <section v-if="canViewDeliveryMargin && homeAnalyticsOpen" id="desktopDeliveryMarginSection" class="dashboard-delivery-margin-shell">
                 <div id="desktopDeliveryMarginRoot" class="panel">
                   <div class="dashboard-delivery-margin-head">
@@ -43530,6 +43535,7 @@
       window.ERPWarehouseWorkspace?.install(app);
       window.ERPFinanceWorkspace?.install(app);
       window.ERPHomeWorkbench?.install(app);
+      window.ERPHomeCollaboration?.install(app);
       window.ERPProductWorkbench?.install(app);
       const formalWorkspaceInstance = app.mount("#app");
       if (typeof BroadcastChannel === 'function') {

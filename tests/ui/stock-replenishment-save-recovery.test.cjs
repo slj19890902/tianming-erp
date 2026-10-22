@@ -50,3 +50,40 @@ test('当前采购摘要沿实际purchase_orders形状显示取消，不撤销�
 test('外购数量proof变异：原override11仍echo/hash，actual13及saved6自洽也必须拒绝；无override不得改变原量',()=>{const api=helper(),f=fixture('independent-external-hints'),st=api.createStore(storage(),f.actorId),r=st.prepare(f.originalBody),bad=structuredClone(f.write.body);bad.save_receipt.external_purchase.lines[0].purchase_quantity='13';bad.save_receipt.external_purchase.lines[0].converted_source_quantity=6;bad.save_receipt.lines[0].saved_quantity=6;assert.throws(()=>api.validateComplete(bad,r));const normal=fixture('direct-external'),noOverride=structuredClone(normal.originalBody);delete noOverride.items[0].external_purchase_quantity;const n=api.createStore(storage(),normal.actorId).prepare(noOverride),mutated=structuredClone(normal.write.body);mutated.save_receipt.request=api.normalize(noOverride);mutated.save_receipt.request_hash=n.hash;mutated.save_receipt.external_purchase.lines[0].purchase_quantity='7998';mutated.save_receipt.external_purchase.lines[0].converted_source_quantity=3999;mutated.save_receipt.lines[0].saved_quantity=3999;assert.throws(()=>api.validateComplete(mutated,n));/* adversarial proof variants, no new backend save or fabricated normal success */});
 
 test('最终真实BOM两子件回执接受：完整原请求/hash与两行4/8，不要求quantity_contract非空',()=>{const api=helper(),f=fixture('bom-two-components'),r=api.createStore(storage(),f.actorId).prepare(f.originalBody);assert.equal(f.sourceCandidate,'f5ad9f23a96fe0967de15cd2a2cbbc8ddf0dc8d6');assert.deepEqual(f.write.body.items.map(x=>x.quantity),[4,8]);assert.equal(api.validateComplete(f.write.body,r).lines.length,2);assert.equal(api.validateResolve(f.resolve.body,r).lines.length,2);});
+
+function navigation(p) {
+ vm.runInContext(fs.readFileSync(path.join(root,'static/js/unified-navigation.js'),'utf8'),p.box);
+ Object.assign(p.c,{menus:[{key:'orders',label:'订单'}],isMenuActive:()=>false,roleLabel:()=> '测试',goMenu:async()=>{}});
+ return p.box.ERPUnifiedNavigation;
+}
+test('same-page timeout then complete original proof releases only the matching navigation lock',async()=>{
+ const f=fixture('plain-current-shape');
+ const p=page(storage(),async url=>{
+  if(url.endsWith('/resolve'))return {data:structuredClone(f.resolve.body)};
+  throw new Error('acknowledgement lost');
+ });
+ await currentForm(p,f);await assert.rejects(p.c.saveStockReplenishmentDraft());
+ const nav=navigation(p),state=p.c.stockReplenishmentSaveState;
+ assert.equal(state.uncertain,true);assert.equal(await nav.execute(p.c,'menu:orders'),'busy');
+ await p.c.queryStockReplenishmentResult(p.c.stockReplenishmentRecoveryRecords[0]);
+ assert.equal(p.c.stockReplenishmentSaveState,state);assert.equal(state.uncertain,false);
+ assert.equal(state.committed,true);assert.equal(state.result.id,f.resolve.body.save_receipt.source.id);
+ assert.equal(await nav.execute(p.c,'menu:orders'),'done');
+ assert.equal(p.posts.filter(x=>!x.p.endsWith('/resolve')).length,1);
+});
+test('resolving another original key or receiving obsolete/incomplete proof cannot clear the current unknown save',async()=>{
+ for(const variant of ['different-key','replacement-state','account-change','incomplete-proof']){
+  const f=fixture('plain-current-shape'),wait=deferred();
+  const p=page(storage(),async url=>url.endsWith('/resolve')?wait.promise:Promise.reject(new Error('acknowledgement lost')));
+  await currentForm(p,f);await assert.rejects(p.c.saveStockReplenishmentDraft());
+  if(variant==='different-key')p.c.stockReplenishmentForm.idempotency_key='another-original-request';
+  const task=p.c.queryStockReplenishmentResult(p.c.stockReplenishmentRecoveryRecords[0]);
+  if(variant==='replacement-state')p.c.stockReplenishmentSaveState={saving:false,committed:false,uncertain:true,result:null};
+  if(variant==='account-change'){p.c.user={id:2};p.c.authGeneration++;}
+  const response=structuredClone(f.resolve.body);
+  if(variant==='incomplete-proof')response.save_receipt.request_hash='0'.repeat(64);
+  wait.resolve({data:response});await task;
+  assert.equal(p.c.stockReplenishmentSaveState.uncertain,true,variant);
+  assert.equal(navigation(p).protectionState(p.c).uncertain,true,variant);
+ }
+});

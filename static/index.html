@@ -48,6 +48,7 @@
     <script src="/static/drawing-workbench.js?v=20260930-543"></script>
     <script src="/static/js/sheet-cutting.js?v=f73ad78201c3"></script>
     <script src="/static/js/product-unit-labels.js?v=6733f6a35088"></script>
+    <script src="/static/js/product-structure-edit.js?v=475bbb9a5e4a"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
     <script src="/static/assets/phone-display.js?v=b9c44d142168"></script>
     <style>
@@ -6925,11 +6926,14 @@
                 <div class="field"><label>产品名称</label><input class="input" v-model.trim="productForm.product_name" /></div>
                 <div class="field"><label>箱型</label>
                   <select class="select" :disabled="bomEditor.loading || !!bomEditor.error" v-model="productForm.box_style" @change="onProductBoxStyleChange">
-                    <option value="">请选择箱型</option>
+                    <option v-if="productForm.id" :value="null">未确认</option>
+                    <option v-else value="">请选择箱型</option>
                     <option value="BOM组合">BOM组合（组套成品）</option>
                     <option v-for="boxType in productBoxStyleOptions" :key="boxType" :value="boxType">{{ boxType }}</option>
-                    <option v-if="productForm.box_style && productForm.box_style!=='BOM组合' && !productBoxStyleOptions.includes(productForm.box_style)" :value="productForm.box_style">原记录：{{ productForm.box_style }}</option>
+                    <option v-for="alias in productCompatibleBoxStyleOptions()" :key="'legacy-'+alias" :value="alias">兼容名称：{{ alias }}</option>
+                    <option v-if="productForm.box_style && productForm.box_style!=='BOM组合' && !productBoxStyleOptions.includes(productForm.box_style) && !productCompatibleBoxStyleOptions().includes(productForm.box_style)" :value="productForm.box_style">原记录：{{ productForm.box_style }}</option>
                   </select>
+                  <div v-if="productForm.id" class="muted">兼容名称仅修改名称；选择不同箱型会联动结构，请核对后保存。</div>
                 </div>
                 <div v-if="!['其他','BOM组合'].includes(productForm.box_style)" class="field product-supply-compact"><label>结构</label><select class="select" v-model="productForm.supply_mode"><option value="corrugated_production">纸板生产</option><option value="mixed_bom">纸板＋外购组件</option></select></div>
               </div>
@@ -7006,11 +7010,14 @@
                 <div v-if="productRequiresDimension(productForm.box_style,'width_mm')" class="field product-dimension-field"><label>宽(mm)</label><input class="input" type="number" min="0" step="0.01" v-model.number="productForm.width_mm" /></div>
                 <div v-if="productRequiresDimension(productForm.box_style,'height_mm')" class="field product-dimension-field"><label>高(mm)</label><input class="input" type="number" min="0" step="0.01" v-model.number="productForm.height_mm" /></div>
                 <div class="field product-splice-field" v-if="usesProductSplice(productForm.box_style)"><label>拼箱方式</label>
-                  <select class="select" v-model="productForm.splice_mode">
+                  <select class="select" v-model="productForm.splice_mode" @change="onProductSpliceChanged">
+                    <option v-if="productForm.id" :value="null">未确认（片数未确认）</option>
                     <option v-for="mode in productSupportedSpliceModes(productForm.box_style)" :key="mode" :value="mode">{{ mode === 'double' ? '双拼' : '单拼' }}</option>
                   </select>
+                  <div v-if="productForm.id" class="muted">每箱片数：{{ productForm.pieces_per_box == null ? '未确认' : productForm.pieces_per_box }}</div>
+                  <button v-if="productForm.id && productForm.splice_mode && productForm.pieces_per_box == null" type="button" class="btn small" @click="onProductSpliceChanged">按所选拼箱确认片数</button>
                 </div>
-                <div class="field product-flap-field" v-if="usesProductTongue(productForm.box_style)"><label>舌头(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="productForm.flap_mm" /></div>
+                <div class="field product-flap-field" v-if="usesProductTongue(productForm.box_style)"><label>舌头(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="productForm.flap_mm" @input="markProductStructureEdited(['flap_mm'])" :placeholder="productForm.id ? '未确认' : ''" /><button v-if="productForm.id" type="button" class="btn small" @click="resetProductStructure('flap_mm')">恢复未确认</button></div>
                 <template v-if="isTelescopingLidBoxStyle(productForm.box_style)">
                   <div class="telescoping-component-grid">
                     <div class="field"><label>盖报料长宽</label>
@@ -7288,6 +7295,7 @@
                     <label class="process-option"><input type="checkbox" value="模切" v-model="productForm._production_processes" @change="onProductProcessesChanged" />模切</label>
                     <label class="process-option"><input type="checkbox" value="二次粘合" v-model="productForm._production_processes" @change="onProductProcessesChanged" />二次粘合</label>
                   </div>
+                  <div v-if="productForm.id" class="toolbar"><span v-if="!(productForm._production_processes || []).length" class="muted">未确认</span><button type="button" class="btn small" @click="resetProductStructure('production_process')">恢复工艺未确认</button></div>
                 </div>
                 <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field product-mold-adjacent"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具标签名称、客户或位置" :allow-empty="false" @search="searchMoldTools"></search-select><div class="sheet-cutting-inputs"><label v-for="part in productSheetCuttingParts()" :key="part.key">{{ part.label }}几模 <input class="input" type="number" min="1" step="1" v-model.number="part.value.mold_count" /></label></div><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
                 <div v-if="productForm.supply_mode!=='external_purchase' && productForm.box_style!=='BOM组合'" class="product-printing-direct-workbench" :class="{'has-direct-colors':productUsesDirectPrinting(productForm)}">
@@ -13568,6 +13576,7 @@
               payload._production_processes,
               payload._production_process_legacy
             );
+            if (this.productForm.id) ERPProductStructure.applyPayload(this.productForm, payload);
             if (!String(payload.production_process || "").split(/[,，、]/).map(value=>value.trim()).includes("模切")) payload.mold_tool_id=null;
             delete payload._production_processes;
             delete payload._production_process_legacy;
@@ -30057,6 +30066,7 @@
               const value = this.normalizeMmInteger(form[key]);
               if (value !== null) form[key] = value;
             });
+            if (form.id && form._structure_preserve) return form;
             if (!this.usesProductSplice(form.box_style)) {
               form.splice_mode = "single";
               form.pieces_per_box = 1;
@@ -30347,6 +30357,8 @@
             form.production_label_units_per_label = this.productionLabelDefaultUnits(form.box_style);
           },
           onProductProcessesChanged(event = null) {
+            this.markProductStructureEdited(["production_process"]);
+            this.productForm._structure_process_reset = false;
             const joining = ["粘贴", "打钉", "无需结合"];
             const changed = String(event?.target?.value || "");
             if (joining.includes(changed)) this.productForm._joining_choice_manual = true;
@@ -30364,7 +30376,9 @@
               values = values.filter(value => !joining.includes(value) || value === keep);
             }
             if (changed === "二次粘合" && checked) {
+              const previousRule = this.productBoxTypeRule(this.productForm._structure_last_box_style);
               this.productForm.box_style="模切内盒";
+              ERPProductStructure.chooseBoxStyle(this.productForm, previousRule, this.productBoxTypeRule("模切内盒"));
               this.productForm.box_category="die_cut";
               this.productForm._joining_choice_manual=true;
               values=values.filter(value=>!joining.includes(value)).concat("粘贴","模切","二次粘合");
@@ -30486,6 +30500,7 @@
             this.mergePrintingPlateOptions(detail?.printing_plates || [],form.customer_id);
             form._corner_reference_quantity = 1000;
             form.box_style = this.normalizeBoxTypeDisplay(form.box_style || "");
+            ERPProductStructure.initialize(form, detail || {});
             // Existing empty values are unknown facts; only new products get the default.
             if (!form.id) form.print_content = form.print_content || "无印刷";
             form.printing_plate_mode = form.printing_plate_mode === "plate" ? "plate" : "no_plate";
@@ -30513,7 +30528,7 @@
               ? productionLabelUnits
               : null;
             const boxRule = this.productBoxTypeRule(form.box_style);
-            if (boxRule) {
+            if (boxRule && (!form.id || !form._structure_preserve)) {
               form.splice_mode = this.usesProductSplice(form.box_style)
                 ? (form.splice_mode || (String(form.production_process || "").includes("双拼") ? "double" : "single"))
                 : "single";
@@ -30537,7 +30552,7 @@
             } else if (!form.sheet_cutting_settings) {
               form.default_cutting_mode = "一开一";
             }
-            if (boxRule) {
+            if (boxRule && (!form.id || !form._structure_preserve)) {
               form.flap_mm = this.usesProductTongue(form.box_style)
                 ? (this.normalizeMmInteger(form.flap_mm) || 30)
                 : null;
@@ -30593,6 +30608,7 @@
               length_mm: f.length_mm, width_mm: f.width_mm, height_mm: f.height_mm,
               print_content: printing.print_content,
               printing_colors: printing.printing_colors,
+              structure_edit_fields: f.id ? [...(f._structure_edit_fields || [])] : undefined,
               production_processes: f._production_processes,
               production_notes: f.production_notes,
               printing_plate_mode: printing.printing_plate_mode,
@@ -32364,9 +32380,11 @@
               form.base_crease_middle_mm = recommendation.base_crease_middle_mm ?? null;
               form.base_crease_right_mm = recommendation.base_crease_right_mm ?? null;
             }
-            if (recommendation.splice_mode) form.splice_mode = recommendation.splice_mode;
-            if (recommendation.pieces_per_box) form.pieces_per_box = Number(recommendation.pieces_per_box);
-            form.flap_mm = recommendation.flap_mm ?? null;
+            if (!form.id) {
+              if (recommendation.splice_mode) form.splice_mode = recommendation.splice_mode;
+              if (recommendation.pieces_per_box) form.pieces_per_box = Number(recommendation.pieces_per_box);
+              form.flap_mm = recommendation.flap_mm ?? null;
+            }
             if (force || !form._report_dims_manual) form._report_dims_manual = false;
             if (force || !form._crease_dims_manual) form._crease_dims_manual = false;
             if (force || !form._crease_type_manual) form._crease_type_manual = false;
@@ -32582,7 +32600,42 @@
               form.base_crease_left_mm, form.base_crease_middle_mm, form.base_crease_right_mm
             );
           },
+          markProductStructureEdited(fields) {
+            ERPProductStructure.mark(this.productForm, fields);
+          },
+          resetProductStructure(field) {
+            ERPProductStructure.reset(this.productForm, field);
+            ++this.productRecommendationSequence;
+            if (field === "production_process") {
+              this.productForm.mold_tool_id = null;
+              this.productForm.mold_tool = null;
+              this.syncProductSheetCuttingSettings();
+            }
+            this.autoApplyProductRecommendations();
+          },
+          onProductSpliceChanged() {
+            const form = this.productForm;
+            if (!form.splice_mode) ERPProductStructure.reset(form, "splice_mode");
+            else {
+              form.pieces_per_box = form.splice_mode === "double" ? 2 : 1;
+              this.markProductStructureEdited(["splice_mode", "pieces_per_box"]);
+            }
+            this.autoApplyProductRecommendations();
+          },
+          productCompatibleBoxStyleOptions() {
+            if (!this.productForm.id) return [];
+            return (this.productBoxTypeRule(this.productForm.box_style)?.aliases || [])
+              .filter(alias => alias && !this.productBoxStyleOptions.includes(alias));
+          },
           onProductBoxStyleChange() {
+            const previousRule = this.productBoxTypeRule(this.productForm._structure_last_box_style);
+            const nextRule = this.productBoxTypeRule(this.productForm.box_style);
+            if (ERPProductStructure.chooseBoxStyle(this.productForm, previousRule, nextRule)) {
+              if (!this.productForm.box_style) ERPProductStructure.reset(this.productForm, "box_style");
+              ++this.productRecommendationSequence;
+              this.autoApplyProductRecommendations();
+              return;
+            }
             this.productForm.box_style = this.normalizeBoxTypeDisplay(this.productForm.box_style);
             this.applyPartnerProductDefaults();
             const selected = this.productForm.box_style;
@@ -32658,17 +32711,21 @@
                 : "";
               return;
             }
-            if (!this.usesProductSplice(form.box_style)) {
+            if (!ERPProductStructure.canRecommend(form, rule)) {
+              form._recommendation_message = "结构未确认，已保留人工报料与压线尺寸；确认拼箱、片数和舌头后才可按公式推荐。";
+              return;
+            }
+            if (!form.id && !this.usesProductSplice(form.box_style)) {
               form.splice_mode = "single";
               form.pieces_per_box = 1;
-            } else {
+            } else if (!form.id) {
               const modes = this.productSupportedSpliceModes(form.box_style);
               if (!modes.includes(form.splice_mode)) form.splice_mode = modes[0] || "single";
               form.pieces_per_box = form.splice_mode === "double" ? 2 : 1;
             }
-            if (!this.usesProductTongue(form.box_style)) {
+            if (!form.id && !this.usesProductTongue(form.box_style)) {
               form.flap_mm = null;
-            } else if (!form.flap_mm) {
+            } else if (!form.id && !form.flap_mm) {
               form.flap_mm = 30;
             }
             try {

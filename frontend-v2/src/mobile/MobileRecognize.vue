@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useAuthStore } from "../stores/auth";
 import { mobilePage } from "./navigation";
 import { mobileApi, type Product } from "./api";
 import { safeMessage } from "./format";
 import ProductRow from "./components/ProductRow.vue";
 const route = useRoute(),
-  router = useRouter();
+  router = useRouter(),
+  auth = useAuthStore();
 const tolerance = ref(Number(route.query.tolerance ?? 5)),
   items = ref<Product[]>([]),
   error = ref(""),
@@ -15,6 +17,7 @@ const tolerance = ref(Number(route.query.tolerance ?? 5)),
   total = ref(0);
 let controller: AbortController | null = null;
 async function load(nextPage = 1) {
+  page.value = nextPage;
   controller?.abort();
   controller = new AbortController();
   const current = controller;
@@ -48,6 +51,8 @@ async function load(nextPage = 1) {
       current.signal,
     );
     if (!current.signal.aborted) {
+      const lastPage = Math.max(1, Math.ceil(result.total / 12));
+      if (nextPage > lastPage) { await load(lastPage); return; }
       items.value = result.items;
       total.value = result.total;
       page.value = nextPage;
@@ -66,6 +71,9 @@ watch(
   () => load(mobilePage(route.query.page)),
   { immediate: true },
 );
+watch(() => auth.user?.id, () => {
+  controller?.abort(); loading.value = false; items.value = []; total.value = 0; error.value = "";
+});
 onBeforeUnmount(() => controller?.abort());
 </script>
 <template>
@@ -86,7 +94,7 @@ onBeforeUnmount(() => controller?.abort());
     </form>
     <div v-if="loading" class="m-empty" role="status">查询中…</div>
     <div v-else-if="error" class="m-status" role="alert">
-      {{ error }}<button @click="load()">重试</button>
+      {{ error }}<button @click="load(page)">重试</button>
     </div>
     <div v-else-if="!items.length" class="m-empty">无匹配产品</div>
     <div class="m-result-list">

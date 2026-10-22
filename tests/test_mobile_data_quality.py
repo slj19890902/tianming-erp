@@ -18,11 +18,13 @@ CREATE TABLE products(id INTEGER,customer_id INTEGER,product_code TEXT,product_n
 CREATE TABLE inventory_lots(id INTEGER,quantity_available INTEGER,quantity_reserved INTEGER,quantity_consumed INTEGER,quantity_damaged INTEGER,quantity_scrapped INTEGER);
 CREATE TABLE inventory_reservations(inventory_lot_id INTEGER,reserved_stock_quantity INTEGER,consumed_stock_quantity INTEGER,released_stock_quantity INTEGER,status TEXT);
 CREATE TABLE material_requisitions(id INTEGER,created_at TEXT,status TEXT);
+CREATE TABLE stock_replenishment_orders(id INTEGER,created_at TEXT,status TEXT);
 INSERT INTO customers VALUES(1,'active'),(2,'inactive');
 INSERT INTO products VALUES(1,1,'A','long',1,NULL,'只'),(2,1,' a ','short',1,NULL,'只'),(3,2,'A','other customer',1,NULL,''),(4,1,'OLD','archived',0,NULL,'');
 INSERT INTO inventory_lots VALUES(1,20,5,0,0,0),(2,-1,0,0,0,0);
 INSERT INTO inventory_reservations VALUES(1,7,2,0,'partial');
-INSERT INTO material_requisitions VALUES(1,'2026-08-01','draft'),(2,'2026-08-01','completed'),(3,'2026-10-20','draft');
+INSERT INTO material_requisitions VALUES(1,'2026-08-01','merged_pending'),(2,'2026-08-01','已报料'),(3,'2026-10-20','merged_pending');
+INSERT INTO stock_replenishment_orders VALUES(4,'2026-08-01','draft'),(5,'2026-08-01','completed'),(6,'2026-10-20','draft');
 ''')
     return database
 
@@ -32,7 +34,7 @@ def test_readonly_queue_distinguishes_candidates_from_invalid_facts(tmp_path):
     report=quality.scan(database,captured_at='2026-10-21T21:00:00+08:00',as_of='2026-10-22T18:00:00+08:00')
     assert database.read_bytes()==before
     assert report['complete'] and report['database_unchanged']
-    assert report['counts']=={'ambiguous_product_code':2,'inactive_customer_product':1,'missing_product_unit':1,'negative_inventory_bucket':1,'stale_requisition_draft':1}
+    assert report['counts']=={'ambiguous_product_code':2,'inactive_customer_product':1,'missing_product_unit':1,'negative_inventory_bucket':1,'stale_merged_requisition':1,'stale_replenishment_draft':1}
     assert report['snapshot_age_hours']==21
     assert not report['repairs_executed']
     assert all(not row['repair_preview']['executable'] for row in report['issues'])

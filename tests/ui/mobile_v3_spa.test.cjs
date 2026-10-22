@@ -46,3 +46,16 @@ test('query return restores dimension mode and requested page instead of keyword
  await tick();assert.equal(calls[0].get('dimension_basis'),'finished');assert.equal(calls[0].get('page'),'3');assert.equal(calls[0].get('tolerance_mm'),'50');
 });
 test('invalid page cannot produce an unbounded request',()=>{for(const p of ['NaN','Infinity','0','-2','2.5','100001'])assert.equal(navigation.mobilePage(p),1);});
+test('recognition page failure keeps retry page and account switch discards late facts',async()=>{
+ const late=deferred();let count=0;const h=setup('MobileRecognize.vue',{route:{path:'/mobile/recognize',fullPath:'/mobile/recognize?length=300&width=200&page=2',query:{length:'300',width:'200',page:'2'},params:{}},api:{products:async p=>{count++;if(count===1)throw new Error('offline');return late.promise;}},names:['load','page','items','error','loading']});
+ await tick();assert.equal(h.page.value,2);assert.match(h.error.value,/offline/);
+ const retry=h.load(h.page.value);h.auth.user={id:2};h.watch[1].fn();late.resolve({items:[{id:4}],total:1});await retry;
+ assert.equal(h.items.value.length,0);assert.equal(h.loading.value,false);
+});
+
+for (const kind of ['product', 'location', 'recognize', 'unfulfilled']) test(`${kind}: returning to a removed page reloads last valid page and remembers it`,async()=>{
+ const calls=[];const api={products:async p=>{const page=Number(p.get('page'));calls.push(page);return {total:12,items:page===1?[{id:7}]:[]};},locations:async(q,signal,page)=>{calls.push(page);return {total:12,items:page===1?[{location_id:7}]:[]};},unfulfilled:async(page)=>{calls.push(page);return {groups:[{total:12,page,items:page===1?[{order_item_id:7}]:[]}]};}};
+ const recognize=kind==='recognize';const query={page:'3',...(recognize?{length:'300',width:'200'}:kind==='unfulfilled'?{unfulfilled:'1'}:{q:'A',tab:kind})};
+ const h=setup(recognize?'MobileRecognize.vue':'MobileQuery.vue',{route:{path:recognize?'/mobile/recognize':'/mobile/query',fullPath:'/mobile/query',query,params:{}},api,names:recognize?['items','page','loading']:['products','locations','orderItems','page','loading']});
+ await tick();await tick();assert.deepEqual(calls,[3,1]);assert.equal(h.page.value,1);assert.equal(h.replaces.at(-1).query.page,'1');assert.equal(h.loading.value,false);assert.equal((recognize?h.items:kind==='location'?h.locations:kind==='unfulfilled'?h.orderItems:h.products).value.length,1);
+});

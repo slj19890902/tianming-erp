@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.712"
-APP_VERSION_NAME = "聚晟达采购单识别与原单核对保护"
+APP_VERSION = "v0.22.713"
+APP_VERSION_NAME = "手机3.0统一入口与查询恢复"
 APP_BUILD_DATE = "2026-10-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6995,3 +6995,17 @@ APP_VERIFICATION_STEPS = [
     "核对后如修改数量、单价、产品、日期或备注，应提示重新核对；重复提交同文件不得重复建单。",
 ]
 APP_CHANGELOG = [*(f"v0.22.712：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "手机主入口与扫码、盘点、拿货、模具入口统一触控、导航和返回；保留真实货位上下文和原业务执行器。",
+    "查询详情返回保留条件与页码，货位和产品候选支持完整分页；旧响应不覆盖当前资料，读取失败明确可重试。",
+    "位置不符上报可核对原成功回执；同键不同内容拒绝、并发只登记一次，回执构造失败回滚。",
+    "提供带快照来源和规则版本的数据质量待核对清单；不删除、合并或改写历史业务数据，无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "手机刷新进入首页，查询一个真实产品，翻页打开详情再返回，核对查询条件和页码仍在。",
+    "从真实货位或模具扫码进入，查看统一返回与底部入口；按正常业务操作，确认原盘点或待核对保护仍在。",
+    "在原先已提交但未收到结果的位置不符上报中核对原请求；不要为验收新造库存或报告。",
+]
+APP_CHANGELOG = [*(f"v0.22.713：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -39,8 +39,11 @@ SELECT l.id,l.quantity_reserved,coalesce(r.open_quantity,0) open_quantity FROM i
 LEFT JOIN (SELECT inventory_lot_id,sum(reserved_stock_quantity-consumed_stock_quantity-released_stock_quantity) open_quantity
 FROM inventory_reservations WHERE status IN ('active','partial') GROUP BY inventory_lot_id) r
 ON r.inventory_lot_id=l.id WHERE l.quantity_reserved<>coalesce(r.open_quantity,0) ORDER BY l.id"""),
-    ("stale_requisition_draft", "review", "草稿超过30天待确认用途；可能仍有效，不自动作废或删除", "material_requisitions", """
-SELECT id,created_at,status FROM material_requisitions WHERE status='draft'
+    ("stale_merged_requisition", "review", "待报料合并草稿超过30天；核对当前用途，可能仍有效，不自动作废或删除", "material_requisitions", """
+SELECT id,created_at,status FROM material_requisitions WHERE status='merged_pending'
+AND julianday(:as_of)-julianday(created_at)>30 ORDER BY id"""),
+    ("stale_replenishment_draft", "review", "补库草稿超过30天；核对真实需求，不自动作废或删除", "stock_replenishment_orders", """
+SELECT id,created_at,status FROM stock_replenishment_orders WHERE status='draft'
 AND julianday(:as_of)-julianday(created_at)>30 ORDER BY id"""),
 ]
 

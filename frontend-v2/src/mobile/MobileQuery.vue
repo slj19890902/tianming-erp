@@ -66,6 +66,8 @@ async function loadOrders(nextPage = 1) {
   try {
     const result = await mobileApi.unfulfilled(nextPage, current.signal);
     if (!current.signal.aborted) {
+      const lastPage = Math.max(1, Math.ceil((result.groups[0]?.total || 0) / 12));
+      if (nextPage > lastPage) { await loadOrders(lastPage); return; }
       orderItems.value = result.groups[0]?.items || [];
       total.value = result.groups[0]?.total || 0;
       page.value = result.groups[0]?.page || nextPage;
@@ -98,6 +100,8 @@ async function search(nextPage = 1, mode = searchMode.value) {
         nextPage,
       );
       if (!current.signal.aborted) {
+        const lastPage = Math.max(1, Math.ceil(result.total / 12));
+        if (nextPage > lastPage) { await search(lastPage, mode); return; }
         locations.value = result.items;
         total.value = result.total;
         page.value = nextPage;
@@ -113,6 +117,8 @@ async function search(nextPage = 1, mode = searchMode.value) {
         current.signal,
       );
       if (!current.signal.aborted) {
+        const lastPage = Math.max(1, Math.ceil(result.total / 12));
+        if (nextPage > lastPage) { await search(lastPage, mode); return; }
         products.value = result.items;
         total.value = result.total;
         page.value = nextPage;

@@ -197,9 +197,10 @@ export const mobileApi = {
       `/api/product-workbench/products/${encodeURIComponent(id)}`,
       signal,
     ),
-  floors: () =>
+  floors: (signal?: AbortSignal) =>
     get<{ floors: Floor[]; can_execute: boolean; can_correct: boolean }>(
       "/api/mobile/erp/warehouse/map/floors",
+      signal,
     ),
   overviewMap: (floor: string, signal?: AbortSignal) =>
     get<{ areas: Area[]; map_status: string }>(

@@ -23,6 +23,8 @@
 
 ## 进度
 
+最新正式基线：ERP3.0统一v0.22.714已于2026-10-22 19:42:06 +08:00完成发布及原生收尾，继承本批08d9db61。已核对Git祖先关系和最终回执 `/Library/TianmingERP-Release-erp3-next-20261022-v0-22-714-c6af868826b2/final-result.json`；源码c6af868826b2b2764949f1039e2b840c7407a5f7，包83407eadc5e786b9d1d131e6d722b67088ed3c464782182b475f73ad8501348b，revision ez1022hc，healthy=true、manual_stop=false、backup_work_retained=false。以下v713记录保留为本任务原始发布历史，不重跑旧事务。
+
 已批准方案：plans/mobile-3.0-20261022/手机端3.0升级方案.md（本地规划附件）。本批已于2026-10-22 18:40:24 +08:00以 v0.22.713 完成技术发布与原生收尾，待员工真机验收。已发布源码08d9db6113fb6d4a0f1f87abc18f9ad48d6a14ab，包f20b952f63353e3925965c2baca01a2f6e5db981c5cae43ed56d8a9eff2b2820，revision仍ez1022hc；本任务卡的发布后文档更新不作为另一次应用发布。
 
 最终回执：/Library/TianmingERP-Release-mobile3-unified-20261022-v0-22-713-08d9db6113fb/final-result.json，status=technical_release_and_native_closure_complete、healthy=true、manual_stop=false、backup_work_retained=false。NAS独立回执：04_开发记录/任务回执/20261022-手机端3.0统一升级v713.md。GitHub因未配置认证推送失败，已验证源代码bundle并存NAS；正式签名发布独立完成。用户已授权跨聊天协调，后续由ERP3.0统一合入本版与对账补录三项修复并发布v714，本任务不重复启动停服。

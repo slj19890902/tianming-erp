@@ -49,14 +49,14 @@ def fixture_html(mode: str, page: str) -> bytes:
         this.selectedProductCustomer=isolatedFixture.customer;
         this.customerOptions=isolatedFixture.customers; this.allCustomers=isolatedFixture.customers;
         this.products=isolatedFixture.products; this.productsTotal=24;
-        this.productsListIdentity=`${this.user.id}:${this.authGeneration}:${this.selectedProductCustomer.id}`;
+        this.listReadStates['products:list']={identity:`${this.user.id}:${this.authGeneration}:${this.selectedProductCustomer.id}`,loaded:true,loading:false,error:''};
         this.sessionRestoring=false;
         window.erpCheckingSession=false;
         window.erpRequestIdentity=()=>({actor:this.user?.id ?? null,generation:this.authGeneration});
         window.erpPageReadIdentity=()=>({page:this.activePage,sequence:this.pageLoadSequence,reading:this.pageLoading});
       }});
       const formalWorkspaceInstance = app.mount("#app");
-      if(isolatedFixture.page!=='products')formalWorkspaceInstance.loadPage();
+      if(isolatedFixture.page!=='products')formalWorkspaceInstance.loadPage(isolatedFixture.page);
       document.title='ERP 3.0 隔离布局验证（合成数据）';
     """.replace("__DATA__", json.dumps(fixture, ensure_ascii=False))
     return html.replace(mount, injection).encode()

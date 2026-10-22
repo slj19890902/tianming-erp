@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.712"
-APP_VERSION_NAME = "聚晟达采购单识别与原单核对保护"
+APP_VERSION = "v0.22.713"
+APP_VERSION_NAME = "ERP 3.0 首页提速与统一查询体验"
 APP_BUILD_DATE = "2026-10-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6995,3 +6995,17 @@ APP_VERIFICATION_STEPS = [
     "核对后如修改数量、单价、产品、日期或备注，应提示重新核对；重复提交同文件不得重复建单。",
 ]
 APP_CHANGELOG = [*(f"v0.22.712：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "首页先显示搜索、个人待办和共享文件，业务清单按区域读取；未读取、正在更新和读取失败分别显示，不再等待整页重型统计。",
+    "查询时可继续切换页面；客户、订单和常用箱统一读取提示，同范围刷新失败保留原结果，旧请求和旧账号资料不覆盖当前页面。",
+    "常用箱主操作保留编辑，其他操作收进更多；统一导航与工作区宽度，按窗口和字号稳定分页。",
+    "下单候选按现有保存规则提前排除停用客户、停用产品及不适用类别，历史主档仍可查询；批量读取订单编号、图纸和关联明细，减少重复查询。",
+    "保留聚晟达PDF识别与人工核对保护；无数据库迁移，不清理历史订单、库存或财务事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "整页刷新后进入首页，确认搜索和待办可用；点开报料与生产等区域，查看数量和明细，关闭后可继续操作。",
+    "进入常用箱或订单查询，核对筛选与翻页；切换页面再返回，确认保留当前操作上下文，失败时有重试提示。",
+    "按真实业务选择客户和产品下单，确认停用资料不会混进候选；旧单、库存及原PDF核对流程仍可正常查看。",
+]
+APP_CHANGELOG = [*(f"v0.22.713：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

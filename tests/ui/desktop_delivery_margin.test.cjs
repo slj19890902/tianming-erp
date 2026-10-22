@@ -12,8 +12,8 @@ test("desktop margin module keeps contract markers and does not borrow report pa
   assert.match(html, /desktop-delivery-margin\.js\?v=20260926-dashboard-cost/);
   assert.match(html, /id="desktopDeliveryMarginRoot"/);
   assert.match(html, /canViewDeliveryMargin/);
-  assert.match(html, /回单确认销售额（原口径）/);
-  assert.match(html, /对账毛利（原口径）/);
+  assert.match(html, /客户送货材料毛利/);
+  assert.match(html, /筛选仅影响送货毛利，首页待办按各自业务口径统计/);
   assert.doesNotMatch(html, /management_summary_allowed[^\n]*delivery_margin/);
   assert.match(source, /customer-delivery-margin/);
   assert.match(source, /master\/customers/);

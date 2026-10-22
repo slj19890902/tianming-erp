@@ -13599,7 +13599,8 @@
             delete payload.printing_plates;
             delete payload.manual_modified;
             delete payload.manual_modified_at;
-            if (!payload.customer_material_code) payload.customer_material_code = payload.product_code;
+            // A blank customer identifier is not the internal inventory code.
+            payload.customer_material_code = payload.customer_material_code ?? "";
             [
               "pieces_per_box", "flap_mm",
               "report_length_mm", "report_width_mm",

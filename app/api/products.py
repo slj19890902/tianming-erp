@@ -504,7 +504,15 @@ class ProductPayload(BaseModel):
         return normalize_settings(value)
     customer_id: int
     product_code: str = Field(min_length=1, max_length=150)
-    customer_material_code: str = Field(min_length=1, max_length=150)
+    customer_material_code: str = Field(default="", max_length=150)
+
+    @field_validator("customer_material_code", mode="before")
+    @classmethod
+    def normalize_optional_customer_material_code(cls, value):
+        # The non-null legacy column represents an unprovided customer code as
+        # an empty string; the required internal product_code is independent.
+        return "" if value is None else value
+
     product_name: str = Field(min_length=1, max_length=250)
     customer_drawing_number: str | None = Field(default=None, max_length=150)
     customer_category: str | None = Field(default=None, max_length=100)
@@ -1553,9 +1561,14 @@ def _validated_product_versioned_updates(
     }
     updates.update(
         product_code=clean_code(payload.product_code),
-        customer_material_code=clean_code(payload.customer_material_code),
         product_name=payload.product_name.strip(),
     )
+    if "customer_material_code" in payload.model_fields_set:
+        updates["customer_material_code"] = clean_code(payload.customer_material_code)
+    else:
+        # Older edit clients may omit this optional field. Only an explicit
+        # blank is an instruction to clear a previously maintained identifier.
+        updates.pop("customer_material_code", None)
     updates.update(supply_updates)
     return updates
 
@@ -2792,7 +2805,7 @@ def create_stocktake_product(
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="盘点补建产品仅管理员可操作")
     require_customer_access(payload.customer_id, current_user=user, db=db)
-    code = clean_code(payload.customer_material_code)
+    code = clean_code(payload.customer_material_code) or clean_code(payload.product_code)
     if db.scalar(select(Product.id).where(
         Product.customer_id == payload.customer_id,
         or_(func.lower(Product.customer_material_code) == code.lower(),

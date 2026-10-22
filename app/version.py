@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.707"
-APP_VERSION_NAME = "工作台待办共享文件与库料生产优化"
+APP_VERSION = "v0.22.708"
+APP_VERSION_NAME = "库存待生产入口与成品分批送货"
 APP_BUILD_DATE = "2026-10-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6930,3 +6930,18 @@ APP_VERIFICATION_STEPS = [
     "按实际业务打开使用库料，核对建议数量、每张裁余、利用率和库位定位；正常流程无需开启特殊调整。",
 ]
 APP_CHANGELOG = [*(f"v0.22.707：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "半成品抵扣后的任务直接显示在生产主界面的待生产入口，进入生产默认打开待生产。",
+    "订单尚在生产或等待材料时，本单已有成品可以按实际剩余预占数量分批送货，适用于所有产品。",
+    "送货候选、数量显示和保存统一核验；半成品、已消耗、已释放及冻结库存不增加本次可送数量。",
+    "先送已有成品后，剩余加工仍可正常确认完工并继续送货；必须有相符的成品出库记录，重复完工继续拦截。",
+    "保留剩余加工任务和原库存来源，无数据库迁移，不自动改写订单、库存或完工事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新生产主界面，在待生产搜索21301464，核对PO2026100117的47张和PO2026100479的20张任务及原位置。",
+    "新建送货单选择PO2026100117，核对已有成品最多可送3个；PO2026100479未登记完工前不能用20张半成品送货。",
+    "按实际业务分批发货后核对剩余待生产任务和库存，其他有成品预占且尚未完工的产品使用相同规则。",
+]
+APP_CHANGELOG = [*(f"v0.22.708：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

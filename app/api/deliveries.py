@@ -160,6 +160,7 @@ from app.services.order_status_policy import (
     order_item_forward_block_message,
     order_item_forward_block_reason,
 )
+from app.services.unfinished_finished_delivery import unfinished_finished_quantities
 from app.services.production_workflow import (
     ProductionWorkflowError,
     lock_order_rows_for_production_transition,
@@ -583,7 +584,7 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
         if liner_direct_coverage(db, order_item):
             return max(production_ready_quantity(db, order_item) - int(order_item.delivered_quantity or 0), 0)
         if task.status not in {"completed", "not_required"}:
-            return 0
+            return unfinished_finished_quantities(db, [order_item.id]).get(order_item.id, 0)
         max_deliverable = max(production_ready_quantity(db, order_item), 0)
         return max(max_deliverable - int(order_item.delivered_quantity or 0), 0)
 
@@ -2547,7 +2548,15 @@ def _pending_query(
             in _direct_external_pending_quantities(db, external_items).items()
             if quantity > 0
         ]
-    query = query.where(or_(normal_readiness, OrderItem.id.in_(direct_ids))).order_by(
+    unfinished_ids = []
+    if db is not None:
+        scoped_ids = list(db.scalars(query.with_only_columns(OrderItem.id).where(
+            production_task_exists, ~production_task_ready, external_packaging_gate,
+        )))
+        unfinished_ids = [item_id for item_id, quantity in
+            unfinished_finished_quantities(db, scoped_ids).items() if quantity > 0]
+    query = query.where(or_(normal_readiness, OrderItem.id.in_(direct_ids),
+        OrderItem.id.in_(unfinished_ids))).order_by(
         *rank_ordering,
         Order.created_at.desc(),
         Order.id.desc(),
@@ -8178,6 +8187,10 @@ class _PendingDeliveryReadContext:
                 for component in expected_components
             ):
                 semi_fully_covered_ids.add(item_id)
+        unfinished_quantities = unfinished_finished_quantities(db, [
+            item_id for item_id, task in regular_tasks.items()
+            if task.status not in {"completed", "not_required"}
+        ])
         self.remaining_by_item: dict[int, int] = {}
         for item_id, item in self.order_items.items():
             delivered = max(int(item.delivered_quantity or 0), 0)
@@ -8209,7 +8222,7 @@ class _PendingDeliveryReadContext:
                     self.remaining_by_item[item_id] = 0
                     continue
                 if task.status not in {"completed", "not_required"}:
-                    self.remaining_by_item[item_id] = 0
+                    self.remaining_by_item[item_id] = unfinished_quantities.get(item_id, 0)
                     continue
                 completions = completions_by_item.get(item_id, [])
                 if completions:

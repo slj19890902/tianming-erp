@@ -210,6 +210,19 @@ def _no_secret_bytes(path, secrets):
     patterns = {value.encode('utf-8') for value in secrets if value and value != DISABLED_PASSWORD}
     if any(len(pattern) > 1024 * 1024 for pattern in patterns):
         raise ValueError('UAT credential size exceeds policy')
+    # A SQLite overflow page can split a credential copied into a business
+    # TEXT/BLOB value. Physical-byte searching alone would miss that value.
+    connection = _read_database(path)
+    try:
+        for table, columns in _columns(connection).items():
+            names = ','.join(_quote(column[1]) for column in columns)
+            for row in connection.execute('SELECT ' + names + ' FROM ' + _quote(table)):
+                for value in row:
+                    value = value.encode('utf-8') if isinstance(value, str) else value
+                    if isinstance(value, bytes) and any(pattern in value for pattern in patterns):
+                        raise ValueError('UAT database retains original credential bytes')
+    finally:
+        connection.close()
     longest = max(map(len, patterns), default=1)
     with open(path, 'rb') as stream:
         tail = b''

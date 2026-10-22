@@ -3682,7 +3682,7 @@
                 <template v-else>
                   <div class="toolbar">
                     <div class="product-breadcrumb"><button class="btn" @click="backToProductCustomers()">返回客户列表</button><span>常用箱与材质 › {{ selectedProductCustomer.name }}</span></div>
-                    <pager :page="pages.products" :total="productsTotal" :page-size="productListPageSize()" :always="true" :compact="true" @change="pages.products=$event; runExplicitPageListLoad('products')"></pager>
+                    <pager :page="pages.products" :total="productsTotal" :page-size="productListPageSize()" :always="true" :compact="true" :filter-count="productListFilterCount" @change="pages.products=$event; runExplicitPageListLoad('products')"></pager>
                   </div>
   
                   <div v-if="productsLoading" class="product-list-status" role="status">{{ products.length ? '正在更新，以下保留上次结果…' : '正在读取该客户的常用箱…' }}</div>
@@ -10480,9 +10480,12 @@
 
       axios.defaults.withCredentials = true;
       const erpRequestIdentity = () => window.erpRequestIdentity?.() || {actor:null, generation:null};
-      const pendingMutationRequests = new Set();
+      const pendingMutationRequests = new Map();
       const pendingPageReadRequests = new Map();
-      window.erpMutationPending = () => pendingMutationRequests.size > 0;
+      window.erpMutationPending = () => {
+        const current = erpRequestIdentity();
+        return [...pendingMutationRequests.values()].some(sent => sent.actor === current.actor && sent.generation === current.generation);
+      };
       window.erpCancelPageReads = () => { for (const read of pendingPageReadRequests.values()) read.controller.abort(); };
       const finishErpRequest = config => {
         pendingMutationRequests.delete(config?._erpMutationToken);
@@ -10494,7 +10497,7 @@
         const method = String(config.method || 'get').toLowerCase();
         if (!['get','head','options'].includes(method)) {
           config._erpMutationToken = {};
-          pendingMutationRequests.add(config._erpMutationToken);
+          pendingMutationRequests.set(config._erpMutationToken, config._erpRequestIdentity);
         } else if (window.erpPageReadIdentity?.().reading) {
           config._erpPageReadIdentity = {...window.erpPageReadIdentity()};
           const controller = new AbortController(), originalSignal = config.signal;
@@ -12274,6 +12277,11 @@
               groups.get(customerId).item_count += 1;
             }
             return [...groups.values()].sort((a,b) => a.customer_name.localeCompare(b.customer_name, "zh-CN"));
+          },
+          productListFilterCount() {
+            const filters = this.filters || {};
+            return ['productKeyword','productCode','productName','productSpec','productMaterial']
+              .filter(key => String(filters[key] ?? '').trim() !== '').length + Number(!!filters.showInactiveProducts);
           },
           deliveryListFilterCount() {
             const listCount = Object.entries(this.deliveryListFilters || {}).filter(([key, value]) => (
@@ -37359,7 +37367,7 @@
           async queryStockReplenishmentResult(record) {
             if(this.stockReplenishmentRecoveryBusy)return;
             const api=window.TmStockReplenishmentRecovery,actor=this.user?.id,generation=this.authGeneration,epoch=this.stockReplenishmentRecoveryEpoch||0;
-            const page=this.activePage,form=this.stockReplenishmentForm,modal=this.modal;
+            const page=this.activePage,form=this.stockReplenishmentForm,modal=this.modal,state=this.stockReplenishmentSaveState;
             const current=()=>this.activePage===page&&this.stockReplenishmentForm===form&&this.modal===modal&&this.user?.id===actor&&this.authGeneration===generation&&(this.stockReplenishmentRecoveryEpoch||0)===epoch;
             this.stockReplenishmentRecoveryBusy=record.key;
             try {
@@ -37368,7 +37376,18 @@
               const {data}=await this.stockReplenishmentRequest('/api/requisition/stock-replenishment/save-results/'+encodeURIComponent(record.key)+'/resolve',{expected_actor_id:actor,original_request:live.body},current);
               if(!current())return;
               const proof=api.validateResolve(data,live);
-              if(proof){const result=api.resultOf(proof,data.current);let confirmed=store.confirm(live,result,proof);try{store.remove(confirmed);}catch(error){confirmed.message=this.errorMessage(error);}this.stockReplenishmentSavedNotice={visible:true,result,readError:""};this.refreshStockReplenishmentRecovery();this.showToast(proof.outcome==='draft_saved'?"补库草稿已保存，可查看原单":"外购采购已生成，可查看原单");}
+              if(proof){
+                const result=api.resultOf(proof,data.current);
+                let confirmed=store.confirm(live,result,proof);
+                // Only the fully proved original request may release its in-memory save guard.
+                if(this.stockReplenishmentSaveState===state && !state.saving && state.uncertain
+                    && live.actorId===actor && form?.idempotency_key===live.key){
+                  state.uncertain=false;state.committed=true;state.result=result;
+                }
+                try{store.remove(confirmed);}catch(error){confirmed.message=this.errorMessage(error);}
+                this.stockReplenishmentSavedNotice={visible:true,result,readError:""};this.refreshStockReplenishmentRecovery();
+                this.showToast(proof.outcome==='draft_saved'?"补库草稿已保存，可查看原单":"外购采购已生成，可查看原单");
+              }
               else {const updated=store.unknown(live);this.refreshStockReplenishmentRecovery();const row=this.stockReplenishmentRecoveryRecords.find(r=>r.key===record.key);if(row){row.notRecorded=data.status==='not_recorded';row.trace=data.trace;row.message=data.status==='not_recorded'?"当前未查到；可按原内容继续，不能换内容重新保存":"原单已找到，但证明不完整；请查看原单并交管理员核对原客户、产品和数量";}}
             }catch(error){if(current()){const row=this.stockReplenishmentRecoveryRecords.find(r=>r.key===record.key);if(row){row.notRecorded=false;row.message=this.errorMessage(error)+"；请在报料历史按原客户、编码和数量交管理员核对";}else this.stockReplenishmentRecoveryError=this.errorMessage(error);}}
             finally {if(this.user?.id===actor&&this.authGeneration===generation&&(this.stockReplenishmentRecoveryEpoch||0)===epoch&&this.stockReplenishmentRecoveryBusy===record.key)this.stockReplenishmentRecoveryBusy="";}

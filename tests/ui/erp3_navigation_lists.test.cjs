@@ -68,12 +68,15 @@ test('actual Vue list retains table through refresh/error, and keeps permission-
 });
 
 test('page-scoped GETs cancel and reject stale success, while mutation guards follow the original request',()=>{
- let request,success,failure;const window={erpPageReadIdentity:()=>({page:'orders',sequence:1,reading:true})};
+ let request,success,failure;const window={erpRequestIdentity:()=>({actor:1,generation:1}),erpPageReadIdentity:()=>({page:'orders',sequence:1,reading:true})};
  const axios={defaults:{},CanceledError:class extends Error{constructor(m){super(m);this.code='ERR_CANCELED';}},interceptors:{request:{use(fn){request=fn;}},response:{use(ok,fail){success=ok;failure=fail;}}}};
  const source=html.slice(html.indexOf('      axios.defaults.withCredentials'),html.indexOf('      const { createApp } = Vue;'));
  vm.runInNewContext(source,{window,axios,AbortController,Promise});
  const get=request({url:'/api/orders',method:'get'});assert.equal(window.erpMutationPending(),false);
  const write=request({url:'/api/requisition/holds/auto-release',method:'post'});assert.equal(window.erpMutationPending(),true);
+ window.erpRequestIdentity=()=>({actor:1,generation:2});assert.equal(window.erpMutationPending(),false);
+ window.erpRequestIdentity=()=>({actor:2,generation:1});assert.equal(window.erpMutationPending(),false);
+ window.erpRequestIdentity=()=>({actor:1,generation:1});assert.equal(window.erpMutationPending(),true);
  window.erpCancelPageReads();assert.equal(get.signal.aborted,true);assert.equal(write.signal,undefined);
  window.erpPageReadIdentity=()=>({page:'products',sequence:2,reading:true});assert.throws(()=>success({config:get,data:{items:['OLD']}}),e=>e.code==='ERR_CANCELED');
  success({config:write});assert.equal(window.erpMutationPending(),false);

@@ -6347,3 +6347,8 @@ v704共用入口人工验收未通过；遗漏客户页冷启动选项初始化�
 ## 2026-10-22 v707 工作台协作与库料优化技术发布
 
 正式业务源码 `23cdea1747dab5a0b48de8daedcdc53e5d7296ca` / 签名包 `0cbfda9b50565a3139f0fc9427ff103e809aada0ca669ded48d9a9ebf30b19d3`，唯一head `ez1022hc`（前驱ey1021se）。已上线个人待办、全员共享文件及f5cea073库料候选；新增 `home_collaboration_v1` 读写合同。共享文件历史及回收站原件必须进入完整恢复，不得清理；新增事实后禁止有损降级。实际Mac正常/失败恢复、原监督拉起、新文件完整恢复、正式现有业务只读和原生收尾通过，停服539.957671秒；人工验收待反馈。现存两份正式备份保留并新增本轮恢复点；此前四份误删历史原件仍未恢复。详见 `docs/release_reports/HOME_COLLABORATION_V707_20261022.md`；本轮不可重复发布。
+
+
+## 2026-10-22 Delivery fulfillment candidate fa1022df (NOT RELEASED)
+
+Candidate branch codex/delivery-fulfillment-facts-20261022 adds fa1022df after verified v714/ez1022hc: two append-only physical delivery fact tables, no commercial/stock backfill. Signed delivery_fulfillment_facts_v1 is required before Manager compatibility, running-process adoption and backup shortcuts. The separately installed supervisor must also contain this reader guard; switching application current alone is insufficient. Isolated synthetic migration/runtime tests passed; fresh credential-sanitized formal copy and signed installed-Mac recovery validation remain pending. See docs/tasks/DELIVERY_FULFILLMENT_VALIDATION_20261022.md; do not deploy this candidate or replay GT142 from this index.

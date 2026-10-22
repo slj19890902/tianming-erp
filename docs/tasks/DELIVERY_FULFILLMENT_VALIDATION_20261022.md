@@ -23,3 +23,17 @@ V2类型检查与Vite6.4.3构建通过。构建只在临时目录进行，复用
 签名包、真实安装reader兼容、管理器正常/失败恢复、正式UI验收及142正式提交均未进行。禁止单独把读取投影接到未迁移库。正式业务需重新读回142全链，重新预览取得摘要/版本，不能直接执行离线输入候选。
 
 缺价9867/227等新批只订单报料；9719/98增量10和材质历史成本差异需要独立受控实现。192/171依据最新离线证据只需用既有日期入口纠正192到10/12，171的显式/有效账期已经10月且签收日10/21保留，不需任何本候选新功能。
+
+## v714正式回执后：迁移与运行入口补全
+
+上述“没有revision”为前一阶段状态。随后实际读取v714最终回执，确认source c6af868826b2b2764949f1039e2b840c7407a5f7、revision ez1022hc、package 83407eadc5e786b9d1d131e6d722b67088ed3c464782182b475f73ad8501348b。本候选唯一新增`fa1022df→ez1022hc`，不混入v715；没有正式迁移或业务写入。
+
+当前联合定向结果：**38 passed，1 warning，1.82s**（迁移5、runtime30、reader3），没有无目的重复之前133项。迁移使用真实Alembic入口，完整验证空表升降升、原事实/原schema/完整性/FK、已封存事实或孤儿段非空在DDL前拒绝且数据库字节不变、晚失败DDL全回滚。独立只读复核还逐项比对模型与迁移的列/默认值/约束/外键/索引；17条CREATE TABLE/INDEX/TRIGGER均真实事务且FK=1；真实Alembic在两表4索引5个守卫后注入失败全字节回滚；缺少segments的异常部分结构在DROP前拒绝。
+
+runtime测试先复现旧reader可经过同revision/schema_authority、已有进程接管和同revision备份绕行，再统一补`_check_delivery_fulfillment_reader`：任一新表存在要求原包sha/签名及缓存manifest一致、能力严格整数1，先于快捷路径，不停止进程。验证使用临时SQLite与临时Ed25519测试签名包，以及真实Python `Manager.compatible/start/_backup_inputs`、`service_supervisor.tick`；进程创建边界被隔离拦截，没有真实ERP进程、保护认证或正式路径读写。
+
+**新鲜正式副本验收仍未完成。** 已准备非pytest脚本`scripts/uat/delivery_fulfillment_acceptance.py`，强制通过run_task-owned copies及隔离环境，核对来源证明摘要/预期head，完整旧表摘要/原schema/地图不变，升降升后通过实际业务服务在副本追加及重放，验证分月量/成本待核、有事实拒绝降级，结果留在job之外供回收后复核。当前仅完成语法检查，尚未取得合法源，不能把脚本存在写成通过；它仅核验数据库与owned地图，不替代全部原件来源核验。
+
+正式负责人确认Manager可以不停服在线capture，但没有向UID501开发任务导出有所有权副本的现成动作；backup会停服，verify-pair恢复会自动清理，不能挪用已收尾目录或改权限。须另外审查精确绑定当前应用/监督身份、本任务和输出路径的管理员导出入口，经正常macOS认证，复制真实地图与必要原件，再在副本去凭据。去凭据不是业务PII匿名；客户原始事实仍受私有业务数据边界保护。当前未执行认证或新增提升权限。
+
+**实际安装运行时仍未验证。** 正式监督从`/Library/TianmingERP/published/<supervisor_package>/migration/desktop_assistant/`加载Manager，应用state.current切换不会更新它。必须核对或更新该独立受保护监督身份并完成精确签名Mac正常/失败恢复；不能用本次临时签名包测试或v714旧发布结果替代。

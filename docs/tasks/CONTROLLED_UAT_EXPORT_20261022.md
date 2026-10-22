@@ -19,3 +19,13 @@
 原件仅覆盖 product_drawings.image_path/thumbnail_path、pdf_order_training_samples.file_path、shared_file_versions.reference、finance_invoice_attachments.stored_name、supplier_monthly_invoices.attachment_stored_name。不是全量图纸恢复，未包括 drawing_releases、旧产品/订单/BOM 图纸字段，也未复制 twin 独立数据库。缺件/越界/配置非固定根/冻结hash或size不符都拒绝；没有“忽略缺件继续成功”的开关。
 
 本目录为 raw git worktree，不受 Codex app 管理，不使用 archive_worktree 清理。
+
+## v716 后的 unsigned 制品准备（2026-10-22，未签名/未安装）
+
+根任务明确要求完成不需认证的 unsigned exporter 制品。发布负责人已确认 LIVE v716 源码 `b19e58a0071fab5516908bbf177ece55e888cd20`、签名包 `507bc02a66bfe96ce427d66d9296f0026db7629a442a19e8d0348f85477651bb`、唯一 revision `ez1022hc`，最终回执为 `/Library/TianmingERP-Release-erp3-next-20261022-v0-22-716-b19e58a0071f/final-result.json`。已将本独立候选三提交顺序 rebase 到该基线，保留原 dd44a56b 的 ref、ZIP 和旧交接证据；不能用旧SHA描述新包。
+
+本阶段 history_correction_review 独占构建证据目录及本任务卡；preview_review 只读复核。允许新增的文件仅为 evidence/customer-statements-20261022/controlled-uat-export-candidate 下的新有限构建脚本、精确输入/输出清单、manifest、unsigned制品及回执；本阶段不新增特权代码、不改业务源码。运行文件增量限定原候选七个模块：`desktop_assistant/build.py`、`mac_keychain_install.py`、`mac_service_manage.py`、新增 `mac_uat_export.py`、`uat_export.py`、`uat_export_contract.py`、`uat_export_sanitize.py`。
+
+构建可沿既有有限重包方式，只读上述已签名公开程序 ZIP 和公共发布公钥，先验证包SHA、Ed25519及每个成员，再复用所有未变程序、runtime、OCR和静态资源的原压缩成员；新成员严格绑定当前提交。必须相对LIVE确认无删除、无业务/静态/runtime/schema变化。manifest保留v716版本、revision、reader合同及其他能力，仅记录新源码git SHA、增加受控export能力，并将migration设为null（本包只作为独立导出执行工具，不做应用升级）。输出经现有release_request.prepare_request全量成员核验，状态unsigned_not_installable；无manifest.sig、无安装器。
+
+管理员最小包另由既有builder从新提交生成并逐文件核验，旧包不覆盖。新制品只供发布负责人后续签名/批准审查；不读私钥、Keychain、正式DB、备份或恢复副本，不使用716认证，不安装、提升权限、捕获或导出。GT142与仪元9719后续验证仍只使用将来按固定合同取得的合法owned副本，本阶段不改变固定任务/接收者/路径范围。

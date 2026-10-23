@@ -5694,6 +5694,30 @@ def project_customer_months(
             and not statement["invoice_task_pending"]
         )
 
+    def statement_progress(statements: list[dict], *, pending_unbilled: bool = False) -> dict:
+        # A queue selects records; its name must never replace their real progress.
+        has_invoice = any(s["pending_invoice_amount"] > 0 or s["invoice_task_pending"] for s in statements)
+        has_payment = any(s["pending_payment_action_amount"] > 0 for s in statements)
+        completed = bool(statements) and not pending_unbilled and all(is_completed_statement(s) for s in statements)
+        if any(s["dispute_pending"] for s in statements):
+            label, action = "异议待修改", "reconcile"
+        elif any(s["task_void_pending"] for s in statements):
+            label, action = "待修改", "reconcile"
+        elif any(s["confirmation_status"] != "confirmed" and not s["financially_completed"] for s in statements):
+            label, action = "待核对", "reconcile"
+        elif pending_unbilled:
+            label, action = "待对账", "reconcile"
+        elif has_invoice:
+            label = "部分开票" if any(s["invoiced_amount"] > 0 for s in statements) else "待开票"
+            action = "invoice"
+        elif has_payment:
+            label = ("已完成开票" if workspace == "reconciliation" else
+                     "部分收款" if any(s["settled_amount"] > 0 for s in statements) else "待收款")
+            action = "payment"
+        else:
+            label, action = "已完成", "completed"
+        return {"queue_status": label, "primary_action": action, "is_completed": completed}
+
     all_groups = []
     queue_customer_ids = {key: set() for key in empty_counts}
     for group in grouped.values():
@@ -5722,25 +5746,10 @@ def project_customer_months(
         group["has_pending_payment"] = has_payment
         group["is_completed"] = completed
         group["has_completed"] = has_completed or completed
-        group["queue_status"] = (
-            "异议待修改"
-            if group["dispute_pending_count"]
-            else "待修改"
-            if group["task_void_pending_count"]
-            else "待核对"
-            if group["pending_confirmation_count"]
-            else "待对账"
-            if group["pending_reconciliation_count"] or group["blocked_reconciliation_count"]
-            else "待开票"
-            if has_invoice
-            else "开票处理中"
-            if has_invoice_task
-            else "部分收款"
-            if has_payment and group["settled_amount"] > Decimal("0.00")
-            else "待收款"
-            if has_payment
-            else "已完成"
-        )
+        for statement in group["statements"]:
+            statement.update(statement_progress([statement]))
+        group.update(statement_progress(group["statements"], pending_unbilled=bool(
+            group["pending_reconciliation_count"] or group["blocked_reconciliation_count"])))
         count_in_current_customer_scope = (
             (customer_id is None or customer_id in group["source_customer_ids"])
             and (workspace != "collections" or group["invoiced_amount"] > 0)
@@ -5766,16 +5775,6 @@ def project_customer_months(
                  or (has_payment and workspace != "reconciliation"))
         ):
             queue_customer_ids["all_open"].add(settlement_key)
-        if has_reconciliation:
-            group["primary_action"] = "reconcile"
-        elif has_invoice:
-            group["primary_action"] = "invoice"
-        elif has_invoice_task:
-            group["primary_action"] = "invoice_task"
-        elif has_payment:
-            group["primary_action"] = "payment"
-        else:
-            group["primary_action"] = "completed"
         group["primary_action_blocked"] = bool(
             group["primary_action"] == "reconcile"
             and group["pending_reconciliation_count"] == 0
@@ -5860,7 +5859,7 @@ def project_customer_months(
                 group["queue_status"] = ("部分收款" if group["settled_amount"] > 0 else "待收款") if balance_type == "pending_payment" else ("待确认" if balance_type == "pending_confirmation" else ("待开票" if balance_type == "pending_invoice" else "已完成"))
                 group["is_completed"] = balance_type == "completed"
                 if balance_type == "reconciled":
-                    group["queue_status"] = "已对账"
+                    group.update(statement_progress(group["statements"]))
     items.sort(
         key=lambda row: (
             -int(row["statement_month"][:4]),

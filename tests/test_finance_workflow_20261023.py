@@ -17,7 +17,7 @@ def queue(client, kind='', workspace='reconciliation'):
 
 
 def assert_uninvoiced_visible(client, task_id, status):
-    for kind in ('', 'pending_invoice'):
+    for kind in ('', 'pending_invoice', 'all', 'reconciled'):
         data = queue(client, kind)
         assert data['queue_counts']['pending_invoice'] == 1
         assert len(data['items']) == 1

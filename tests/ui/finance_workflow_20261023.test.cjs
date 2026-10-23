@@ -27,6 +27,16 @@ function harness(names) {
 }
 const issuedForm=()=>({task_id:20,customer_id:9,status:'issued',invoice_number:'INV-1',invoice_date:'2026-10-23',expected_version:3,expected_ledger_version:2,expected_ledger_versions:{11:2,12:4},authGeneration:1,actorId:7});
 
+test('issued history uses server next action to reach collections without another invoice step',async()=>{
+  const {vm,routes,pending}=harness(['financePrimaryActionLabel','runFinancePrimaryAction']);
+  const row={customer_id:9,statement_month:'2026-08',queue_status:'已完成开票',primary_action:'payment',is_completed:false};
+  assert.equal(vm.financePrimaryActionLabel(row),'办理收款');
+  await vm.runFinancePrimaryAction(row);
+  assert.equal(routes.length,1);assert.equal(routes[0][0],'collections');
+  assert.equal(routes[0][1].customer_id,9);assert.equal(routes[0][1].balance_type,'pending_payment');
+  assert.equal(pending.length,0);
+});
+
 test('next step reuses inline task; fresh preparation stays in reconciliation',async()=>{
   const {vm,opens,pending,routes}=harness(['runFinancePrimaryAction','openFinanceInvoice','generateInvoiceTask']);
   await vm.runFinancePrimaryAction({primary_action:'invoice',statements:[{id:11,pending_invoice_amount:113,active_invoice_tasks:[{id:41,status:'exported'}]}]});

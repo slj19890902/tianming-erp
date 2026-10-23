@@ -93,7 +93,19 @@ def delivery_cost_line_projections(
             )
             result.extend(month_rows)
         cursor = month_end
-    return {int(row["delivery_item_id"]): row for row in result}
+    by_item = {}
+    for row in result:
+        item_id = int(row["delivery_item_id"])
+        if item_id not in by_item:
+            by_item[item_id] = row
+        else:
+            # A split source is deliberately unallocated in every month. Do
+            # not let dictionary overwrite hide an earlier incomplete period.
+            old = by_item[item_id]
+            old['actual_cost_complete'] = old['actual_cost_complete'] and row['actual_cost_complete']
+            old['management_cost_complete'] = old['management_cost_complete'] and row['management_cost_complete']
+            old['reason_codes'] = sorted(set(old['reason_codes']) | set(row['reason_codes']))
+    return by_item
 
 
 # Public descriptive alias for callers and tests.
@@ -304,11 +316,13 @@ def build_customer_delivery_margin(
     gap_page_size: int = 20,
 ) -> dict[str, Any]:
     end_exclusive = date_to + timedelta(days=1)
+    from app.services.delivery_fulfillment_projection import effective_fulfillment_lines
+    physical = effective_fulfillment_lines()
     predicates = [
         Delivery.status == "dispatched",
         DeliveryItem.is_current.is_(True),
-        Delivery.delivery_date >= date_from,
-        Delivery.delivery_date < end_exclusive,
+        physical.c.actual_date >= date_from,
+        physical.c.actual_date < end_exclusive,
     ]
     if visible_customer_ids is not None:
         predicates.append(Delivery.customer_id.in_(visible_customer_ids))
@@ -316,14 +330,28 @@ def build_customer_delivery_margin(
         predicates.append(Delivery.customer_id == customer_id)
     rows = list(
         db.execute(
-            select(DeliveryItem, Delivery, Customer, OrderItem)
+            select(DeliveryItem, Delivery, Customer, OrderItem,
+                   physical.c.actual_date, physical.c.quantity, physical.c.segment_identity,
+                   physical.c.confirmed_physical_unit)
             .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+            .join(physical, physical.c.delivery_item_id == DeliveryItem.id)
             .join(Customer, Customer.id == Delivery.customer_id)
             .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
             .where(*predicates)
-            .order_by(Delivery.delivery_date, Delivery.id, DeliveryItem.id)
+            .order_by(physical.c.actual_date, Delivery.id, DeliveryItem.id)
         ).all()
     )
+    projected_rows = []
+    for item, delivery, customer, order_item, actual_date, quantity, segment_identity, confirmed_unit in rows:
+        projected_item = SimpleNamespace(**{prop.key:getattr(item,prop.key) for prop in item.__mapper__.column_attrs})
+        projected_item.delivered_quantity = int(quantity)
+        projected_item.segment_identity = segment_identity
+        if confirmed_unit:
+            projected_item.unit_snapshot = confirmed_unit
+        projected_delivery = SimpleNamespace(**{prop.key:getattr(delivery,prop.key) for prop in delivery.__mapper__.column_attrs})
+        projected_delivery.delivery_date = actual_date
+        projected_rows.append((projected_item,projected_delivery,customer,order_item))
+    rows = projected_rows
     cost_scope = ({customer_id} if customer_id is not None and visible_customer_ids is None else
                   (visible_customer_ids & {customer_id} if customer_id is not None and visible_customer_ids is not None else visible_customer_ids))
     cost_by_item = delivery_cost_line_projections(
@@ -421,9 +449,9 @@ def build_customer_delivery_margin(
         "as_of": None,
         "filters": {"customer_id": customer_id, "date_from": date_from.isoformat(), "date_to": date_to.isoformat()},
         "basis": {
-            "date": "delivery_date", "currency": "CNY", "tax": "tax_inclusive",
+            "date": "effective_actual_fulfillment_date", "currency": "CNY", "tax": "tax_inclusive",
             "profit": "delivery_material_margin", "quantity": "sales_line_unit",
-            "note": "送货材料毛利；不含工资、能耗、外协和期间费用",
+            "note": "实际交付材料毛利；分批来源成本份额未核准时不均摊、不重复计成本；原对账开票不变",
         },
         "summary": metrics_for(line_rows),
         "customers": {
@@ -448,6 +476,7 @@ def build_customer_delivery_margin(
                     "order_item_id": entry["line"]["item"].order_item_id,
                     "delivery_id": int(entry["line"]["delivery"].id),
                     "delivery_item_id": int(entry["line"]["item"].id),
+                    "fulfillment_segment_identity": entry["line"]["item"].segment_identity,
                     "delivery_number": entry["line"]["delivery"].delivery_number,
                     "product_code": entry['line']['item'].product_code_snapshot or (entry['line']['order_item'].snapshot_product_code if entry['line']['order_item'] else None),
                     "customer_po": entry['line']['item'].customer_po_snapshot,
@@ -457,7 +486,8 @@ def build_customer_delivery_margin(
                             ("missing_sales_price", "补录本次成交单价；无订单送货可从客户对账的缺价明细补录"),
                             ("missing_sales_tax_basis", "核对原成交价含税/未税及税率，不能用当前客户设置改写旧单"),
                             ("missing_sales_unit", "核对原销售单位及一套包含的件数；新单从常用箱销售单位自动冻结"),
-                            ("management_cost_incomplete", "核对来源批次的材料/展开尺寸/采购价；旧库存可维护已确认入库成本，后续出库复用")
+                            ("management_cost_incomplete", "核对来源批次的材料/展开尺寸/采购价；旧库存可维护已确认入库成本，后续出库复用"),
+                            ("fulfillment_split_cost_allocation_pending", "核对原送货库存/成本来源分别归属哪一实际交付批；不按数量均摊，不另报采购价")
                         ) if code in entry["reason_codes"]
                     ],
                 }

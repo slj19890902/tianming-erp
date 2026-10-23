@@ -77,6 +77,7 @@ class Manager:
             self._check_dispatch_reader(release)
             self._check_provenance_reader(release)
             self._check_physical_kit_reader(release)
+            self._check_delivery_fulfillment_reader(release)
         except (ValueError, OSError):
             return False
         # Preserve rollback metadata, but never run a writer which ignores the
@@ -237,6 +238,22 @@ class Manager:
         if manifest!=self.manifest(release):
             raise ValueError('实物组套读取清单与签名原包不一致')
         require_reader(self.root/'shared/data/carton_erp.sqlite3',manifest)
+
+    def _check_delivery_fulfillment_reader(self, release):
+        """Authenticate this reader before revision or running-process shortcuts."""
+        database = self.root / 'shared/data/carton_erp.sqlite3'
+        if not database.is_file():
+            return
+        with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+            db.execute('PRAGMA query_only=ON')
+            present = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name IN "
+                "('delivery_fulfillment_revisions', 'delivery_fulfillment_segments') LIMIT 1"
+            ).fetchone()
+        # Empty and partial schemas also require the signed exact integer
+        # capability; writable cached manifests cannot grant reader admission.
+        if present and not self._shared_finished_reader(release, 'delivery_fulfillment_facts_v1'):
+            raise ValueError('原数据库包含实际交付事实结构，程序缺少已签名的读取能力；禁止启动、接管或认可备份')
 
     def _quotation_writer(self, release):
         package = self.root / 'packages' / (release + '.zip')
@@ -543,6 +560,7 @@ class Manager:
         self._check_dispatch_reader(state['current'], require_active=self._dispatch_reader(state['current']))
         self._check_provenance_reader(state['current'])
         self._check_physical_kit_reader(state['current'])
+        self._check_delivery_fulfillment_reader(state['current'])
         running = self._process()
         if running:
             if python is None:
@@ -626,6 +644,7 @@ class Manager:
             raise ValueError('备份程序清单与原发布签名不一致')
         dispatch_activation = self._check_dispatch_reader(current, require_active=self._dispatch_reader(current))
         self._check_physical_kit_reader(current)
+        self._check_delivery_fulfillment_reader(current)
         before = database_info(self.root / 'shared/data/carton_erp.sqlite3')
         from desktop_assistant.preflight import inspect
         checks = inspect(self.root / 'shared/data/carton_erp.sqlite3', self.root / 'shared', managed=True)

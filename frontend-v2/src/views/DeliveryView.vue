@@ -102,6 +102,15 @@ const receiptForm = ref({
 })
 const receiptSaving = ref(false)
 const canFinance = computed(() => authStore.hasPermission('finance.execute') && authStore.hasPermission('finance.return_receipt.period.adjust'))
+const canCorrectFulfillment = computed(() => ['deliveries.execute', 'finance.return_receipt.period.adjust', 'finance.view'].every((permission) => authStore.hasPermission(permission)))
+
+function fulfillmentDates(delivery: DeliveryNote) {
+  return [...new Set((delivery.actual_fulfillment?.segments || []).map((segment) => segment.actual_date))].sort().join('、')
+}
+
+function fulfillmentWorkspaceHref(delivery: DeliveryNote) {
+  return '/static/index.html?' + new URLSearchParams({ page: 'deliveries', fulfillment_delivery_id: String(delivery.id) }).toString()
+}
 
 function unorderedLocatorHref(row: UnorderedFinishedCandidate) {
   if (!authStore.hasPermission('warehouse.view') || typeof row.location_name !== 'string' || !row.location_name.trim()) return undefined
@@ -620,6 +629,19 @@ onMounted(async () => {
           <el-button type="primary" @click="loadDeliveries">刷新</el-button>
         </div>
         <vxe-table border stripe show-overflow="ellipsis" height="480" :loading="loading" :data="deliveries">
+          <vxe-column type="expand" width="42">
+            <template #content="{ row }">
+              <section v-if="row.actual_fulfillment?.revision" style="padding:12px 24px" aria-label="实际交付分批">
+                <strong>全单实际交付 · 第 {{ row.actual_fulfillment.revision }} 版</strong>
+                <p class="tm-muted">当前筛选交付 {{ row.actual_fulfillment.matched_physical_quantity }}，原单 {{ row.total_quantity }}。原回单、对账和发票保留，实际日期不表示新增签收证明。</p>
+                <div v-for="segment in row.actual_fulfillment.segments" :key="segment.segment_identity" style="padding:4px 0">
+                  原明细 #{{ segment.delivery_item_id }} · {{ segment.actual_date }} · {{ segment.quantity }} {{ segment.confirmed_physical_unit || '' }} ·
+                  {{ segment.cost_allocation_status === 'pending_split_source_allocation' ? '分批成本分配待核' : '沿用原整行成本' }}
+                </div>
+              </section>
+              <p v-else class="tm-muted" style="padding:12px 24px">沿用原送货单日期与数量。</p>
+            </template>
+          </vxe-column>
           <vxe-column type="seq" width="60" title="序号" />
           <vxe-column field="delivery_number" title="送货单号" width="190" />
           <vxe-column title="状态" width="110">
@@ -628,9 +650,13 @@ onMounted(async () => {
             </template>
           </vxe-column>
           <vxe-column field="customer_name" title="客户" width="170" />
-          <vxe-column field="delivery_date" title="送货日期" width="130" />
+          <vxe-column title="交付日期" width="210">
+            <template #default="{ row }"><template v-if="row.actual_fulfillment?.revision">{{ fulfillmentDates(row) }}<div class="tm-muted">原单 {{ row.delivery_date }}</div></template><template v-else>{{ row.delivery_date }}</template></template>
+          </vxe-column>
           <vxe-column field="vehicle_number" title="车牌" width="130" />
-          <vxe-column field="total_quantity" title="总数量" width="100" />
+          <vxe-column title="交付数量" width="130">
+            <template #default="{ row }"><template v-if="row.actual_fulfillment?.revision"><strong>{{ row.actual_fulfillment.matched_physical_quantity }}</strong><div class="tm-muted">当前筛选 · 原单 {{ row.total_quantity }}</div></template><template v-else>{{ row.total_quantity }}</template></template>
+          </vxe-column>
           <vxe-column title="回单" width="110">
             <template #default="{ row }">
               <el-tag :type="receiptStatusType(row.return_receipt_status)">
@@ -638,13 +664,14 @@ onMounted(async () => {
               </el-tag>
             </template>
           </vxe-column>
-          <vxe-column title="操作" width="200" fixed="right">
+          <vxe-column title="操作" width="240" fixed="right">
             <template #default="{ row }">
               <el-button type="primary" link :disabled="row.status !== 'draft' || !authStore.hasPermission('deliveries.execute')" @click="dispatchDelivery(row.id)">
                 发车
               </el-button>
               <el-button type="primary" link @click="openPrintPreview(row.id)">打印预览</el-button>
               <el-button type="success" link @click="openReceiptDialog(row)">回单</el-button>
+              <a v-if="canCorrectFulfillment && row.status === 'dispatched' && row.return_receipt_status === 'confirmed'" :href="fulfillmentWorkspaceHref(row)" target="_blank" rel="noopener noreferrer">保留票据更正交付 ↗</a>
             </template>
           </vxe-column>
         </vxe-table>
@@ -663,8 +690,8 @@ onMounted(async () => {
           <vxe-column type="seq" width="60" title="序号" />
           <vxe-column field="delivery_number" title="送货单号" width="190" />
           <vxe-column field="customer_name" title="客户" width="170" />
-          <vxe-column field="delivery_date" title="送货日期" width="130" />
-          <vxe-column field="total_quantity" title="送货数" width="100" />
+          <vxe-column field="delivery_date" title="原单据日期" width="130" />
+          <vxe-column field="total_quantity" title="原送货数" width="100" />
           <vxe-column title="回单状态" width="120">
             <template #default="{ row }">
               <el-tag :type="receiptStatusType(row.return_receipt_status)">

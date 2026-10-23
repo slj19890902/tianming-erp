@@ -1305,6 +1305,7 @@ def build_order_item_document_trace(
         (row for row in reversed(events) if row["is_effective"]),
         events[-1] if events else None,
     )
+    from app.services.delivery_fulfillment_projection import actual_fulfillment_rows
     execution_summary = _execution_summary(
         events=events,
         current_inventory=current_inventory,
@@ -1331,6 +1332,12 @@ def build_order_item_document_trace(
             "delivered_quantity": item.delivered_quantity,
         },
         "restricted_stages": restricted_stages,
+        # Original dispatch remains one immutable audit event. These are dated
+        # allocation facts, not additional dispatch/stock/receipt events.
+        "actual_fulfillment_segments": (
+            actual_fulfillment_rows(db,item_ids=delivery_item_ids,corrected_only=True)
+            if "deliveries.view" in permissions else []
+        ),
         "execution_summary": execution_summary,
         "current_inventory": current_inventory,
         "current_event_key": current_event["key"] if current_event else None,

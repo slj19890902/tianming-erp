@@ -366,10 +366,21 @@ def _suggested_reconciliation_month(delivery_date: date, cycle_day: int) -> str:
     return f"{year:04d}-{month_zero + 1:02d}"
 
 
+def _delivery_fulfillment_block_reason(db: Session, delivery_id: int) -> str | None:
+    from app.models.delivery_fulfillment_fact import DeliveryFulfillmentRevision
+    if db.scalar(select(DeliveryFulfillmentRevision.id).where(
+        DeliveryFulfillmentRevision.delivery_id == delivery_id).limit(1)) is not None:
+        return "原单已有保票实际交付事实，原送货内容与库存动作已保留；日期分批更正须追加完整交付版本"
+    return None
+
+
 def _delivery_finance_chain_block_reason(
     db: Session,
     delivery_id: int,
 ) -> str | None:
+    fulfillment_block = _delivery_fulfillment_block_reason(db, delivery_id)
+    if fulfillment_block:
+        return fulfillment_block
     row = db.execute(
         select(Statement.statement_number, Statement.confirmation_status)
         .join(StatementItem, StatementItem.statement_id == Statement.id)
@@ -5467,6 +5478,7 @@ def _delivery_response(
     list_context: dict | None = None,
 ) -> dict:
     from app.models.finance import ReturnReceipt
+    from app.services.delivery_fulfillment_projection import fulfillment_by_delivery
 
     delivery = (
         list_context["deliveries"].get(delivery_id)
@@ -5764,6 +5776,9 @@ def _delivery_response(
         "id": delivery.id,
         "delivery_number": delivery.delivery_number,
         "pre_delivery_batch": _pre_delivery_batch_reference(db, delivery),
+        "actual_fulfillment": (list_context["actual_fulfillment_by_delivery"].get(delivery.id)
+            if list_context is not None and "actual_fulfillment_by_delivery" in list_context
+            else fulfillment_by_delivery(db, [delivery.id]).get(delivery.id)),
         "customer_id": delivery.customer_id,
         "customer_name": customer.name if customer else None,
         "delivery_date": delivery.delivery_date,
@@ -8718,6 +8733,11 @@ def list_deliveries(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
+    from app.services.delivery_fulfillment_projection import effective_fulfillment_lines, fulfillment_by_delivery
+    physical = effective_fulfillment_lines()
+    physical_dates = []
+    if date_from is not None: physical_dates.append(physical.c.actual_date >= date_from)
+    if date_to is not None: physical_dates.append(physical.c.actual_date <= date_to)
     # New delivery drafts must stay at the top. Printing or dispatching an old
     # delivery must not move it ahead of a delivery that was just created.
     query = select(Delivery.id)
@@ -8769,20 +8789,7 @@ def list_deliveries(
                 ),
             )
         )
-        item_keyword_match = exists(
-            select(1)
-            .select_from(DeliveryItem)
-            .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-            .outerjoin(Order, Order.id == OrderItem.order_id)
-            .outerjoin(
-                Product,
-                Product.id
-                == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
-            )
-            .where(
-                DeliveryItem.delivery_id == Delivery.id,
-                DeliveryItem.is_current.is_(True),
-                or_(
+        item_keyword_match = or_(
                     func.lower(Order.order_number).like(pattern),
                     func.lower(func.coalesce(DeliveryItem.customer_po_snapshot, Order.customer_po)).like(pattern),
                     func.lower(
@@ -8805,20 +8812,12 @@ def list_deliveries(
                             OrderItem.snapshot_spec,
                         )
                     ).like(pattern),
-                ),
-            )
         )
-        query = query.where(
-            or_(
+        keyword_match = or_(
                 func.lower(Delivery.delivery_number).like(pattern),
                 customer_keyword_match,
                 item_keyword_match,
-            )
         )
-    if date_from is not None:
-        query = query.where(Delivery.delivery_date >= date_from)
-    if date_to is not None:
-        query = query.where(Delivery.delivery_date <= date_to)
 
     item_product_code = func.coalesce(
         func.nullif(DeliveryItem.product_code_snapshot, ""),
@@ -8841,11 +8840,16 @@ def list_deliveries(
         )
         if condition is not None
     ]
-    if item_filters:
+    if normalized_keyword:
+        # The product/order keyword, explicit product filters and date must
+        # describe one effective segment, never three different source lines.
+        item_filters.append(keyword_match)
+    if item_filters or physical_dates:
         query = query.where(
             exists(
                 select(1)
                 .select_from(DeliveryItem)
+                .join(physical, physical.c.delivery_item_id == DeliveryItem.id)
                 .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
                 .outerjoin(Order, Order.id == OrderItem.order_id)
                 .outerjoin(
@@ -8857,6 +8861,7 @@ def list_deliveries(
                     DeliveryItem.delivery_id == Delivery.id,
                     DeliveryItem.is_current.is_(True),
                     *item_filters,
+                    *physical_dates,
                 )
             )
         )
@@ -8907,6 +8912,16 @@ def list_deliveries(
     from app.api.orders import _can_view_order_sales_amount
     from app.services.delivery_current_presentation import delivery_amounts
     amount_map = delivery_amounts(db, list(delivery_ids)) if _can_view_order_sales_amount(user) else {}
+    matched_items = None
+    if item_filters:
+        matched_items = set(db.scalars(select(DeliveryItem.id)
+            .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+            .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+            .outerjoin(Order, Order.id == OrderItem.order_id)
+            .outerjoin(Product, Product.id == func.coalesce(DeliveryItem.product_id, OrderItem.product_id))
+            .where(DeliveryItem.delivery_id.in_(delivery_ids), DeliveryItem.is_current.is_(True), *item_filters)))
+    physical_map = fulfillment_by_delivery(db, delivery_ids, date_from=date_from, date_to=date_to,
+                                           matched_item_ids=matched_items)
     if view == "summary":
         summary_context = _delivery_list_summary_context(db, list(delivery_ids))
         summary_context["search_matches"] = search_matches
@@ -8917,11 +8932,13 @@ def list_deliveries(
             "view": "summary",
             "items": [
                 {**_delivery_summary_response(delivery_id, context=summary_context),
-                 **amount_map.get(delivery_id, {})}
+                 **amount_map.get(delivery_id, {}),
+                 "actual_fulfillment": physical_map.get(delivery_id)}
                 for delivery_id in delivery_ids
             ],
         }
     list_context = _delivery_list_page_context(db, list(delivery_ids))
+    list_context["actual_fulfillment_by_delivery"] = physical_map
     response_items = []
     for delivery_id in delivery_ids:
         response = _delivery_response(db, delivery_id, list_context=list_context)
@@ -8929,6 +8946,7 @@ def list_deliveries(
             int(delivery_id), _empty_delivery_search_matches()
         )
         response.update(amount_map.get(delivery_id, {}))
+        response["actual_fulfillment"] = physical_map.get(delivery_id)
         response_items.append(response)
     return {
         "total": total,
@@ -9728,6 +9746,9 @@ def _update_delivery(
             assert replay_record is not None
             _delivery_for_user(db, replay_record.resource_id, user)
             return replay
+    fulfillment_block = _delivery_fulfillment_block_reason(db, delivery_id)
+    if fulfillment_block:
+        raise HTTPException(status_code=409, detail=fulfillment_block)
     if historical_backfill:
         _require_historical_delivery_permissions(user)
         if payload.expected_version is None or payload.idempotency_key is None:
@@ -10856,6 +10877,9 @@ def _cancel_delivery(
     from app.models.finance import ReturnReceipt, ReturnReceiptItem, StatementItem
 
     _delivery_for_user(db, delivery_id, user)
+    fulfillment_block = _delivery_fulfillment_block_reason(db, delivery_id)
+    if fulfillment_block:
+        raise HTTPException(status_code=409, detail=fulfillment_block)
     cancelled_at = _utc_now()
     try:
         # 先原子抢占 dispatched -> pending 并取得写锁，再检查回单/对账。
@@ -11101,6 +11125,9 @@ def _cancel_delivery(
     except HTTPException:
         db.rollback()
         raise
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="送货来源已被保护或状态已变化，取消未保存，请刷新核对") from error
     except WarehouseInventoryError as error:
         db.rollback()
         raise HTTPException(
@@ -11493,6 +11520,9 @@ def update_delivery_customer_po(
     )
     if replay is not None:
         return replay
+    fulfillment_block = _delivery_fulfillment_block_reason(db, delivery_id)
+    if fulfillment_block:
+        raise HTTPException(status_code=409, detail=fulfillment_block)
     try:
         claimed = db.execute(update(Delivery).where(
             Delivery.id == delivery_id,
@@ -11531,6 +11561,9 @@ def update_delivery_customer_po(
             delivery_id=delivery_id, response=response)
         db.commit()
         return response
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="原送货来源已被保护或状态已变化，客户单号未修改，请刷新核对") from error
     except Exception:
         db.rollback()
         raise

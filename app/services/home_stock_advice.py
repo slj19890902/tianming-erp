@@ -16,19 +16,23 @@ from app.services.delivery_quantities import for_item, QuantityContractError
 
 
 def build_stock_advice(db, *, warning, today):
+    from app.services.delivery_fulfillment_projection import effective_fulfillment_lines
+    physical = effective_fulfillment_lines()
     cid, pid = warning['customer_id'], warning['product_id']
     unit = '套' if warning.get('is_virtual_composite_parent') else warning.get('unit_label')
     start = today - timedelta(days=179)
-    lines = db.execute(select(Delivery, DeliveryItem, OrderItem)
+    lines = db.execute(select(Delivery, DeliveryItem, OrderItem, physical.c.actual_date,
+        physical.c.quantity, physical.c.revision_id, physical.c.confirmed_physical_unit)
         .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
+        .join(physical, physical.c.delivery_item_id == DeliveryItem.id)
         .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
         .where(Delivery.customer_id == cid, Delivery.status == 'dispatched',
-            DeliveryItem.is_current.is_(True), Delivery.delivery_date.between(start, today),
+            DeliveryItem.is_current.is_(True), physical.c.actual_date.between(start, today),
             func.coalesce(DeliveryItem.product_id, OrderItem.product_id) == pid)).all()
     documents, issues = {}, []
-    for delivery, line, order_item in lines:
-        sample = documents.setdefault(delivery.id, dict(delivery_number=delivery.delivery_number,
-            date=delivery.delivery_date.isoformat(), quantity=0))
+    for delivery, line, order_item, actual_date, segment_quantity, revision_id, confirmed_unit in lines:
+        sample = documents.setdefault((delivery.id, actual_date), dict(delivery_number=delivery.delivery_number,
+            date=actual_date.isoformat(), quantity=0, fulfillment_revision_id=revision_id))
         try:
             contract = for_item(line)
             if contract:
@@ -36,11 +40,15 @@ def build_stock_advice(db, *, warning, today):
                     raise QuantityContractError('单位不一致')
                 quantity = contract['physical_quantity']
             else:
-                if not unit or (line.unit_snapshot or (order_item.sales_unit_snapshot if order_item else None)) != unit:
+                line_unit = confirmed_unit if revision_id is not None else line.unit_snapshot or (order_item.sales_unit_snapshot if order_item else None)
+                if not unit or line_unit != unit:
                     raise QuantityContractError('单位缺失')
                 if order_item and order_item.supply_mode_snapshot == 'external_purchase':
                     raise QuantityContractError('外购实物数量未冻结')
                 quantity = line.delivered_quantity
+            if revision_id is not None:
+                # Amendment qualification only permits frozen 1:1 boxes.
+                quantity = segment_quantity
             if sample['quantity'] is not None:
                 sample['quantity'] += quantity
         except QuantityContractError:
@@ -50,7 +58,7 @@ def build_stock_advice(db, *, warning, today):
         discrepancy = db.scalar(select(ReturnReceiptItem.id).join(ReturnReceipt,
             ReturnReceipt.id == ReturnReceiptItem.return_receipt_id).join(DeliveryItem,
             DeliveryItem.id == ReturnReceiptItem.delivery_item_id).where(
-                ReturnReceipt.status == 'confirmed', DeliveryItem.id.in_([line.id for _, line, _ in lines]),
+                ReturnReceipt.status == 'confirmed', DeliveryItem.id.in_([row[1].id for row in lines]),
                 ReturnReceiptItem.actual_received_quantity != DeliveryItem.delivered_quantity).limit(1))
         if discrepancy:
             issues.append('送货与签收数量存在差异，需求数量需人工复核')

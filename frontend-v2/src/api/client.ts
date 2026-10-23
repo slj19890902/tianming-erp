@@ -321,6 +321,31 @@ export interface DeliveryPendingItem {
 }
 
 /** 送货单（后端真实字段；无 driver_name，只有 vehicle_number 车牌） */
+export interface DeliveryFulfillmentSegment {
+  segment_identity: string
+  delivery_id: number
+  delivery_item_id: number
+  order_item_id: number | null
+  actual_date: string
+  quantity: number
+  revision_id: number | null
+  original_document_date: string
+  confirmed_physical_unit?: string | null
+  cost_allocation_status: 'pending_split_source_allocation' | 'whole_line_cost_preserved' | 'original'
+}
+
+export interface DeliveryActualFulfillment {
+  original_document_date: string
+  revision: number
+  revision_id: number | null
+  total_physical_quantity: number
+  matched_physical_quantity: number
+  signed_receipt_proven_by_segments: false
+  financial_source: 'original_return_receipt_only'
+  original_document_amount_is_period_amount: false
+  segments: DeliveryFulfillmentSegment[]
+}
+
 export interface DeliveryNote {
   id: number
   delivery_number: string
@@ -330,6 +355,7 @@ export interface DeliveryNote {
   vehicle_number?: string | null
   status: string
   total_quantity: number
+  actual_fulfillment?: DeliveryActualFulfillment | null
   dispatched_at?: string | null
   is_printed?: boolean
   printed_at?: string | null

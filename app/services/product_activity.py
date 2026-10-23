@@ -188,13 +188,19 @@ def activity(db, product, *, permissions, scope, page=1, page_size=30):
     else: result['hidden_sections'].append('订单')
     if permissions['deliveries']:
         from app.models.delivery import Delivery, DeliveryItem
-        rows = paged(select(DeliveryItem,Delivery).join(Delivery).outerjoin(OrderItem,OrderItem.id == DeliveryItem.order_item_id).where(
+        from app.services.delivery_fulfillment_projection import effective_fulfillment_lines
+        physical = effective_fulfillment_lines()
+        rows = paged(select(DeliveryItem,Delivery,physical.c.actual_date,physical.c.quantity,physical.c.segment_identity,
+            physical.c.confirmed_physical_unit)
+            .join(Delivery,Delivery.id==DeliveryItem.delivery_id)
+            .join(physical,physical.c.delivery_item_id==DeliveryItem.id).outerjoin(OrderItem,OrderItem.id == DeliveryItem.order_item_id).where(
             Delivery.customer_id == product.customer_id, DeliveryItem.is_current.is_(True),
-            or_(DeliveryItem.product_id == product.id, OrderItem.product_id == product.id)).order_by(Delivery.delivery_date.desc(),DeliveryItem.id.desc()))
-        for d,head in rows:
-            result['deliveries'].append(dict(id=d.id,document=head.delivery_number,date=str(head.delivery_date),
+            or_(DeliveryItem.product_id == product.id, OrderItem.product_id == product.id)).order_by(physical.c.actual_date.desc(),DeliveryItem.id.desc()))
+        for d,head,actual_date,physical_quantity,segment_identity,confirmed_unit in rows:
+            result['deliveries'].append(dict(id=d.id,document=head.delivery_number,date=str(actual_date),
+                original_document_date=str(head.delivery_date),fulfillment_segment_identity=segment_identity,
                 status={'pending':'待送货','dispatched':'已送货','voided':'已作废'}.get(head.status,head.status),
-                quantity=d.delivered_quantity,unit=d.unit_snapshot,code=d.product_code_snapshot,name=d.product_name_snapshot,
+                quantity=physical_quantity,unit=confirmed_unit or d.unit_snapshot,code=d.product_code_snapshot,name=d.product_name_snapshot,
                 specification=d.specification_snapshot,customer_po=d.customer_po_snapshot))
     else: result['hidden_sections'].append('送货记录')
     return result

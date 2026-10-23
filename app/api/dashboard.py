@@ -1432,6 +1432,8 @@ def dashboard_overview(
     remaining_todo_count = max(len(todos) - 8, 0)
     todos = todos[:8]
 
+    from app.services.delivery_fulfillment_projection import effective_fulfillment_lines
+    physical_today = effective_fulfillment_lines()
     summary = {}
     if can_view_orders:
         summary["today_orders"] = _safe_int(
@@ -1442,8 +1444,9 @@ def dashboard_overview(
             {
                 "today_deliveries": _safe_int(
                     db.scalar(
-                        select(func.count(Delivery.id)).where(
-                            Delivery.delivery_date == today,
+                        select(func.count(func.distinct(Delivery.id))).join(
+                            physical_today, physical_today.c.delivery_id == Delivery.id).where(
+                            physical_today.c.actual_date == today,
                             Delivery.status != "voided",
                         )
                     )

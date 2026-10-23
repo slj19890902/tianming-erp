@@ -1,3 +1,5 @@
+2026-10-23 ERP3库存读取与客户料号：最新正式v0.22.717（源码3a8d7600 / 包ea1f60c7be10），2026-10-23 08:48:05技术发布及原生收尾完成，revision fa1023oc，独立supervisor保持。healthy=true、manual_stop=false、backup_work_retained=false；原12份备份及新恢复点保留，76 GET与真实Mac恢复通过，人工页面验收pending。无自动历史修数，无exporter权限扩展。见docs/release_reports/ERP3_V717_RELEASE_20261023.md。以下为历史索引，继续前实时核对，勿重放旧事务。
+
 2026-10-22 ERP3普通主档修复：最新正式v0.22.716（源码b19e58a0 / 包507bc02a），22:09:36完成技术发布与原生收尾，修复未知结构保留和全面共用外购资料同步。revision ez1022hc与独立supervisor保持，healthy=true、manual_stop=false、backup_work_retained=false。12份备份保留，原生恢复、76 GET及原登录版本/1995/1870回读通过；人工页面验收pending。无自动历史修数，无export/facts能力。见docs/release_reports/ERP3_PRODUCT_SAVE_V716_20261022.md。以下为历史索引；继续前实时核对安装身份，不重放旧事务。
 
 2026-10-22 ERP3-NEXT：正式为v0.22.715（源码80e2fff6 / 包318782c4），20:31:39完成技术发布与原生收尾；承接v714全部首页/导航/列表/手机升级，只修版本说明超限导致的账号与公司读取失败。revision ez1022hc不变，healthy=true、manual_stop=false、backup_work_retained=false；74次公共GET及原登录版本/指定业务回读通过，人工页面验收pending，无历史清理。备份/恢复/边界见`docs/release_reports/ERP3_NEXT_20261022.md`。继续任务实时核验安装身份，不重跑旧v713/v714/v715事务。

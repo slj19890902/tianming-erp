@@ -140,6 +140,8 @@ def test_twelve_line_statement_amounts_export_as_9107_03(fin001_app):
         assert result.status_code == 201, result.text
         task = result.json()
         assert Decimal(str(task['total_amount'])) == Decimal('9107.03')
+        assert Decimal(str(task['net_amount'])) == Decimal('8059.31')
+        assert Decimal(str(task['tax_amount'])) == Decimal('1047.72')
         exported = client.get(f"/api/finance/invoice-tasks/{task['id']}/tax-template.xlsx")
         assert exported.status_code == 200, exported.text
         task = client.get(f"/api/finance/invoice-tasks/{task['id']}").json()

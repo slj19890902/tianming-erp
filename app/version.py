@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.717"
-APP_VERSION_NAME = "库存读取与客户料号体验升级"
+APP_VERSION = "v0.22.718"
+APP_VERSION_NAME = "常用箱单价与开票精度修复"
 APP_BUILD_DATE = "2026-10-23"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -7061,3 +7061,16 @@ APP_VERIFICATION_STEPS = [
     "进入系统备份→账号与公司，确认版本为 v0.22.717，账号、公司和版本说明均正常显示。",
 ]
 APP_CHANGELOG = [*(f"v0.22.717：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "常用箱销售单价支持最多六位小数，保存和重新打开时保持输入精度；超过六位时明确提示。",
+    "完整对账明细开票时按分核对票面金额，保留原应收精度并记录舍入差，避免正确金额被误报不一致。",
+    "同一版本对账已完整开票后，不再把不足一分的尾差显示为待开票；部分开票仍按实际余额核对。",
+    "本版无数据库结构变更，不自动修改历史订单、送货、对账或已开票事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "按真实业务修改常用箱销售单价，保存后重新打开，确认四至六位小数保持原值。",
+    "核对真实对账与已签发税票的明细、原应收和票面金额；完成登记后刷新待开票列表，确认没有重复尾差任务。",
+    "进入系统备份→账号与公司，确认版本为 v0.22.718，账号、公司和版本说明正常显示。",
+]
+APP_CHANGELOG = [*(f"v0.22.718：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

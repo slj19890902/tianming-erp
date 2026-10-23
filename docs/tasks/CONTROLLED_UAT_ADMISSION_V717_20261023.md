@@ -33,3 +33,9 @@
 诊断v1未执行，独立复核发现异常再抛出可能输出正文、admin代码先导入后核验两个阻断项，原候选与复核保留。根任务在同一evidence下独占inspect-diagnostic-v2修正候选（独立复核者只写该目录independent-review.json），固定新root目录inspect-diagnostic-2。整个入口及worker身份检查统一安全捕获，输出仅类型/代码位置；导入admin前核验固定原始ZIP/manifest、精确目录与25源码枚举、root保护属性及逐个原字节摘要。固定inspect子进程超时只结束该诊断子进程；无服务操作。Apple Python语法、合成隐私/边界与非特权拒绝检查通过，原生尚未执行。
 
 诊断v2独立复核无新发现，绑定entry `9825a39133a086937630473c241eb448dc64c89104cff5d2b787192307e1c3b3`、worker `f78ca27edb5ae15a70212b53476f2d9e9543455444f6f92637b30139a787e75d`；独立回执摘要 `a39deb09467d724d4e4737cfd2445d15ce5e05554681628485dc379ee3e43681`。正常macOS认证入口已打开，等待用户认证及实际结果；不重放原stage-a、不安装或追加同包，不把静态复核当作原生成功。匿名健康GET 200。
+
+诊断v2原生完成，固定signed inspect仍在uat_export.py:59拒绝，定位为配置字典/值类型、内联凭据字段、配置mtime晚于进程启动三类条件之一，未执行捕获。精确原生结果摘要5efa51848d28e4ecfda1c9c935241ca9b00abd5d168d2aaa76ccf013751e9de8。为区分条件，根任务独占同一evidence下environment-check-v1，复核者独占其中independent-review.json；有限正常管理员入口只读固定process.json和environment.json，校验所有权/权限/无链接/ACL/稳定字节，输出固定布尔值、类型数量及摘要，不输出配置键值、凭据正文或业务行。保持原guard，不执行签名、登记、服务操作或捕获；新environment-check-1目录保留现场。
+
+配置条件v1在执行前独立审阅发现server/migration解释器路径误用、父目录FD未持续持有及最终仅对比字节的问题，未执行并保留。根任务同范围独占environment-check-v2，独立复核者仅写其中independent-review.json：固定server解释器精确比较，固定父目录FD链与相对打开，前后字节和完整mtime/ctime/inode等stamp均保持才输出，原有权限和无ACL条件不变。
+
+配置条件v2已获正常macOS认证并完成：is_object=true、non_string_value_count=0、modified_after_process_start=false，唯一触发项为inline_credential_field_present=true；未输出凭据内容。受保护结果 /Library/TianmingERP-UAT-Export-v717-9a890345c0f7/environment-check-2/result.json。本地native-result.json及NAS只读诊断结论与配置条件v2已保留。原签名工具仍拒绝该来源，没有实际计划或副本；不修改正式配置、不删除原guard。后续兼容处理另固定代码和凭据边界，旧程序/管理员包保持。

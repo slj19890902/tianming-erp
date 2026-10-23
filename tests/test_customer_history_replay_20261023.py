@@ -71,6 +71,14 @@ def test_uninvoiced_same_order_can_reverse_and_rereceive_supplier_overage(
         statement = ok(c.post('/api/finance/statements', json=dict(
             customer_id=1, statement_month='2026-09', delivery_ids=[did])), 201)
         sid, rid = statement['id'], receipt['id']
+        if correct_report:
+            # Legacy delivered batches predate the cutting snapshot contract.
+            # Reversal must preserve that absence; re-entry gets a new report
+            # snapshot through ordinary reporting rather than fabricating one.
+            with factory() as db:
+                db.get(OrderItem, 1).sheet_cutting_settings_snapshot = None
+                db.get(SupplierRequisitionOrderItem, source.supplier_item_id).sheet_cutting_snapshot = None
+                db.commit()
         # The ordinary guards must remain closed until the downstream chain
         # has been explicitly reversed through its existing audited commands.
         assert _receive(c, source, price, quantity=10,
@@ -116,6 +124,7 @@ def test_uninvoiced_same_order_can_reverse_and_rereceive_supplier_overage(
                 assert line.report_width_mm == 435
                 assert db.get(SupplierRequisitionOrder, old_report_id).status == 'voided'
                 assert db.get(SupplierRequisitionOrderItem, old_line.id).report_width_mm == old_width
+                assert db.get(SupplierRequisitionOrderItem, old_line.id).sheet_cutting_snapshot is None
             # Explicitly retain the previously known per-sheet contract while
             # preserving the voided report and reversed original receipt.
             price = ok(_freeze_receipt_fact(c, source,

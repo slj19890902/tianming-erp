@@ -1,5 +1,6 @@
 from __future__ import annotations
 from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number, validate_sheet_dimensions
+from app.core.exact_money import price_value
 
 from app.services.business_transaction import commit_business_change
 
@@ -556,8 +557,8 @@ class ProductPayload(BaseModel):
 
     @field_validator("sale_unit_price")
     @classmethod
-    def round_sales_unit_price(cls, value):
-        return value.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP) if value is not None else None
+    def validate_sales_unit_price(cls, value):
+        return price_value(value) if value is not None else None
 
     cost_unit_price: Decimal | None = Field(default=None, ge=0)
     board_price: Decimal | None = Field(default=None, ge=0)

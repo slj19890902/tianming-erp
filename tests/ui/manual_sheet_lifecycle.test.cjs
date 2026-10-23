@@ -26,16 +26,16 @@ async function harness({post,get,removeAfterSuccess=true}={}){
   writes++;requests.push({url,payload:JSON.parse(JSON.stringify(payload))});return post?post(writes,url,payload):{data:{message:'成功',remaining_required_piece_qty:0}};
  }};
  context.TMManualSheetDeduction=window.TMManualSheetDeduction;
- const methods=vm.runInContext('({'+['manualSheetParentControlsBlocked','manualSheetPendingOperations','requisitionInventoryStatusMessage','requisitionInventoryCanReconcile','requisitionInventoryBaseActionBlocked','manualSheetDeductionDisabled','setManualSheetOperation','requisitionInventoryActionBlocked','requisitionInventoryActionLabel','resetRequisitionInventoryActionState','refreshRequisitionInventoryState','refreshManualBomSheetDeduction'].map(method).join(',')+'})',context);
+ const methods=vm.runInContext('({'+['manualSheetParentControlsBlocked','manualSheetPendingOperations','requisitionInventoryStatusMessage','requisitionInventoryCanReconcile','requisitionInventoryBaseActionBlocked','manualSheetDeductionDisabled','setManualSheetOperation','requisitionInventoryActionBlocked','requisitionInventoryActionLabel','resetRequisitionInventoryActionState','refreshRequisitionInventoryState','refreshManualBomSheetDeduction','openProductionMaterialAdjustment','refreshProductionMaterialAdjustment','returnProductionToRequisition'].map(method).join(',')+'})',context);
  const app=context.Vue.createApp({components:{sheet:window.TMManualSheetDeduction.component},
-  data(){return {user:{id:1},authGeneration:1,source:{order_item_id:1},showRow:true,manualSheetOperations:{},modal:null,requisitionForm:{items:[]},supplierRequisitionDraft:{supplier_groups:[]},toasts:[],
+  data(){return {productionMaterialAdjustment:{},canWarehouseReserve:true,canRequisition:true,productionBusy:false,user:{id:1},authGeneration:1,source:{order_item_id:1},showRow:true,manualSheetOperations:{},modal:null,requisitionForm:{items:[]},supplierRequisitionDraft:{supplier_groups:[]},toasts:[],
    requisitionInventoryActionState:{action:'',committed:false,outcomeUncertain:false,context:'',orderItemId:null,bomSnapshotId:null,targetKey:'',result:null}};},
   methods:{...methods,showToast(...a){this.toasts.push(a)},errorMessage(e){return e.message},async loadRequisition(){if(removeAfterSuccess)this.showRow=false;return true;}},
   template:'<div><button id="parent-action" :disabled="requisitionInventoryActionBlocked()">报料</button><sheet v-if="showRow" ref="sheet" :actor-id="1" :order-item-id="1" :disabled="manualSheetDeductionDisabled()" :operation-reporter="setManualSheetOperation" @operation-state="setManualSheetOperation($event)" @reserved="refreshManualBomSheetDeduction(source,$event)"/></div>'});
  const parent=app.mount(window.document.querySelector('#app'));
  const tick=async()=>{for(let i=0;i<5;i++){await Promise.resolve();await context.Vue.nextTick();}};
  await tick();const sheet=parent.$refs.sheet;await sheet.open();await tick();sheet.rows[0].selected=true;sheet.rows[0].inputQuantity=20;
- return {parent,sheet,tick,app,window,ui:window.TMManualSheetDeduction,requests,get writes(){return writes}};
+ return {parent,sheet,tick,app,window,ui:window.TMManualSheetDeduction,requests,get writes(){return writes},context};
 }
 test('real Vue: successful reserve removing the source row cannot strand the parent lock',async()=>{
  const fresh=deferred(),h=await harness({get:(n)=>n===1?{data:preview()}:fresh.promise});
@@ -116,5 +116,66 @@ test('late release removes only its original actor lock without unlocking anothe
   h.parent.setManualSheetOperation({identity:'1:order:1:whole',blocked:false});
   assert.deepEqual(Object.keys(h.parent.manualSheetOperations),['2:order:2:whole']);
   assert.equal(h.parent.manualSheetParentControlsBlocked(),true);
+ }finally{h.app.unmount();}
+});
+
+const adjustmentPreview=()=>({...preview(),adjustment_revision:'c'.repeat(64),existing_reservations:[{
+ reservation_id:42,lot_id:7,remaining_stock_quantity:10,keep_stock_quantity:10,can_adjust:true}]});
+test('real Vue: reducing stock to zero recovers the exact request after a lost response',async()=>{
+ const h=await harness({get:()=>({data:adjustmentPreview()}),removeAfterSuccess:false,
+  post:n=>{if(n===1)throw Error('lost response');return {data:{message:'用料调整成功',remaining_required_piece_qty:30}};}});
+ try{
+  h.sheet.preview.existing_reservations[0].keep_stock_quantity=0;
+  await h.sheet.confirmSelection();assert.equal(h.writes,0,'unsaved adjustment allowed new reserve');
+  await h.sheet.saveAdjustment();await h.tick();assert.equal(h.writes,1);
+  assert.match(h.requests[0].url,/manual-adjust$/);assert.equal(h.requests[0].payload.items[0].keep_stock_quantity,0);
+  assert.equal(h.parent.manualSheetParentControlsBlocked(),true);
+  h.sheet.preview.existing_reservations[0].keep_stock_quantity=3;
+  await h.sheet.submitHeld();await h.tick();
+  assert.deepEqual(h.requests[0],h.requests[1]);assert.equal(h.ui.pending.size,0);
+  assert.equal(h.sheet.opened,true);assert.equal(h.parent.manualSheetParentControlsBlocked(),false);
+ }finally{h.app.unmount();}
+});
+test('real Vue: confirmed adjustment with failed refresh cannot reuse the stale form',async()=>{
+ const h=await harness({get:n=>{if(n>1)throw Error('read failed');return {data:adjustmentPreview()};},removeAfterSuccess:false});
+ try{
+  h.sheet.preview.existing_reservations[0].keep_stock_quantity=5;
+  await h.sheet.saveAdjustment();await h.tick();
+  assert.equal(h.sheet.preview,null);assert.equal(h.ui.pending.size,0);assert.match(h.sheet.error,/已保存/);
+  await h.sheet.saveAdjustment();assert.equal(h.writes,1);
+ }finally{h.app.unmount();}
+});
+test('real Vue: production adjustment resolves true order item, not the production task id',async()=>{
+ const h=await harness();
+ try{
+  let requested;
+  h.window.axios.get=async url=>{requested=url;return {data:{items:[{id:8,product_id:3,snapshot_report_length_mm:100,snapshot_report_width_mm:50}]}};};
+  await h.parent.openProductionMaterialAdjustment({id:999,order_id:4,order_item_id:8,product_code:'TEST'});await h.tick();
+  assert.equal(requested,'/api/orders/4');assert.equal(h.parent.productionMaterialAdjustment.loading,false);
+  assert.equal(h.parent.productionMaterialAdjustment.targets[0].order_item_id,8);
+ }finally{h.app.unmount();}
+});
+test('real Vue: late production detail cannot populate a different actor modal',async()=>{
+ const response=deferred(),h=await harness();
+ try{
+  h.window.axios.get=()=>response.promise;
+  const work=h.parent.openProductionMaterialAdjustment({id:999,order_id:4,order_item_id:8});
+  h.parent.user={id:2};h.parent.authGeneration++;
+  response.resolve({data:{items:[{id:8,product_id:3}]}});await work;await h.tick();
+  assert.equal(h.parent.productionMaterialAdjustment.targets.length,0);
+ }finally{h.app.unmount();}
+});
+
+test('return to pending selects only the original order item and performs no new purchase write',async()=>{
+ const h=await harness();
+ try{
+  h.parent.productionMaterialAdjustment={row:{id:999,order_id:4,order_item_id:8},loading:false};
+  h.parent.go=async page=>{h.parent.activePage=page;};
+  h.parent.loadRequisition=async options=>{assert.equal(options.skipAutoRelease,true);return true;};
+  h.parent.requisitionPending=[{item_id:8},{item_id:9},{item_id:8,source_type:'stock_replenishment'}];
+  h.parent.isPendingRowSelectable=()=>true;h.parent.pendingRowKey=row=>'order:'+row.item_id;
+  await h.parent.returnProductionToRequisition();
+  assert.equal(h.parent.activePage,'requisition');assert.deepEqual(Array.from(h.parent.selectedPendingKeys),['order:8']);
+  assert.equal(h.writes,0);
  }finally{h.app.unmount();}
 });

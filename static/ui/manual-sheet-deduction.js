@@ -84,8 +84,8 @@
     line._manual_sheet_refresh_error=children.some(child=>child._manual_sheet_refresh_error);
   }
   const component = {
-    props:{actorId:{type:Number,default:0},snapshotId:{type:Number,default:0},orderItemId:{type:Number,default:0}, componentType:{type:String,default:'whole'},disabled:{type:Boolean,default:false},operationReporter:{type:Function,default:null}},
-    emits:['reserved','operation-state'],
+    props:{actorId:{type:Number,default:0},snapshotId:{type:Number,default:0},orderItemId:{type:Number,default:0}, componentType:{type:String,default:'whole'},disabled:{type:Boolean,default:false},operationReporter:{type:Function,default:null},allowRequisition:{type:Boolean,default:false}},
+    emits:['reserved','operation-state','requisition'],
     data() {return {opened:false,loading:false,busy:false,error:'',message:'',preview:null,rows:[],uncertain:false,matchMode:'auto',readSequence:0,mapLocation:null,useScrap:false,scrapQuantity:''};},
     created() {this.uncertain=pending.has(this.identity);},
     beforeUnmount() {this.disposed=true;this.readSequence++;},
@@ -98,10 +98,10 @@
         if(this.operationReporter)this.operationReporter(state);
         else this.$emit('operation-state',state);
       },
-      hold(payload,batch=false) {
+      hold(payload,batch=false,adjustment=false) {
         const identity=this.identity;
         pending.set(identity,{preview:this.preview,rows:this.rows,payload,matchMode:this.matchMode,batch,
-          endpoint:this.endpoint()+(batch?'/manual-reserve-batch':'/manual-reserve'),inFlight:false,
+          endpoint:this.endpoint()+(adjustment?'/manual-adjust':batch?'/manual-reserve-batch':'/manual-reserve'),adjustment,inFlight:false,
           resume:()=>this.resumeHeld(identity)});
       },
       locationName(row) {return row.warehouse_location?.location_name || row.warehouse_location?.name || row.warehouse_location?.location_code || '位置待核对';},
@@ -189,7 +189,7 @@
           if(this.identity!==identity || sequence!==this.readSequence)return;
           this.preview=data;this.rows=(data.items || []).map(row=>({...row,inputQuantity:'',selected:false}));this.uncertain=false;
           this.$nextTick?.(()=>this.$refs?.dialog?.focus());
-        } catch(error) {if(this.identity===identity && sequence===this.readSequence)this.error=this.errorText(error);}
+        } catch(error) {if(this.identity===identity && sequence===this.readSequence){this.preview=null;this.error=this.errorText(error);}}
         finally {if(this.identity===identity && sequence===this.readSequence)this.loading=false;}
       },
       focusDialog() {
@@ -213,8 +213,31 @@
         else if(!event.shiftKey && (active===last || active===panel)) {event.preventDefault();first.focus();}
       },
       errorText(error) {const detail=error.response?.data?.detail;return typeof detail==='string'?detail:(detail?.message || error.message || '库存操作失败');},
+      adjustmentChanges() {
+        return (this.preview?.existing_reservations || []).filter(row=>Number(row.keep_stock_quantity)!==Number(row.remaining_stock_quantity));
+      },
+      adjustmentValid() {
+        const changes=this.adjustmentChanges();
+        return changes.length>0 && changes.every(row=>row.can_adjust && row.keep_stock_quantity!=='' &&
+          Number.isSafeInteger(Number(row.keep_stock_quantity)) && Number(row.keep_stock_quantity)>=0 &&
+          Number(row.keep_stock_quantity)<Number(row.remaining_stock_quantity));
+      },
+      async saveAdjustment() {
+        if(this.busy || this.loading || this.disabled || this.uncertain || !this.adjustmentValid())return;
+        if(root.confirm && !root.confirm('确认减少未加工片料安排？减少部分退回可用库存，差额重新进入待报料；已采购和已完工记录保持原事实。'))return;
+        const payload={component_type:this.componentType,expected_adjustment_revision:this.preview.adjustment_revision,
+          idempotency_key:operationKey(),items:this.adjustmentChanges().map(row=>({
+            reservation_id:row.reservation_id,keep_stock_quantity:Number(row.keep_stock_quantity)}))};
+        this.hold(payload,false,true);
+        await this.submitHeld();
+      },
+      goRequisition() {
+        if(!this.allowRequisition || this.busy || this.loading || this.uncertain || this.disabled ||
+          this.adjustmentChanges().length || this.selection().length || !(this.preview?.remaining_required_piece_qty>0))return;
+        this.close();this.$emit('requisition',this.preview);
+      },
       async confirmSelection() {
-        if(this.busy || this.loading || this.disabled || this.uncertain || !this.totals().valid)return;
+        if(this.busy || this.loading || this.disabled || this.uncertain || this.adjustmentChanges().length || !this.totals().valid)return;
         const payload={component_type:this.componentType,match_mode:this.matchMode,
           expected_order_item_revision:this.preview.expected_order_item_revision,idempotency_key:operationKey(),
           items:this.selection().map(row=>({lot_id:row.lot_id,stock_quantity:chosenQuantity(row),expected_version:row.version,
@@ -268,38 +291,48 @@
           pending.delete(identity);
           this.reportOperation({identity,blocked:false});
           if(this.disposed || this.identity!==identity)return {outcome:'success'};
-          this.uncertain=false;this.message=data.message;this.preview={...this.preview,...data};this.rows=[];this.opened=false;
-          this.$nextTick?.(()=>{if(this.returnFocus?.isConnected)this.returnFocus.focus();});
+          this.uncertain=false;this.message=data.message;this.preview={...this.preview,...data};this.rows=[];this.opened=Boolean(held.adjustment);
+          this.$nextTick?.(()=>{if(held.adjustment)this.$refs?.dialog?.focus();else if(this.returnFocus?.isConnected)this.returnFocus.focus();});
           this.$emit('reserved',data);
           try {
             const {data:fresh}=await root.axios.get(this.endpoint()+'/manual-inventory',{params:{component_type:this.componentType,match_mode:'auto'},timeout:15000});
             if(this.disposed || this.identity!==identity)return {outcome:'success'};
             this.preview=fresh;this.rows=(fresh.items || []).map(item=>({...item,inputQuantity:'',selected:false}));this.matchMode='auto';this.$emit('reserved',fresh);
-          } catch(error) {if(this.identity===identity)this.error='抵扣已成功；库存列表刷新失败，请点击重新查看，不要重复抵扣。';}
+          } catch(error) {if(this.identity===identity){this.error=held.adjustment?'用料调整已保存；读取最新用料失败，请重新匹配后继续。':'抵扣已成功；库存列表刷新失败，请点击重新查看，不要重复抵扣。';if(held.adjustment)this.preview=null;}}
           return {outcome:'success'};
         } catch(error) {
           if(committed) {
-            if(!this.disposed && this.identity===identity)this.error='抵扣已成功；页面刷新失败，请重新查看库存，不要重复抵扣。';
+            if(!this.disposed && this.identity===identity)this.error=held.adjustment?'用料调整已保存；页面刷新失败，请重新查看。':'抵扣已成功；页面刷新失败，请重新查看库存，不要重复抵扣。';
             return {outcome:'success'};
           }
           const status=error.response?.status;
           if(status && status<500)pending.delete(identity);
           if(!this.disposed && this.identity===identity) {
-            if(status && status<500) {this.uncertain=false;this.rows=[];this.error=this.errorText(error)+'；请重新查看库存。';}
-            else {this.uncertain=true;this.error='抵扣结果暂未确认，请核对上次抵扣结果。';}
+            if(status && status<500) {this.uncertain=false;this.rows=[];this.preview=null;this.error=this.errorText(error)+'；请重新查看库存。';}
+            else {this.uncertain=true;this.error=held.adjustment?'用料调整结果暂未确认，请核对原请求。':'抵扣结果暂未确认，请核对上次抵扣结果。';}
           }
           return {outcome:status && status<500?'rejected':'unknown',message:this.errorText(error)};
         } finally {held.inFlight=false;if(this.identity===identity)this.busy=false;this.reportOperation({identity,blocked:pending.has(identity)});}
       }
     },
     template:`<section class="manual-sheet-deduction">
-      <button ref="trigger" type="button" class="btn small" :disabled="busy || (disabled && !uncertain)" @click="open">{{uncertain?'查看上次抵扣':'使用库存片料'}}</button>
+      <button ref="trigger" type="button" class="btn small" :disabled="busy || (disabled && !uncertain)" @click="open">{{uncertain?'核对上次片料操作':allowRequisition?'查看 / 调整片料':'使用库存片料'}}</button>
       <teleport to="body">
         <div v-if="opened" class="manual-sheet-backdrop" @click.self="close" @keydown="keydown">
           <section v-show="!mapLocation" ref="dialog" class="manual-sheet-dialog" role="dialog" aria-modal="true" :aria-labelledby="'sheet-title-'+identity" tabindex="-1">
             <header class="manual-sheet-head"><h3 :id="'sheet-title-'+identity">使用库存片料<span v-if="componentType!=='whole'"> · {{componentType==='cover'?'盖片':'底片'}}</span></h3><button class="btn small" type="button" aria-label="关闭使用库存片料" :disabled="busy" @click="close">关闭</button></header>
             <div class="manual-sheet-body" :aria-busy="loading || busy">
               <div v-if="preview" class="manual-sheet-demand"><strong>{{preview.product_code}} · {{preview.product_name}}</strong><span>所需箱片 {{preview.board_length_mm}} × {{preview.board_width_mm}} mm · {{preview.flute_type==='NONE'?'卡纸':preview.flute_type+' 瓦'}} · {{preview.material_code}}</span><b>待用箱片 {{preview.remaining_required_piece_qty}} 片</b></div>
+              <section v-if="preview?.existing_reservations?.length && !uncertain" class="manual-sheet-existing">
+                <strong>已安排片料</strong>
+                <div v-for="reservation in preview.existing_reservations" :key="reservation.reservation_id" class="manual-sheet-existing-row">
+                  <div>{{reservation.board_length_mm}} × {{reservation.board_width_mm}} · {{reservation.material_code}}<small>{{reservation.location_name}}</small></div>
+                  <label>保留采用 <input class="input" type="number" min="0" step="1" :max="reservation.remaining_stock_quantity" v-model="reservation.keep_stock_quantity" :disabled="busy || loading || disabled || !reservation.can_adjust" :aria-label="'保留采用张数 '+reservation.reservation_id"> 张</label>
+                  <small v-if="reservation.blocked_reason">{{reservation.blocked_reason}}</small>
+                </div>
+                <p>减少的张数退回可用库存，缺口重新报料；增加采用量请在下方选择可用片料。</p>
+                <button class="btn" type="button" :disabled="busy || loading || disabled || !adjustmentValid()" @click="saveAdjustment">保存用料调整</button>
+              </section>
               <p v-if="matchMode==='swapped'" class="manual-sheet-swap">长宽交换匹配 · 请核对本次使用方向</p>
               <p v-if="loading" role="status">正在查询匹配片料…</p>
               <p v-if="error" class="status orange" role="alert">{{error}}</p>
@@ -320,7 +353,7 @@
               <details v-if="preview?.scrap_completion_allowed && (useScrap || (selection().length && totals().uncovered>0)) && !uncertain" class="manual-sheet-special"><summary>少几张，用废料补足（特殊情况）</summary><label><input type="checkbox" v-model="useScrap" :disabled="busy" @change="selectScrap"> 缺少部分已用废料加工完成</label><label v-if="useScrap">合格成品 <input class="input" type="number" min="1" step="1" v-model="scrapQuantity" :disabled="busy" :max="Math.floor(totals().uncovered / Math.max(preview.pieces_per_box,1))"> {{preview.output_unit || '只'}}</label><p>仅填写已经做好的数量；沿用保存货位入库并用于本单。废料材料成本为0，人工沿现有工序计算。尚未完成时不勾选，保留真实缺口。</p></details>
             </div>
             <footer class="manual-sheet-foot"><div v-if="selection().length && !uncertain" class="manual-sheet-total"><strong>本次使用 {{totals().stock}} 张</strong><span>{{preview?.is_bom || componentType!=='whole'?'可出 '+totals().pieces+' 片部件':'可做 '+totals().boxes+' '+(preview?.output_unit || '只')}}</span><b :class="{'manual-sheet-covered':totals().remaining===0}">{{totals().remaining?'剩余 '+totals().remaining+' 片仍需安排':'抵扣后无需报料'}}</b><span v-if="totals().valid && totals().excess">完工后预计余 {{totals().excess}} 片入库存，订单数量不变</span><span v-if="!totals().valid" class="manual-sheet-invalid">请填写可用库存内的正整数；缺口覆盖后，无需再选其他批次。</span></div>
-              <div class="manual-sheet-buttons"><button v-if="!uncertain" class="btn" type="button" :disabled="busy || loading" @click="load('auto')">重新匹配</button><button class="btn" type="button" :disabled="busy" @click="close">取消</button><button class="btn primary" type="button" :disabled="busy || loading || uncertain || disabled || !totals().valid" @click="confirmSelection">{{busy?'正在抵扣…':'确认使用并抵扣'}}</button></div>
+              <div class="manual-sheet-buttons"><button v-if="!uncertain" class="btn" type="button" :disabled="busy || loading" @click="load('auto')">重新匹配</button><button v-if="allowRequisition && preview?.remaining_required_piece_qty>0 && !uncertain" class="btn" type="button" :disabled="busy || loading || disabled || adjustmentChanges().length>0 || selection().length>0" @click="goRequisition">去待报料补差额</button><button class="btn" type="button" :disabled="busy" @click="close">取消</button><button class="btn primary" type="button" :disabled="busy || loading || uncertain || disabled || adjustmentChanges().length>0 || !totals().valid" @click="confirmSelection">{{busy?'正在保存…':'确认使用并抵扣'}}</button></div>
             </footer>
           </section>
           <section v-if="mapLocation" ref="mapDialog" class="manual-sheet-dialog manual-sheet-map" role="dialog" aria-modal="true" aria-label="片料货位定位" tabindex="-1">

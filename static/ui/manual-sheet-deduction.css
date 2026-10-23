@@ -47,6 +47,11 @@
 .manual-sheet-special label { display: inline-flex; align-items: center; gap: 6px; margin: 10px 12px 0 0; }
 .manual-sheet-special input[type=number] { width: 95px; }
 .manual-sheet-special p { font-size: 12px; color: #475569; margin-bottom: 0; }
+.manual-sheet-existing { border:1px solid #cbd5e1; border-radius:8px; padding:14px; margin-bottom:18px; background:#f8fafc; }
+.manual-sheet-existing-row { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:10px 0; border-bottom:1px solid #e2e8f0; }
+.manual-sheet-existing-row small { display:block; color:#475569; margin-top:4px; }
+.manual-sheet-existing input { width:95px; min-height:44px; font-size:16px; }
+.manual-sheet-existing p { color:#475569; font-size:13px; line-height:1.6; }
 @media (max-width: 700px) {
   .manual-sheet-backdrop { padding: 10px; }
   .manual-sheet-dialog { max-height: calc(100dvh - 20px); }

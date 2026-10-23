@@ -6,11 +6,12 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import uuid
 
 from .storage import (sha,read_json,write_json,signed_release_manifest,decrypt_file,
     extract_verified,database_info)
-from .mac_service_restore import Lease
+from .mac_service_restore import Lease, _digest
 from . import mac_backup_storage as records
 
 ROOT=Path('/Library/TianmingERP/instance')
@@ -205,6 +206,49 @@ def _retention(manager,keep,context,*,allow_retained_proof=None):
         'retained':retained,'failures':failures,'protected':protected}
 
 
+def _boot_time_ns():
+    """Read the current macOS boot boundary; never infer it from wall-clock age."""
+    try:
+        result=subprocess.run(['/usr/sbin/sysctl','-n','kern.boottime'],
+            stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
+            timeout=5,check=True,cwd='/',env={'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','LC_ALL':'C'},close_fds=True)
+        match=re.fullmatch(rb'\{ sec = ([0-9]{1,12}), usec = ([0-9]{1,6}) \}[^\r\n]*\n?',result.stdout)
+        require(match is not None,'host boot boundary cannot be verified')
+        seconds,microseconds=map(int,match.groups())
+        require(seconds>0 and microseconds<1000000,'host boot boundary is invalid')
+        return seconds*1000000000+microseconds*1000
+    except (OSError,subprocess.SubprocessError):
+        raise ValueError('Local complete backup: host boot boundary cannot be verified') from None
+
+
+def _historical_identity_matches(held,value):
+    """Permit only a pre-boot dev number change, followed by caller's full FD hash.
+
+    dev numbers are not persistent mount identities. This does not certify a
+    historical volume UUID or change the current full Lease fingerprint.
+    """
+    fields={'dev','ino','uid','gid','mode','nlink','size','mtime_ns','ctime_ns'}
+    recorded=value.get('identity')
+    if (not isinstance(recorded,dict) or set(recorded)!=fields
+            or any(type(v) is not int for v in recorded.values())
+            or type(value.get('size')) is not int or value['size']<=0):return False
+    actual=held.check();current={key:getattr(actual,'st_'+key) for key in fields}
+    if current['size']!=recorded['size'] or current['size']!=value['size']:return False
+    changed={key for key in fields if current[key]!=recorded[key]}
+    if not changed:return True
+    if changed!={'dev'}:return False
+    try:
+        source=value['authenticated_recovery']['source_time']
+        created=datetime.fromisoformat(source)
+        if created.utcoffset() is None or value['verified_at']!=source:return False
+        boot=_boot_time_ns()
+        elapsed=created.astimezone(timezone.utc)-datetime(1970,1,1,tzinfo=timezone.utc)
+        created_ns=(elapsed.days*86400+elapsed.seconds)*1000000000+elapsed.microseconds*1000
+        return (0<created_ns<boot
+            and 0<recorded['mtime_ns']<boot and 0<recorded['ctime_ns']<boot)
+    except (KeyError,TypeError,ValueError,OverflowError,OSError):return False
+
+
 def _reconcile_previous_retention_locked(manager,index,context,policy_sha):
     """Recheck an old finalized receipt before refusing a fresh local capture."""
     require(isinstance(index,dict) and set(index)=={'receipt','sha256','source_time'},
@@ -217,9 +261,9 @@ def _reconcile_previous_retention_locked(manager,index,context,policy_sha):
         and str(path)==state.get('last_backup') and path.parent==manager.root/'backups',
         'previous local receipt publication changed')
     with Lease(path,uid=context['uid'],gid=context['gid'],mode=0o600) as held:
-        identity={key:getattr(os.fstat(held.fd),'st_'+key) for key in value['identity']}
-        require(identity==value['identity'] and sha(path)==value['sha256'],
+        require(_historical_identity_matches(held,value) and _digest(held.fd)==value['sha256'],
             'previous complete local cipher identity changed')
+        held.check()
     if value.get('retention',{}).get('status')!='one_complete':
         value['retention']=_retention(manager,path,context);write_json(receipt,value)
     require(value['retention']['status']=='one_complete','previous local retention needs owner closure')

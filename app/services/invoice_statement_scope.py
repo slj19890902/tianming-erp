@@ -48,3 +48,18 @@ task_statement_rows = union_all(
     select(_s.c.statement_id, _s.c.statement_version, _t.c.status).select_from(
         _t.join(_s, _s.c.task_id == _t.c.id)),
 ).subquery("task_statement_rows")
+
+
+def cent_invoice_completed(statement):
+    """Only an issued task for this source version can settle a rounding tail.
+
+    Manually entered/partial invoices retain the exact balance rule.
+    """
+    from sqlalchemy import func
+    return exists(select(task_statement_rows.c.statement_id).where(
+        task_statement_rows.c.statement_id == statement.id,
+        task_statement_rows.c.statement_version == statement.version,
+        task_statement_rows.c.status == 'issued',
+        func.tm_decimal_compare(statement.invoiced_amount,
+            func.tm_decimal_invoice_money(statement.total_receivable)) == 0,
+    ))

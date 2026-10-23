@@ -13,7 +13,9 @@ from app.models.customer import Customer
 from app.models.finance import Statement, StatementItem, SettlementRecord
 from app.models.invoice_task import FinanceInvoiceTask as Task, FinanceInvoiceTaskItem as Item, FinanceInvoiceTaskStatement as Share
 from app.models.user import User
-from app.services.invoice_statement_scope import task_shares, task_statement_filter
+from app.services.invoice_statement_scope import task_shares, task_statement_filter, cent_invoice_completed
+
+from app.services.invoice_exact_source import invoice_money, exact_full_statement
 
 MergePayload = api.PartnerMergePayload
 
@@ -32,7 +34,7 @@ def _partner_preview(db, statement_id, user, selected_ids=None):
             Statement.settlement_entity_id == anchor.settlement_entity_id,
             Statement.statement_month == anchor.statement_month,
             Statement.confirmation_status != "cancelled",
-            Statement.invoiced_amount < Statement.total_receivable)
+            Statement.invoiced_amount < Statement.total_receivable, ~cent_invoice_completed(Statement))
     else:
         ids = set(selected_ids)
         if len(ids) < 2 or len(ids) > 50 or statement_id not in ids or len(ids) != len(selected_ids):
@@ -67,7 +69,7 @@ def _partner_preview(db, statement_id, user, selected_ids=None):
         if tasks:
             task = tasks[0]
             share = next(s for s in task_shares(db, task) if s.statement_id == statement.id)
-            if share.statement_version != statement.version or share.total_amount != amount:
+            if share.statement_version != statement.version or share.total_amount != invoice_money(amount) or not exact_full_statement(db, task, statement):
                 blockers.append(f"{statement.statement_number} 冻结任务与账单版本或金额不一致")
             frozen.append((statement.id, [(t.id, t.version, t.status, t.source_snapshot_hash) for t in tasks]))
         else:
@@ -92,7 +94,7 @@ def _partner_preview(db, statement_id, user, selected_ids=None):
             "statement_month": statement.statement_month, "customer_name": "、".join(names) or db.get(Customer, statement.customer_id).name,
             "statement_version": statement.version, "ledger_version": statement.ledger_version,
             "confirmation_status": statement.confirmation_status,
-            "net_amount": net_amount, "tax_amount": tax_amount, "total_amount": amount, "task_ids": [t.id for t in tasks]})
+            "net_amount": net_amount, "tax_amount": tax_amount, "receivable_amount": amount, "total_amount": invoice_money(amount), "task_ids": [t.id for t in tasks]})
     if not rows:
         blockers.append("该账期已无可合并的未开票账单，请查看实际开票记录")
     scope_hash = api._snapshot_hash({"entity": anchor.settlement_entity_id,
@@ -147,6 +149,8 @@ def merge_partner_tasks(statement_id: int, payload: MergePayload,
                 active = [db.get(Task, created["id"])]
             for task in active:
                 api._ensure_task_source_current(db, task)
+                if not exact_full_statement(db, task, db.get(Statement, row["statement_id"])):
+                    raise HTTPException(409, "冻结开票明细与对账来源不一致，请核对原任务")
                 tasks[task.id] = task
         first = next(iter(tasks.values()))
         if len(tasks) == 1 and {s.statement_id for s in task_shares(db, first)} == ids:

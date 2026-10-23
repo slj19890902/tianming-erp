@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, Field, field_validator, model_validator
-from app.services.invoice_statement_scope import StatementInvoice, task_statement_filter, task_statement_rows
+from app.services.invoice_statement_scope import StatementInvoice, task_statement_filter, task_statement_rows, cent_invoice_completed
 from app.services.reconciliation_cycle import default_receipt_month
 from sqlalchemy import Numeric, and_, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -1417,7 +1417,7 @@ def list_statements(
     if statement_month:
         query = query.where(Statement.statement_month == statement_month)
     if balance_type == "pending_invoice":
-        query = query.where(Statement.total_receivable > Statement.invoiced_amount)
+        query = query.where(Statement.total_receivable > Statement.invoiced_amount, ~cent_invoice_completed(Statement))
     elif balance_type == "pending_payment":
         query = query.where(Statement.total_receivable > Statement.settled_amount)
     filtered = query.order_by(None).subquery()
@@ -4737,7 +4737,7 @@ def monthly_yearly_finance_report(
 
     pending_invoice_expression = case(
         (
-            Statement.total_receivable > Statement.invoiced_amount,
+            and_(Statement.total_receivable > Statement.invoiced_amount, ~cent_invoice_completed(Statement)),
             Statement.total_receivable - Statement.invoiced_amount,
         ),
         else_=0,
@@ -5405,6 +5405,7 @@ def project_customer_months(
 
     statement_query = (
         select(
+            cent_invoice_completed(Statement).label("cent_invoice_completed"),
             Statement.id,
             Statement.statement_number,
             Statement.customer_id,
@@ -5558,7 +5559,7 @@ def project_customer_months(
         invoiced = _money_value(statement["invoiced_amount"]) if is_confirmed else Decimal("0.00")
         settled = _money_value(statement["settled_amount"]) if is_confirmed else Decimal("0.00")
         confirmed_receivable = receivable if is_confirmed else Decimal("0.00")
-        invoice_balance = max(receivable - invoiced, Decimal("0.00")) if is_confirmed else Decimal("0.00")
+        invoice_balance = max(receivable - invoiced, Decimal("0.00")) if is_confirmed and not statement["cent_invoice_completed"] else Decimal("0.00")
         payment_balance = max(receivable - settled, Decimal("0.00")) if is_confirmed else Decimal("0.00")
         payment_action_balance = (
             max(min(invoiced, receivable) - settled, Decimal("0.00"))
@@ -5982,7 +5983,7 @@ def settled_customer_months(
             func.sum(
                 case(
                     (
-                        Statement.invoiced_amount < Statement.total_receivable,
+                        and_(Statement.invoiced_amount < Statement.total_receivable, ~cent_invoice_completed(Statement)),
                         1,
                     ),
                     else_=0,

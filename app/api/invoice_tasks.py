@@ -1807,11 +1807,24 @@ def _register_issued_invoice_task_result(
         if len(shares) > 1 and (payload.expected_ledger_versions is None or
             set(payload.expected_ledger_versions) != {s.statement_id for s in shares}):
             raise HTTPException(422, "合并开票必须提供全部来源账单的财务流水版本")
+        from app.services.invoice_exact_source import invoice_money, exact_full_statement
+        rounding_facts = []
         for share in shares:
+            source_statement = db.get(Statement, share.statement_id)
+            full_cent_invoice = (source_statement.invoiced_amount == 0
+                and share.total_amount == invoice_money(source_statement.total_receivable)
+                and exact_full_statement(db, task, source_statement))
+            if full_cent_invoice:
+                rounding_facts.append({"statement_id": share.statement_id,
+                    "exact_receivable": str(source_statement.total_receivable),
+                    "invoice_amount": str(share.total_amount),
+                    "rounding_difference": str(share.total_amount - source_statement.total_receivable),
+                    "rounding_rule": "ROUND_HALF_UP_0.01"})
             expected_ledger = (payload.expected_ledger_versions or {}).get(share.statement_id, payload.expected_ledger_version)
             # SQLite NUMERIC arithmetic can add a binary tail (0.1 + 0.2 > 0.3).
-            # Compare and store at the ledger's existing three-decimal precision;
-            # do not introduce a cent-sized tolerance or relax the atomic CAS.
+            # Keep the existing partial-invoice bound. A proven complete source
+            # may instead close at its exact HALF_UP cent invoice amount;
+            # this is equality, not an overdraft tolerance. CAS stays atomic.
             updated_statement = db.execute(
                 text(
                     """
@@ -1822,7 +1835,9 @@ def _register_issued_invoice_task_result(
                       AND confirmation_status = 'confirmed'
                       AND version = :statement_version
                       AND ledger_version = :expected_ledger_version
-                      AND ROUND(invoiced_amount + :amount, 3) <= ROUND(total_receivable, 3)
+                      AND (ROUND(invoiced_amount + :amount, 3) <= ROUND(total_receivable, 3)
+                           OR (:full_cent_invoice = 1 AND invoiced_amount = 0
+                               AND tm_decimal_compare(COALESCE(total_receivable_exact, tm_decimal_legacy(total_receivable, 3)), :source_receivable) = 0))
                     RETURNING id, total_receivable, invoiced_amount, settled_amount,
                               status, confirmation_status, version, ledger_version
                     """
@@ -1832,6 +1847,8 @@ def _register_issued_invoice_task_result(
                     "statement_version": share.statement_version,
                     "expected_ledger_version": expected_ledger,
                     "amount": str(share.total_amount),
+                    "full_cent_invoice": int(full_cent_invoice),
+                    "source_receivable": str(source_statement.total_receivable_exact) if source_statement.total_receivable_exact is not None else str(source_statement._total_receivable_legacy),
                 },
             ).mappings().one_or_none()
             if updated_statement is None:
@@ -1900,6 +1917,7 @@ def _register_issued_invoice_task_result(
                 "invoice_number": invoice.invoice_number,
                 "invoice_amount": task.total_amount,
                 "statement_shares": [{"statement_id": s.statement_id, "amount": str(s.total_amount)} for s in shares],
+                "full_statement_rounding": rounding_facts,
                 "expected_ledger_version": payload.expected_ledger_version,
                 "statement_version": updated_statement["version"],
                 "ledger_version": updated_statement["ledger_version"],

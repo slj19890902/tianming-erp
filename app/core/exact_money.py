@@ -4,7 +4,7 @@ Nullable text companions preserve new facts; untouched legacy rows retain their
 original Numeric interpretation. SQL arithmetic on these facts uses decimal
 functions too, so grouped totals cannot quietly fall back to SQLite REAL SUM.
 """
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import Decimal, InvalidOperation, localcontext, ROUND_HALF_UP
 import sqlite3
 
 from sqlalchemy import Text, event, func, literal, type_coerce
@@ -142,6 +142,9 @@ def _register_decimal_sql(connection, _record):
     if not isinstance(connection, sqlite3.Connection):
         return
     connection.create_aggregate('tm_decimal_sum', 1, _DecimalSum)
+    connection.create_function('tm_decimal_invoice_money', 1,
+        lambda value: None if value is None else money_text(
+            decimal_value(value).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)), deterministic=True)
     # Match the existing SQLAlchemy Numeric result processor for untouched
     # history. Reading a raw REAL via CAST(TEXT) could disagree with the old
     # two/three/six-place ORM read, changing a total when another line is edited.

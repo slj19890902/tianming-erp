@@ -2279,6 +2279,18 @@ class SemiReleasePayload(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=100)
 
 
+class ManualSheetAdjustmentItem(BaseModel):
+    reservation_id: int = Field(gt=0, strict=True)
+    keep_stock_quantity: int = Field(ge=0, strict=True)
+
+
+class ManualSheetAdjustmentPayload(BaseModel):
+    component_type: Literal['whole', 'cover', 'base'] = 'whole'
+    expected_adjustment_revision: str = Field(pattern=r'^[a-f0-9]{64}$')
+    idempotency_key: str = Field(min_length=8, max_length=80)
+    items: list[ManualSheetAdjustmentItem] = Field(min_length=1, max_length=50)
+
+
 class SemiProductAssignmentsPayload(BaseModel):
     expected_version: int = Field(gt=0)
     product_ids: list[int] = Field(default_factory=list, max_length=500)
@@ -4307,7 +4319,8 @@ def bom_manual_sheet_inventory(
     db: Session = Depends(get_db), user: User = Depends(can_view_reservations),
 ) -> dict:
     try:
-        return _bom_manual_sheet_state(db, bom_snapshot_id, component_type, user, match_mode)[3]
+        from app.services.manual_sheet_adjustment import describe
+        return describe(db, _bom_manual_sheet_state(db, bom_snapshot_id, component_type, user, match_mode), user)
     except WarehouseInventoryError as error:
         _handle(error)
 
@@ -4325,7 +4338,8 @@ def order_manual_sheet_inventory(order_item_id: int, component_type: Literal["wh
     match_mode: Literal['exact', 'swapped', 'auto'] = 'exact',
     db: Session = Depends(get_db), user: User = Depends(can_view_reservations)) -> dict:
     try:
-        return _order_manual_sheet_state(db, order_item_id, component_type, user, match_mode)[3]
+        from app.services.manual_sheet_adjustment import describe
+        return describe(db, _order_manual_sheet_state(db, order_item_id, component_type, user, match_mode), user)
     except WarehouseInventoryError as error:
         _handle(error)
 
@@ -4334,6 +4348,32 @@ def order_manual_sheet_inventory(order_item_id: int, component_type: Literal["wh
 def reserve_order_manual_sheet_inventory(order_item_id: int, payload: ManualSheetReservationPayload,
     db: Session = Depends(get_db), user: User = Depends(can_reserve)) -> dict:
     return _reserve_manual_sheet_inventory(order_item_id, payload, db, user, is_bom=False)
+
+
+@router.post('/semi-finished/order-items/{order_item_id}/manual-adjust')
+def adjust_order_manual_sheets(order_item_id: int, payload: ManualSheetAdjustmentPayload,
+    db: Session = Depends(get_db), user: User = Depends(can_reserve)) -> dict:
+    return _adjust_manual_sheets(order_item_id, payload, db, user, is_bom=False)
+
+
+@router.post('/semi-finished/bom-components/{bom_snapshot_id}/manual-adjust')
+def adjust_bom_manual_sheets(bom_snapshot_id: int, payload: ManualSheetAdjustmentPayload,
+    db: Session = Depends(get_db), user: User = Depends(can_reserve)) -> dict:
+    return _adjust_manual_sheets(bom_snapshot_id, payload, db, user, is_bom=True)
+
+
+def _adjust_manual_sheets(target_id, payload, db, user, *, is_bom):
+    from app.services.manual_sheet_adjustment import adjust
+    try:
+        result = adjust(db, target_id, payload, user, is_bom=is_bom)
+        db.commit()
+        return result
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _reserve_manual_sheet_inventory(target_id, payload, db, user, *, is_bom, commit=True):

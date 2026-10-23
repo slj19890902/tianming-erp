@@ -97,3 +97,53 @@ def test_manual_subcent_balance_is_not_silently_closed(fin001_app):
         pending = client.get('/api/finance/statements', params={'customer_id':1, 'balance_type':'pending_invoice'}).json()
         assert {row['id'] for row in pending['items']} == {1, 2}
         assert preview(client).json()['blockers']
+
+
+def test_twelve_line_statement_amounts_export_as_9107_03(fin001_app):
+    from app.models.finance import Statement, StatementItem, ReturnReceiptItem
+    from app.models.delivery import DeliveryItem
+    app, factory = fin001_app
+    groups = [
+        [(103,'4.41'),(200,'4.41'),(100,'5.8506'),(200,'3.26'),(200,'2.45'),
+         (100,'4.41'),(144,'2.3716'),(519,'3.92'),(1000,'1.029')],
+        [(300,'3.92'),(200,'1.96'),(210,'2.9988')],
+    ]
+    with TestClient(app) as client:
+        _login(client)
+        setup_customer(client, factory)
+        with factory() as db:
+            for sid, rows in enumerate(groups, 1):
+                original = db.scalar(select(StatementItem).where(StatementItem.statement_id == sid))
+                rr = db.get(ReturnReceiptItem, original.return_receipt_item_id).return_receipt_id
+                db.delete(original)
+                db.flush()
+                total = Decimal(0)
+                for sequence, (qty, price) in enumerate(rows):
+                    amount = qty * Decimal(price)
+                    total += amount
+                    delivery = DeliveryItem(delivery_id=sid, source_type='unordered_finished', product_id=1,
+                        delivered_quantity=qty, product_code_snapshot=f'EXACT-{sid}-{sequence}',
+                        product_name_snapshot='合成精确金额纸箱', unit_snapshot='只',
+                        unit_price_snapshot=Decimal(price), price_source='manual')
+                    db.add(delivery); db.flush()
+                    receipt = ReturnReceiptItem(return_receipt_id=rr, delivery_item_id=delivery.id,
+                        actual_received_quantity=qty)
+                    db.add(receipt); db.flush()
+                    db.add(StatementItem(statement_id=sid, source_customer_id=1,
+                        return_receipt_item_id=receipt.id, actual_received_quantity=qty,
+                        unit_price_snapshot=Decimal(price), unit_cost_snapshot=0,
+                        receivable_amount=amount, gross_profit_amount=0,
+                        price_tax_mode_snapshot='tax_inclusive', tax_rate_snapshot=Decimal('.13')))
+                db.get(Statement, sid).total_receivable = total
+            db.commit()
+        result, _ = merge(client, 'twelve-line-exact-amounts')
+        assert result.status_code == 201, result.text
+        task = result.json()
+        assert Decimal(str(task['total_amount'])) == Decimal('9107.03')
+        exported = client.get(f"/api/finance/invoice-tasks/{task['id']}/tax-template.xlsx")
+        assert exported.status_code == 200, exported.text
+        task = client.get(f"/api/finance/invoice-tasks/{task['id']}").json()
+        assert len(task['items']) == 12
+        assert sum(Decimal(str(row['quantity'])) for row in task['items']) == 3276
+        result = client.post(f"/api/finance/invoice-tasks/{task['id']}/result", json=issue_payload(task))
+        assert result.status_code == 200, result.text

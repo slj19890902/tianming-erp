@@ -206,14 +206,21 @@ def verify_sanitized(path: Path) -> dict:
             connection.close()
 
 
-def _no_secret_bytes(path, secrets):
-    patterns = {value.encode('utf-8') for value in secrets if value and value != DISABLED_PASSWORD}
+def _no_secret_bytes(path, secrets, *, ignore_disabled_password=True):
+    patterns = {value.encode('utf-8') for value in secrets
+                if value and (not ignore_disabled_password or value != DISABLED_PASSWORD)}
     if any(len(pattern) > 1024 * 1024 for pattern in patterns):
         raise ValueError('UAT credential size exceeds policy')
     # A SQLite overflow page can split a credential copied into a business
     # TEXT/BLOB value. Physical-byte searching alone would miss that value.
     connection = _read_database(path)
     try:
+        # Schema SQL and identifiers are retained too, and may span overflow
+        # pages. _columns intentionally excludes this internal table.
+        for row in connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_schema'):
+            for value in row:
+                if isinstance(value, str) and any(pattern in value.encode('utf-8') for pattern in patterns):
+                    raise ValueError('UAT database retains original credential bytes')
         for table, columns in _columns(connection).items():
             names = ','.join(_quote(column[1]) for column in columns)
             for row in connection.execute('SELECT ' + names + ' FROM ' + _quote(table)):
@@ -231,6 +238,39 @@ def _no_secret_bytes(path, secrets):
             if any(pattern in data for pattern in patterns):
                 raise ValueError('UAT database retains original credential bytes')
             tail = data[-(longest - 1):] if longest > 1 else b''
+
+
+def verify_credential_values_absent(path, values, *, database=False, json_document=False):
+    """Reject known inline UTF-8 credential bytes without rewriting any payload.
+
+    Database checking also visits logical TEXT/BLOB cells, including overflow
+    pages. Other files are checked as raw bytes, not decoded document formats.
+    The caller must bind values to the approved source environment digest.
+    """
+    if (not isinstance(values, tuple) or any(not isinstance(v, str) for v in values)
+            or sum(len(v.encode('utf-8')) for v in values) > 65536):
+        raise ValueError('UAT inline credential patterns exceed fixed policy')
+    with _private_file(path) as (bound, fd, check):
+        if database:
+            _no_secret_bytes(bound, values, ignore_disabled_password=False)
+        elif json_document:
+            from desktop_assistant.uat_export_contract import MAX_MANIFEST, reject_credential_json
+            chunks = []; size = 0
+            while chunk := os.read(fd, min(1024*1024, MAX_MANIFEST+1-size)):
+                chunks.append(chunk); size += len(chunk)
+                if size > MAX_MANIFEST:
+                    raise ValueError('UAT JSON payload exceeds fixed policy')
+            reject_credential_json(values, b''.join(chunks))
+        else:
+            patterns = {v.encode('utf-8') for v in values if v}
+            longest = max(map(len, patterns), default=1)
+            tail = b''
+            while chunk := os.read(fd, 1024 * 1024):
+                data = tail + chunk
+                if any(pattern in data for pattern in patterns):
+                    raise ValueError('UAT payload retains known inline credential bytes')
+                tail = data[-(longest - 1):] if longest > 1 else b''
+        check()
 
 
 def sanitize(source_snapshot: Path, target: Path) -> dict:

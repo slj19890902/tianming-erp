@@ -48,15 +48,13 @@ def inspect_source(context, public, folders, recheck):
         raise ValueError('运行实例身份与签名当前程序不符')
     ready = c.read(c.ROOT/'control'/(str(process.get('nonce'))+'.ready'), uid=context['uid'], limit=64)
     if ready != str(process['pid']).encode(): raise ValueError('运行实例尚未完成启动')
-    # Read only the non-secret managed path configuration, never any referenced
-    # secret/config file. Reject inline credentials; none are copied or emitted.
+    # Parse shared configuration privately and retain only six path settings.
+    # Known inline values never enter this source result or a copied config.
     env_path = c.ROOT/'shared/environment.json'
     env_raw = c.read(env_path, uid=context['uid'], limit=boot.LIMIT)
-    environment = _json(env_raw)
-    if (not isinstance(environment, dict) or any(not isinstance(v, str) for v in environment.values())
-            or any(k.upper() in {'ERP_SECRET_KEY','OPENAI_API_KEY','DEEPSEEK_API_KEY'} for k in environment)
-            or env_path.stat().st_mtime > process['created']):
-        raise ValueError('运行路径配置不符合无内联凭据合同或启动后曾变化')
+    environment = c.environment_paths(env_raw)
+    if env_path.stat().st_mtime > process['created']:
+        raise ValueError('运行路径配置在启动后曾变化')
     shared = c.ROOT/'shared'
     # Logical DB references only identify real files when their runtime roots
     # agree. Do not export stale files left in a default directory after an
@@ -84,7 +82,9 @@ def inspect_source(context, public, folders, recheck):
         'revision': versions[0][0], 'state_sha256': c.digest(state_raw),
         'process_sha256': c.digest(process_raw), 'environment_sha256': c.digest(env_raw),
         'map_relative': map_relative, 'pid': process['pid'], 'process_created': process['created']}
-    c.validate_source(result); recheck()
+    c.validate_source(result)
+    c.reject_environment_credentials(env_raw, c.canonical(result))
+    recheck()
     return result
 
 
@@ -166,6 +166,10 @@ def _hash_file(path, uid):
 def capture(plan, context, source, verify_source):
     c.validate_plan(plan, check_home_acl=False)
     if source != plan['source']: raise ValueError('预览后的完整来源身份已变化')
+    environment = c.read(c.ROOT/'shared/environment.json', uid=context['uid'], limit=boot.LIMIT)
+    if c.digest(environment) != source['environment_sha256']:
+        raise ValueError('捕获前运行配置身份变化')
+    credentials = c.environment_credentials(environment)
     work = c.staging(plan['attempt_id'])
     work.mkdir(mode=0o700)  # Any failed/successful attempt is never overwritten.
     payload = work/'payload'; payload.mkdir(mode=0o700)
@@ -218,8 +222,15 @@ def capture(plan, context, source, verify_source):
         'pii_anonymized':False,'source_business_written':False,'service_stopped':False,
         'map_consistency':'unchanged-across-capture-window',
         'attachment_scope':'registered drawing/PDF/shared-file/invoice references only; no twin database'}
+    receipt['environment_credential_check'] = {'policy': c.ENVIRONMENT_POLICY,
+        'environment_sha256': source['environment_sha256'], 'checked': True}
     raw = c.canonical(receipt)
     if len(raw) > c.MAX_MANIFEST: raise ValueError('导出回执超过上限')
+    from desktop_assistant.uat_export_sanitize import verify_credential_values_absent
+    for name in files:
+        verify_credential_values_absent(payload/name, credentials,
+            database=name=='database.sqlite3', json_document=name=='layout.json')
+    c.reject_credential_json(credentials, raw)
     with (payload/'receipt.json').open('xb') as stream:
         stream.write(raw); stream.flush(); os.fsync(stream.fileno())
     return {'receipt_sha256':c.digest(raw),'files':len(files),'bytes':sum(f['bytes'] for f in files.values())}

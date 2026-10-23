@@ -24,6 +24,8 @@ def scene(tmp_path, monkeypatch):
     base = tmp_path/'system'; base.mkdir(mode=0o755)
     root = base/'instance'; root.mkdir(mode=0o700)
     for folder in ('shared','staging','control'): (root/folder).mkdir(mode=0o700)
+    environment = c.canonical({})
+    (root/'shared/environment.json').write_bytes(environment)
     data = root/'shared/data'; data.mkdir(mode=0o700)
     (data/'layout_runtime').mkdir(mode=0o700)
     (data/'layout_runtime/twin_layout_v1.json').write_text('{"floors":[{"id":"real-runtime-map"}]}')
@@ -44,7 +46,7 @@ def scene(tmp_path, monkeypatch):
     who = {'uid':os.getuid(),'gid':os.getgid(),'name':'kimiyf','home':str(home)}
     monkeypatch.setattr(c,'recipient',lambda **kwargs:dict(who))
     source = {'application_package_sha256':'a'*64,'application_git_sha':'b'*40,'revision':'ez1022hc',
-        'state_sha256':'c'*64,'process_sha256':'d'*64,'environment_sha256':'e'*64,
+        'state_sha256':'c'*64,'process_sha256':'d'*64,'environment_sha256':c.digest(environment),
         'map_relative':'data/layout_runtime/twin_layout_v1.json','pid':1234,'process_created':time.time()-30}
     now = int(time.time())
     plan = {'type':c.PLAN_TYPE,'task':c.TASK,'attempt_id':'1'*32,'created_at':now,'expires_at':now+3600,
@@ -350,8 +352,11 @@ def test_source_inspection_binds_runtime_storage_and_never_reads_credentials(sce
     for name in ('ERP_FILE_STORAGE_DIR','ERP_LEGACY_UPLOAD_DIR','ERP_PDF_TRAINING_DIR','ERP_INVOICE_ATTACHMENT_DIR','ERP_SUPPLIER_INVOICE_ATTACHMENT_DIR'):
         (root/'shared/environment.json').write_bytes(c.canonical({**env,name:'/tmp/other'}))
         with pytest.raises(ValueError,match='原件运行路径'): w.inspect_source(a['context'],b'public',{'root':object()},lambda:None)
-    (root/'shared/environment.json').write_bytes(c.canonical({**env,'ERP_SECRET_KEY':'synthetic-blocked'}))
-    with pytest.raises(ValueError,match='内联凭据'): w.inspect_source(a['context'],b'public',{'root':object()},lambda:None)
+    (root/'shared/environment.json').write_bytes(c.canonical({**env,'ERP_SECRET_KEY':'synthetic-private-not-emitted'}))
+    result=w.inspect_source(a['context'],b'public',{'root':object()},lambda:None)
+    assert b'synthetic-private-not-emitted' not in c.canonical(result)
+    (root/'shared/environment.json').write_bytes(c.canonical({**env,'ERP_UNKNOWN_TOKEN':'synthetic-blocked'}))
+    with pytest.raises(ValueError,match='未审阅的字段'): w.inspect_source(a['context'],b'public',{'root':object()},lambda:None)
 
 
 @pytest.mark.parametrize('extra',[['--observer-uid','0'],['--file','/tmp/arbitrary'],['--management-action','backup']])

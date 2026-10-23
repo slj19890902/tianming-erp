@@ -15,14 +15,15 @@ import stat
 import time
 
 TASK = 'DELIVERY-FULFILLMENT-FACTS-20261022'
-CAPABILITY = 'controlled_uat_export_20261022_v1'
+CAPABILITY = 'controlled_uat_export_20261023_v2'
 BASE = Path('/Library/TianmingERP')
 ROOT = BASE / 'instance'
 RECIPIENT_UID = 501
 RECIPIENT_NAME = 'kimiyf'
 RECIPIENT_HOME = Path('/Users/kimiyf')
 OUTPUT = RECIPIENT_HOME / 'ERP-Migration/isolated-sources/delivery-fulfillment-20261022'
-POLICY = 'tianming.uat-credentials.v1'
+POLICY = 'tianming.uat-credentials.v2'
+ENVIRONMENT_POLICY = 'tianming.uat-environment-credentials.v1'
 PLAN_TYPE = 'tianming.controlled-uat-export-plan.v1'
 RECEIPT_TYPE = 'tianming.controlled-uat-export-receipt.v1'
 ACTIONS = frozenset({'inspect-uat', 'export-uat'})
@@ -45,6 +46,110 @@ MAX_MANIFEST = 16 * 1024**2
 ORIGINAL_ROOTS = ('data/private_uploads/', 'data/pdf_training_samples/',
                   'data/invoice_attachments/', 'data/supplier_invoice_attachments/', 'legacy_uploads/')
 HOME_DENY_DELETE_ACL = b'!#acl 1\ngroup:ABCDEFAB-CDEF-ABCD-EFAB-CDEF0000000C:everyone:12:deny:delete\n'
+ENVIRONMENT_PATHS = frozenset({'ERP_FILE_STORAGE_DIR', 'ERP_LEGACY_UPLOAD_DIR',
+    'ERP_PDF_TRAINING_DIR', 'ERP_INVOICE_ATTACHMENT_DIR',
+    'ERP_SUPPLIER_INVOICE_ATTACHMENT_DIR', 'ERP_TWIN_LAYOUT_RUNTIME_PATH'})
+INLINE_CREDENTIALS = frozenset({'ERP_SECRET_KEY', 'OPENAI_API_KEY', 'DEEPSEEK_API_KEY'})
+CREDENTIAL_REFERENCES = frozenset({'ERP_SECRET_KEY_FILE'})
+# These names have concrete non-credential roles in config.py, import_existing,
+# gui network settings and Manager. Unknown settings are not guessed safe.
+IGNORED_ENVIRONMENT_FIELDS = frozenset({'ERP_ADDITIONAL_PRIVATE_HTTP_ORIGINS',
+    'ERP_ALLOWED_ORIGINS', 'ERP_BACKUP_DIR', 'ERP_BIND_HOST', 'ERP_BROWSER_URL',
+    'ERP_DATABASE_PATH', 'ERP_ENVIRONMENT', 'ERP_HEALTH_URL', 'ERP_LAN_HTTP_ORIGIN',
+    'ERP_PORT', 'ERP_PRODUCTION_TRANSPORT', 'ERP_SESSION_COOKIE_NAME',
+    'ERP_SESSION_COOKIE_SECURE', 'ERP_SESSION_EXPIRE_MINUTES', 'ERP_SQLITE_BUSY_TIMEOUT_MS',
+    'ERP_TRUSTED_HOSTS', 'ERP_TRUSTED_PROXY_IPS', 'ERP_WORKERS',
+    'ERP_AI_INVENTORY_MODEL', 'ERP_AI_INVENTORY_PROVIDER', 'ERP_HOME_REHEARSAL',
+    'ERP_FACTORY_ACTIVATION_SHA256', 'ERP_FACTORY_PACKAGE_SHA256'})
+
+
+def _environment(raw):
+    """Private parse only. Never return this dictionary in a plan or receipt."""
+    if not isinstance(raw, bytes) or not 0 < len(raw) <= 65536:
+        raise ValueError('运行配置长度不符合固定合同')
+    def unique(pairs):
+        result = {}
+        folded = set()
+        for name, value in pairs:
+            if name.upper() in folded:
+                raise ValueError('运行配置有重复或歧义字段')
+            folded.add(name.upper())
+            result[name] = value
+        return result
+    try:
+        value = json.loads(raw, object_pairs_hook=unique,
+            parse_constant=lambda _: (_ for _ in ()).throw(ValueError('运行配置数值无效')))
+    except (UnicodeError, json.JSONDecodeError):
+        raise ValueError('运行配置格式无效') from None
+    if not isinstance(value, dict) or any(not isinstance(v, str) for v in value.values()):
+        raise ValueError('运行配置必须为字符串字典')
+    for name in value:
+        if name not in ENVIRONMENT_PATHS | CREDENTIAL_REFERENCES | IGNORED_ENVIRONMENT_FIELDS and name.upper() not in INLINE_CREDENTIALS:
+            raise ValueError('运行配置含未审阅的字段')
+    reference = value.get('ERP_SECRET_KEY_FILE')
+    if reference is not None and reference.replace('${SHARED}', str(ROOT/'shared')) != str(ROOT/'shared/data/session_secret.key'):
+        # This exact file is outside every original root and map directory.
+        # A credential reference cannot become an indirectly copied original.
+        raise ValueError('凭据文件引用不属于固定非导出位置')
+    try:
+        for item in value.values(): item.encode('utf-8')
+    except UnicodeError:
+        raise ValueError('运行配置文本编码无效') from None
+    return value
+
+
+def environment_paths(raw):
+    """Only six approved path settings survive; no credential is projected."""
+    return {k: v for k, v in _environment(raw).items() if k in ENVIRONMENT_PATHS}
+
+
+def environment_credentials(raw):
+    """Known inline values remain private in worker/root memory for rejection scans.
+
+    This never follows secret-file references or reads a credential store.
+    No caller may serialize the result or pass it to a recipient-owned process.
+    """
+    values = set()
+    for key, value in _environment(raw).items():
+        if key.upper() in INLINE_CREDENTIALS:
+            # ERP config strips its inline key. Reject both stored and effective
+            # forms; no value is emitted merely to explain a mismatch.
+            expanded = value.replace('${SHARED}', str(ROOT/'shared'))
+            values.update(v for v in (value, value.strip(), expanded, expanded.strip()) if v)
+    if sum(len(v.encode('utf-8')) for v in values) > 65536:
+        raise ValueError('运行凭据派生匹配范围超过固定上限')
+    return tuple(sorted(values))
+
+
+def reject_environment_credentials(raw, payload):
+    """Check a bounded public status/plan before it crosses the UID boundary."""
+    reject_credential_json(environment_credentials(raw), payload)
+
+
+def reject_credential_json(values, payload):
+    """Check raw and decoded JSON strings/keys, without reporting their content."""
+    if not isinstance(payload, bytes) or not 0 < len(payload) <= MAX_MANIFEST:
+        raise ValueError('导出JSON核对长度无效')
+    if any(value.encode('utf-8') in payload for value in values):
+        raise ValueError('导出元信息残留已知内联凭据')
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result: raise ValueError('导出JSON包含重复字段')
+            result[key] = value
+        return result
+    try:
+        decoded = json.loads(payload, object_pairs_hook=unique,
+            parse_constant=lambda _: (_ for _ in ()).throw(ValueError('导出JSON数值无效')))
+    except (ValueError, UnicodeError, RecursionError):
+        raise ValueError('导出JSON核对格式无效') from None
+    pending = [decoded]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str) and any(value in item for value in values):
+            raise ValueError('导出元信息残留已知内联凭据')
+        if isinstance(item, dict): pending.extend(item.keys()); pending.extend(item.values())
+        elif isinstance(item, list): pending.extend(item)
 
 
 def canonical(value):

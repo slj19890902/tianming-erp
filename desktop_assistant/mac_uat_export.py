@@ -90,6 +90,10 @@ def make_plan(package):
     if metadata(package)[1] != supervisor or c.recipient() != who:
         raise ValueError('生成计划期间监护或控制台身份变化')
     raw = c.canonical(plan)
+    environment = c.read(c.ROOT/'shared/environment.json', uid=meta['context']['uid'], limit=boot.LIMIT)
+    if c.digest(environment) != source['environment_sha256']:
+        raise ValueError('生成计划期间运行配置身份变化')
+    c.reject_environment_credentials(environment, raw)
     # A public plan contains no business rows, original names or secrets.
     # It is immutable, root-owned, and bound by explicit SHA at apply.
     boot._write(c.plan_path(task_attempt), raw, mode=0o644)
@@ -203,6 +207,8 @@ def _receipt(raw, plan, capture):
             or value.get('type') != c.RECEIPT_TYPE or value.get('task') != c.TASK
             or value.get('attempt_id') != plan['attempt_id'] or value.get('source') != plan['source']
             or value.get('plan_sha256') != c.digest(c.canonical(plan))
+            or value.get('environment_credential_check') != {'policy': c.ENVIRONMENT_POLICY,
+                'environment_sha256': plan['source']['environment_sha256'], 'checked': True}
             or value.get('pii_anonymized') is not False
             or value.get('source_business_written') is not False or value.get('service_stopped') is not False):
         raise ValueError('成品来源回执不属于批准计划')
@@ -226,7 +232,11 @@ def deliver(plan, meta, capture):
     source = c.staging(plan['attempt_id'])/'payload'; uid = meta['context']['uid']
     raw = c.read(source/'receipt.json',uid=uid)
     receipt = _receipt(raw,plan,capture)
-    from desktop_assistant.uat_export_sanitize import verify_sanitized
+    from desktop_assistant.uat_export_sanitize import verify_sanitized, verify_credential_values_absent
+    environment = c.read(c.ROOT/'shared/environment.json', uid=uid, limit=boot.LIMIT)
+    if c.digest(environment) != plan['source']['environment_sha256']:
+        raise ValueError('管理员复核前运行配置身份变化')
+    credentials = c.environment_credentials(environment)
     # Validate within the protected service staging chain, not via a pathname
     # below a user-writable parent. The later FD copy is bound to this hash.
     with c.regular(source/'database.sqlite3',uid=uid):
@@ -272,6 +282,13 @@ def deliver(plan, meta, capture):
                 os.fsync(target)
                 if count != info['bytes'] or digest.hexdigest() != info['sha256']:
                     raise ValueError('成品复制摘要不符；目录保持 root 私有')
+            anchored()
+            # Recheck the actual root-private copied bytes, not a worker claim.
+            private_payload = c.BASE/('uat-export-delivery-'+name)/'payload'
+            for relative in members:
+                verify_credential_values_absent(private_payload/relative, credentials,
+                    database=relative=='database.sqlite3',
+                    json_document=relative in {'layout.json', 'receipt.json'})
             anchored()
             # Revalidate plan + installed identities after all IO, before the
             # sole access grant. No formal permissions are modified.

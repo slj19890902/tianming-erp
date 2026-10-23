@@ -11,11 +11,18 @@ import zipfile
 
 import pytest
 
-ENTRY = Path(__file__).resolve().parents[2] / 'scripts/admin/controlled_uat_admission_v717.py'
-spec = importlib.util.spec_from_file_location('admission_under_test', ENTRY)
-s = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(s)
+s = None
 NAMES = {'app/__init__.py', 'desktop_assistant/__init__.py', 'desktop_assistant/mac_keychain_install.py'}
+
+
+@pytest.fixture(autouse=True, params=['controlled_uat_admission_v717.py',
+                                     'controlled_uat_env_compat_admission_v717.py'])
+def fixed_admission(request, monkeypatch):
+    entry = Path(__file__).resolve().parents[2] / 'scripts/admin' / request.param
+    spec = importlib.util.spec_from_file_location('admission_under_test', entry)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setitem(globals(), 's', module)
 
 
 def package(monkeypatch, *, change=None):

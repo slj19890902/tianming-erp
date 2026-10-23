@@ -1,0 +1,16 @@
+{
+  "as_of": "2026-10-23T01:54:37.357259+00:00",
+  "system_cleanup_freed_bytes": 59185487872,
+  "worktree_cleanup_freed_bytes": 12941967360,
+  "available_bytes": 122060800000,
+  "goal_available_bytes": 200000000000,
+  "goal_met": false,
+  "github_archives_verified": 83,
+  "worktrees_removed": 44,
+  "native_sha256": "952f85be1464ad004c8d03bc2efda3ec1869489a36ed6235c263e2efbf9c4929",
+  "service_stopped": false,
+  "business_data_written": false,
+  "historical_missing_backups": 4,
+  "maintenance_and_backup_timers_resumed": true,
+  "protected_inventory": "awaiting additional read-only system verification"
+}

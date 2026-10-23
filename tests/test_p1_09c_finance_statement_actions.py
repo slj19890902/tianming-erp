@@ -16,12 +16,14 @@ def _method_body(signature: str, next_signature: str) -> str:
 
 
 def test_finance_statement_actions_show_busy_labels_and_disable_parallel_actions() -> None:
-    finance = next(line for line in INDEX.splitlines() if '@click="confirmAndDownloadStatement(statement)"' in line)
-    assert "financeStatementOperationState.action" in finance
-    assert "financeStatementOperationState.statementId" in finance
-    assert "办理中…" in finance
-    assert "下载中…" in finance
-    assert finance.count(":disabled=") >= 2
+    start = INDEX.index('<tbody v-for="row in financeCurrentRows"')
+    finance = INDEX[start:INDEX.index("financeView==='invoice_tasks'", start)]
+    for action in ('exportAndConfirmStatement(statement)', 'openFinanceInvoice(statement)'):
+        line = next(line for line in finance.splitlines() if f'@click="{action}"' in line)
+        assert 'financeStatementOperationState.action' in line
+        assert ':disabled=' in line
+    assert '导出并确认对账' in finance
+    assert '去开票' in finance
 
 
 def test_confirm_and_generate_invoice_task_are_single_flight_and_freeze_payload(
@@ -50,9 +52,11 @@ let taskLoads = 0;
 const messages = [];
 const vm = {{
   financeView:"current",
+  canGenerateInvoiceTask:true,
   financeStatementOperationState:{{action:"",statementId:null}},
   async loadFinance() {{ financeLoads += 1; return true; }},
   async loadInvoiceTasks() {{ taskLoads += 1; return true; }},
+  async openInvoiceTask(task) {{ this.openedTask=task; return true; }},
   errorMessage(error) {{ return error?.message || String(error); }},
   showToast(message, danger=false) {{ messages.push({{message,danger}}); }}
 }};
@@ -85,7 +89,7 @@ vm.generateInvoiceTask = new AsyncFunction("row", {json.dumps(generate_body, ens
   if (pending[1].payload.idempotency_key !== "KEY-1" || idempotencyCalls !== 1) throw new Error("task generation did not freeze one idempotency key");
   if (await duplicateGeneratePromise !== false) throw new Error("duplicate task generation was not rejected");
   pending[1].resolve({{data:{{id:88}}}});
-  if (await generating !== true || taskLoads !== 1 || vm.financeView !== "invoice_tasks" || vm.financeStatementOperationState.action) {{
+  if (await generating !== true || financeLoads !== 2 || taskLoads !== 0 || vm.openedTask?.id !== 88 || vm.financeView !== "current" || vm.financeStatementOperationState.action) {{
     throw new Error("task generation did not navigate, refresh and unlock");
   }}
 
@@ -127,6 +131,7 @@ globalThis.axios = {{ post(url, payload) {{ return new Promise((resolve, reject)
 const messages = [];
 const vm = {{
   financeStatementOperationState:{{action:"",statementId:null}},
+  canConfirmStatement:true,
   exportSucceeded:false,
   async exportStatement() {{ return this.exportSucceeded; }},
   async loadFinance() {{ return true; }},

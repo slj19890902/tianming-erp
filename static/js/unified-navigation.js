@@ -26,7 +26,7 @@
       add('warehouse:molds', '模具与印版', vm.warehouseView === 'ledger' && ['molds','printing_plates'].includes(vm.warehouseLedgerTab), true);
     } else if (vm.activePage === 'finance' && allowedPage(vm, 'finance')) {
       label = '对账与开票';
-      [['overview','经营概览'],['current','客户对账'],['invoice_tasks','开票办理'],['collections','收款办理'],['payables','供应商付款'],['expenses','日常费用']].forEach(([key,title], index) => {
+      [['overview','经营概览'],['current','对账开票'],['invoice_tasks','发票记录'],['collections','收款办理'],['payables','供应商付款'],['expenses','日常费用']].forEach(([key,title], index) => {
         if (key === 'invoice_tasks' && !vm.canViewInvoiceTasks || key === 'expenses' && !vm.canViewFinanceCosts) return;
         add('finance:'+key,title,vm.financeView === key,index > 2);
       });

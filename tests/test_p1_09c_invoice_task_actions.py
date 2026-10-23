@@ -128,7 +128,7 @@ vm.retryInvoiceTaskDetail = new AsyncFunction({json.dumps(retry_body, ensure_asc
 
 def test_invoice_task_confirm_and_result_save_are_single_flight(tmp_path: Path) -> None:
     confirm_body = _method_body(
-        "async confirmInvoiceTask(task) {", "async openPartnerInvoiceMerge(statementId) {"
+        "async confirmInvoiceTask(task) {", "async openCustomerInvoiceMerge(statementId) {"
     )
     save_body = _method_body(
         "async saveInvoiceTaskResult() {", "uploadInvoiceTaskPdf(task) {"
@@ -148,6 +148,7 @@ const vm = {{
   invoiceTaskResult:{{task_id:20,status:"issued",invoice_number:"INV-001",invoice_date:"2026-08-05",failure_reason:"",expected_version:7,expected_ledger_version:4}},
   async loadInvoiceTasks() {{ return true; }},
   async loadFinance() {{ return true; }},
+  async setFinanceView(view, filters) {{ this.financeView=view; this.financeFilters=filters; return true; }},
   closeModal() {{ this.modal = null; }},
   errorMessage(error) {{ return error?.message || String(error); }},
   showToast(message, danger=false) {{ messages.push({{message,danger}}); }}
@@ -184,7 +185,7 @@ vm.saveInvoiceTaskResult = new AsyncFunction({json.dumps(save_body, ensure_ascii
   if (duplicateSave !== false) throw new Error("duplicate result registration was not rejected");
   pending[1].resolve({{data:{{ok:true}}}});
   await saving;
-  if (vm.modal !== null || vm.invoiceTaskOperationState.resultSaving) throw new Error("successful result registration did not close and unlock");
+  if (vm.financeView !== "collections" || vm.financeFilters.balance_type !== "pending_payment" || vm.modal !== null || vm.invoiceTaskOperationState.resultSaving) throw new Error("successful result registration did not close and unlock");
 
   vm.modal = {{type:"invoiceTaskResult"}};
   vm.invoiceTaskResult = {{task_id:21,status:"failed",invoice_number:"",invoice_date:"",failure_reason:"税局拒绝",expected_version:2,expected_ledger_version:0}};

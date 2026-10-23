@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, Field, field_validator, model_validator
-from app.services.invoice_statement_scope import StatementInvoice, task_statement_filter, task_statement_rows, cent_invoice_completed
+from app.services.invoice_statement_scope import StatementInvoice, task_statement_filter, task_statement_rows, cent_invoice_completed, active_statement_tasks, UNISSUED_TASK_STATUSES, collectible_receivable
 from app.services.reconciliation_cycle import default_receipt_month
 from sqlalchemy import Numeric, and_, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -1419,7 +1419,7 @@ def list_statements(
     if balance_type == "pending_invoice":
         query = query.where(Statement.total_receivable > Statement.invoiced_amount, ~cent_invoice_completed(Statement))
     elif balance_type == "pending_payment":
-        query = query.where(Statement.total_receivable > Statement.settled_amount)
+        query = query.where(collectible_receivable(Statement) > Statement.settled_amount)
     filtered = query.order_by(None).subquery()
     total = db.scalar(select(func.count()).select_from(filtered)) or 0
     customer_count = db.scalar(
@@ -1664,6 +1664,23 @@ def list_statement_customers(
     return {"items": items}
 
 
+def _visible_invoice_task_ids(db: Session, task_ids: set[int], user: User) -> set[int]:
+    if not task_ids or has_unrestricted_customer_access(user, db):
+        return task_ids
+    # Match the existing full merged-source access gate before exposing a task ID.
+    from app.api.invoice_tasks import _task_for_user
+    visible = set()
+    for task_id in task_ids:
+        try:
+            _task_for_user(db, task_id, user)
+        except HTTPException as error:
+            if error.status_code != 403:
+                raise
+        else:
+            visible.add(task_id)
+    return visible
+
+
 def _statement_detail_response(
     db: Session,
     statement_id: int,
@@ -1678,6 +1695,12 @@ def _statement_detail_response(
         raise HTTPException(status_code=404, detail="对账单不存在")
     statement, customer_name = row
     _statement_for_user(db, statement.id, user)
+    invoice_rounding_complete = bool(db.scalar(select(cent_invoice_completed(Statement)).where(Statement.id == statement.id)))
+    pending_invoice_amount = (Decimal("0") if invoice_rounding_complete else
+                              max(statement.total_receivable - statement.invoiced_amount, Decimal("0")))
+    collectible = statement.invoiced_amount if invoice_rounding_complete else statement.total_receivable
+    active_tasks = active_statement_tasks(db, statement)
+    visible_tasks = _visible_invoice_task_ids(db, {task['id'] for task in active_tasks}, user)
     source_customer = aliased(Customer)
     items = db.execute(
         select(
@@ -1849,6 +1872,11 @@ def _statement_detail_response(
         {
             "id": statement.id,
             "merged_into_statement_id": merged_into,
+            "active_invoice_tasks": [task for task in active_tasks if task["id"] in visible_tasks],
+            "invoice_task_pending": bool(active_tasks),
+            "pending_invoice_amount": pending_invoice_amount,
+            "pending_payment_amount": max(collectible - statement.settled_amount, Decimal("0")),
+            "pending_payment_action_amount": max(min(statement.invoiced_amount, collectible) - statement.settled_amount, Decimal("0")),
             "merge_sources": [{"id": log.statement_id,
                 "statement_number": json.loads(log.details_json)["snapshot"]["statement_number"]}
                 for log in merge_sources],
@@ -2004,9 +2032,11 @@ def export_statement_excel(
 
     inv = statement.invoiced_amount
     rec = statement.total_receivable
+    rounded_complete = bool(db.scalar(select(cent_invoice_completed(Statement)).where(Statement.id == statement.id)))
+    collectible = inv if rounded_complete else rec
     if inv <= 0:
         invoice_status = "未开票"
-    elif inv < rec:
+    elif inv < rec and not rounded_complete:
         invoice_status = "部分开票"
     else:
         invoice_status = "已开票"
@@ -2014,7 +2044,7 @@ def export_statement_excel(
     sett = statement.settled_amount
     if sett <= 0:
         settlement_status = "未收款"
-    elif sett < rec:
+    elif sett < collectible:
         settlement_status = "部分收款"
     else:
         settlement_status = "已结清"
@@ -4744,8 +4774,8 @@ def monthly_yearly_finance_report(
     )
     pending_payment_expression = case(
         (
-            Statement.total_receivable > Statement.settled_amount,
-            Statement.total_receivable - Statement.settled_amount,
+            collectible_receivable(Statement) > Statement.settled_amount,
+            collectible_receivable(Statement) - Statement.settled_amount,
         ),
         else_=0,
     )
@@ -4753,14 +4783,14 @@ def monthly_yearly_finance_report(
         (
             and_(
                 Statement.status == "settled",
-                Statement.settled_amount < Statement.total_receivable,
+                collectible_receivable(Statement) > Statement.settled_amount,
             ),
             1,
         ),
         (
             and_(
                 Statement.status != "settled",
-                Statement.settled_amount >= Statement.total_receivable,
+                collectible_receivable(Statement) <= Statement.settled_amount,
             ),
             1,
         ),
@@ -5469,7 +5499,7 @@ def project_customer_months(
             statement_source_ids.setdefault(int(statement_id), set()).add(int(source_customer_id))
             statement_source_names.setdefault(int(statement_id), {})[int(source_customer_id)] = str(source_customer_name)
     adjustment_actions_by_statement: dict[int, set[str]] = {}
-    task_statuses_by_statement: dict[int, list[str]] = {}
+    task_statuses_by_statement: dict[int, list[dict]] = {}
     if statement_ids:
         for adjustment_statement_id, adjustment_action in db.execute(
             select(StatementAdjustment.statement_id, StatementAdjustment.action).where(
@@ -5489,16 +5519,22 @@ def project_customer_months(
             adjustment_actions_by_statement.setdefault(
                 int(adjustment_statement_id), set()
             ).add(str(adjustment_action))
-        for task_statement_id, task_version, task_status in db.execute(
+        for task_statement_id, task_version, task_status, task_id in db.execute(
             select(
                 task_statement_rows.c.statement_id,
                 task_statement_rows.c.statement_version,
                 task_statement_rows.c.status,
+                task_statement_rows.c.task_id,
             ).where(task_statement_rows.c.statement_id.in_(statement_ids))
         ).all():
             task_statuses_by_statement.setdefault(int(task_statement_id), []).append(
-                f"{int(task_version)}:{task_status}"
+                {"id": int(task_id), "statement_version": int(task_version), "status": str(task_status)}
             )
+
+    visible_task_ids = _visible_invoice_task_ids(db, {
+        task['id'] for tasks in task_statuses_by_statement.values() for task in tasks
+        if task['status'] in UNISSUED_TASK_STATUSES
+    }, user)
 
     for statement in statement_rows:
         statement_customer_id = int(statement["customer_id"])
@@ -5548,34 +5584,32 @@ def project_customer_months(
             )
         )
         receivable = _money_value(statement["total_receivable"])
+        collectible = _money_value(statement["invoiced_amount"]) if statement["cent_invoice_completed"] else receivable
         # Older settled bills can predate the ERP confirmation field. Preserve
         # that field, but never send financially completed history back to work.
         financially_completed = (
             receivable > 0
-            and _money_value(statement["invoiced_amount"]) >= receivable
-            and _money_value(statement["settled_amount"]) >= receivable
+            and (_money_value(statement["invoiced_amount"]) >= receivable or statement["cent_invoice_completed"])
+            and _money_value(statement["settled_amount"]) >= collectible
         )
         is_confirmed = statement["confirmation_status"] == "confirmed" or financially_completed
         invoiced = _money_value(statement["invoiced_amount"]) if is_confirmed else Decimal("0.00")
         settled = _money_value(statement["settled_amount"]) if is_confirmed else Decimal("0.00")
         confirmed_receivable = receivable if is_confirmed else Decimal("0.00")
         invoice_balance = max(receivable - invoiced, Decimal("0.00")) if is_confirmed and not statement["cent_invoice_completed"] else Decimal("0.00")
-        payment_balance = max(receivable - settled, Decimal("0.00")) if is_confirmed else Decimal("0.00")
+        payment_balance = max(collectible - settled, Decimal("0.00")) if is_confirmed else Decimal("0.00")
         payment_action_balance = (
-            max(min(invoiced, receivable) - settled, Decimal("0.00"))
+            max(min(invoiced, collectible) - settled, Decimal("0.00"))
             if is_confirmed
             else Decimal("0.00")
         )
-        encoded_task_statuses = task_statuses_by_statement.get(int(statement["id"]), [])
-        task_statuses = [
-            value.split(":", 1)[1]
-            for value in encoded_task_statuses
-            if value.split(":", 1)[0] == str(int(statement["version"]))
-        ]
-        invoice_task_pending = any(
-            task_status in {"draft", "ready", "exported", "failed"}
-            for task_status in task_statuses
-        )
+        current_tasks = [task for task in task_statuses_by_statement.get(int(statement["id"]), [])
+                         if task["statement_version"] == int(statement["version"])]
+        task_statuses = [task["status"] for task in current_tasks]
+        active_tasks = sorted(
+            ({"id": task["id"], "status": task["status"]} for task in current_tasks
+             if task["status"] in UNISSUED_TASK_STATUSES), key=lambda task: task["id"])
+        invoice_task_pending = bool(active_tasks)
         adjustment_actions = adjustment_actions_by_statement.get(
             int(statement["id"]), set()
         )
@@ -5637,6 +5671,7 @@ def project_customer_months(
                 "task_void_pending": task_void_pending,
                 "invoice_task_pending": invoice_task_pending,
                 "invoice_task_statuses": task_statuses,
+                "active_invoice_tasks": [task for task in active_tasks if task["id"] in visible_task_ids],
                 "confirmed_at": statement["confirmed_at"],
                 "invoice_status": (
                     "not_ready"
@@ -5671,7 +5706,7 @@ def project_customer_months(
         )
         has_invoice = any(
             statement["pending_invoice_amount"] > Decimal("0.00")
-            and not statement["invoice_task_pending"]
+            or statement["invoice_task_pending"]
             for statement in group["statements"]
         )
         has_invoice_task = group["invoice_task_pending_count"] > 0
@@ -5804,7 +5839,7 @@ def project_customer_months(
             if balance_type == "pending_confirmation":
                 return statement["confirmation_status"] != "confirmed" and not statement["financially_completed"]
             if balance_type == "pending_invoice":
-                return statement["pending_invoice_amount"] > 0 and not statement["invoice_task_pending"]
+                return statement["pending_invoice_amount"] > 0 or statement["invoice_task_pending"]
             if balance_type == "pending_payment":
                 return statement["pending_payment_action_amount"] > 0
             return is_completed_statement(statement)
@@ -5943,14 +5978,14 @@ def settled_customer_months(
         (
             and_(
                 Statement.status == "settled",
-                Statement.settled_amount < Statement.total_receivable,
+                collectible_receivable(Statement) > Statement.settled_amount,
             ),
             1,
         ),
         (
             and_(
                 Statement.status != "settled",
-                Statement.settled_amount >= Statement.total_receivable,
+                collectible_receivable(Statement) <= Statement.settled_amount,
             ),
             1,
         ),
@@ -5995,7 +6030,7 @@ def settled_customer_months(
             func.sum(
                 case(
                     (
-                        Statement.settled_amount < Statement.total_receivable,
+                        collectible_receivable(Statement) > Statement.settled_amount,
                         1,
                     ),
                     else_=0,
@@ -6933,13 +6968,18 @@ def settle_statement(
         if replay is not None:
             return replay
         assert mutation is not None
+        # The idempotency insert above holds the write lock; calculate the
+        # ceiling from the same frozen source before the versioned ledger CAS.
+        original_receivable, collectible, rounding_complete = db.execute(select(
+            Statement.total_receivable, collectible_receivable(Statement),
+            cent_invoice_completed(Statement)).where(Statement.id == statement_id)).one()
         updated = db.execute(
             text(
                 """
                 UPDATE finance_statements
-                SET settled_amount = settled_amount + :amount,
+                SET settled_amount = tm_decimal_add(settled_amount, :amount),
                     status = CASE
-                        WHEN settled_amount + :amount = total_receivable
+                        WHEN tm_decimal_compare(tm_decimal_add(settled_amount, :amount), :collectible_amount) = 0
                         THEN 'settled'
                         ELSE 'unsettled'
                     END,
@@ -6948,7 +6988,7 @@ def settle_statement(
                   AND confirmation_status = 'confirmed'
                   AND version = :expected_version
                   AND ledger_version = :expected_ledger_version
-                  AND settled_amount + :amount <= total_receivable
+                  AND tm_decimal_compare(tm_decimal_add(settled_amount, :amount), :collectible_amount) <= 0
                 RETURNING id, statement_number, total_receivable,
                           invoiced_amount, settled_amount, status,
                           confirmation_status, version, ledger_version
@@ -6957,6 +6997,7 @@ def settle_statement(
             {
                 "statement_id": statement_id,
                 "amount": str(payload.amount),
+                "collectible_amount": str(collectible),
                 "expected_version": expected_version,
                 "expected_ledger_version": expected_ledger_version,
             },
@@ -6970,6 +7011,8 @@ def settle_statement(
                 amount_kind="settlement",
             )
 
+        updated = dict(updated)
+        updated["total_receivable"] = original_receivable
         settlement = SettlementRecord(
             statement_id=statement_id,
             settled_amount=payload.amount,
@@ -6987,6 +7030,8 @@ def settle_statement(
             entity_id=statement_id,
             details={
                 "settlement_record_id": settlement.id,
+                "collectible_amount": collectible,
+                "invoice_rounding_completion": bool(rounding_complete),
                 "amount": payload.amount,
                 "settlement_date": payload.settlement_date,
                 "account": payload.account or "",

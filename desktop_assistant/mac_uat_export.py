@@ -145,7 +145,7 @@ def output_parent():
             c.recipient()
             for named, fd, initial in opened:
                 if c.dir_stamp(os.fstat(fd)) != initial or c.dir_stamp(
-                        named.stat(follow_symlinks=False)) != initial:
+                        named.lstat()) != initial:
                     raise ValueError('固定导出目的地被替换')
                 _directory_ok(fd,named)
         check(); yield opened[-1][1], check; check()

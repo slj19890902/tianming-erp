@@ -310,11 +310,11 @@ def regular(path, *, uid, limit=MAX_BYTES, mutable=False):
             no_acl(file_fd)
             yield file_fd, before
             if (stamp(os.fstat(file_fd), content=not mutable) != stamp(before, content=not mutable)
-                    or stamp(path.stat(follow_symlinks=False), content=not mutable) != stamp(before, content=not mutable)):
+                    or stamp(path.lstat(), content=not mutable) != stamp(before, content=not mutable)):
                 raise ValueError('导出文件在读取期间变化')
             for named, opened, initial in parent_fds:
                 if (dir_stamp(os.fstat(opened)) != initial
-                        or dir_stamp(named.stat(follow_symlinks=False)) != initial):
+                        or dir_stamp(named.lstat()) != initial):
                     raise ValueError('导出目录在读取期间被替换')
         finally: os.close(file_fd)
     finally:

@@ -34,6 +34,25 @@ def test_only_reviewed_paths_survive_and_effective_values_are_also_checked():
     assert '' not in variants
 
 
+@pytest.mark.parametrize('field', ['ERP_MOBILE_QR_ORIGIN', 'ERP_SHELF_LABEL_ORIGIN'])
+def test_known_qr_origins_are_not_file_roots_or_exported_configuration(scene, field):
+    value = 'https://synthetic-qr-origin-not-exported.example.test'
+    environment = set_environment(scene, {field:value, 'ERP_SECRET_KEY':SECRET})
+    assert c.environment_paths(environment) == {}
+    assert c.environment_credentials(environment) == (SECRET,)
+    before = scene['db'].read_bytes()
+    do_capture(scene)
+    assert scene['db'].read_bytes() == before
+    assert (scene['root']/'shared/environment.json').read_bytes() == environment
+    payload = c.staging(scene['plan']['attempt_id'])/'payload'
+    for file in payload.rglob('*'):
+        if file.is_file():
+            data=file.read_bytes()
+            assert value.encode() not in data and SECRET.encode() not in data and field.encode() not in data
+    with pytest.raises(ValueError):c.environment_paths(c.canonical({field.lower():value}))
+    with pytest.raises(ValueError):c.environment_paths(c.canonical({field+'_TOKEN':value}))
+
+
 @pytest.mark.parametrize('raw', [b'{"arbitrary":"value"}', b'{"ERP_UNKNOWN_TOKEN":"value"}',
     b'{"ERP_PORT":1}', b'[]', b'{"ERP_SECRET_KEY":"a","erp_secret_key":"b"}',
     b'{"ERP_PORT":"8000","ERP_PORT":"9000"}', b'{"ERP_SECRET_KEY":"\\ud800"}',

@@ -94,7 +94,7 @@ def test_legacy_client_default_values_are_not_new_historical_facts(writer_app):
             flap_mm=30,production_notes="仅备注改动")
         payload.pop("structure_edit_fields")
         updated,_=save(client,pid,payload)
-        assert updated["box_style"]=="WC 五层钉箱"
+        assert updated["box_style"]=="A1/0201 普通开槽箱"
         assert all(updated[field] is None for field in FIELDS[1:])
 
 
@@ -110,7 +110,7 @@ def test_explicit_structure_edit_then_normal_ui_correction_to_unknown(writer_app
         corrected,preview=save(client,pid,body(client,pid,structure_edit_fields=list(FIELDS),
             box_style="WC 五层钉箱",splice_mode=None,pieces_per_box=None,flap_mm=None,
             production_process=None,change_reason="撤回无依据默认结构；保留已确认采购与印刷"))
-        assert corrected["box_style"]=="WC 五层钉箱"
+        assert corrected["box_style"]=="A1/0201 普通开槽箱"
         assert all(corrected[field] is None for field in FIELDS[1:])
         assert corrected["printing_colors"]=="黑色" and corrected["print_content"]=="单色印刷"
         assert float(corrected["report_length_mm"])==1160

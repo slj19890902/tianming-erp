@@ -10,7 +10,7 @@ def runtime():
         "boxTypeLookupKey", "productBoxTypeRule", "normalizeBoxTypeDisplay",
         "usesProductSplice", "usesProductTongue", "productSupportedSpliceModes",
         "markProductStructureEdited", "resetProductStructure", "onProductSpliceChanged",
-        "productCompatibleBoxStyleOptions", "onProductBoxStyleChange",
+        "onProductBoxStyleChange",
         "onProductProcessesChanged", "applyBoxTypeRecommendation", "autoApplyProductRecommendations",
     )
     bindings = []
@@ -53,12 +53,12 @@ function legacy(overrides={{}}){{
 def test_unrelated_purchase_and_printing_edit_keeps_exact_legacy_structure(tmp_path):
     _run_node(tmp_path, runtime() + """
 const form=legacy();
-assert.equal(form.box_style,'WC五层钉箱');
+assert.equal(form.box_style,'A1/0201 普通开槽箱');
 for(const key of ['splice_mode','pieces_per_box','flap_mm','production_process']) assert.equal(form[key],null,key);
 form.material_id=88; form.report_length_mm=1420; form._printing_colors=['红色']; form._printing_colors_touched=true;
 const payload=vm.buildProductWritePayload();
 assert.deepEqual(payload.structure_edit_fields,[]);
-assert.equal(payload.box_style,'WC五层钉箱');
+assert.equal(payload.box_style,'A1/0201 普通开槽箱');
 for(const key of ['splice_mode','pieces_per_box','flap_mm','production_process']) assert.equal(payload[key],null,key);
 assert.equal(payload.material_id,88); assert.equal(payload.report_length_mm,1420);
 assert.equal(payload.printing_colors,'红色');
@@ -87,7 +87,7 @@ form.box_style='WC 五层钉箱'; vm.onProductBoxStyleChange();
 vm.normalizeProductDimensions(form);
 const payload=vm.buildProductWritePayload();
 assert.deepEqual(payload.structure_edit_fields,ERPProductStructure.fields);
-assert.equal(payload.box_style,'WC 五层钉箱');
+assert.equal(payload.box_style,'A1/0201 普通开槽箱');
 for(const key of ['splice_mode','pieces_per_box','flap_mm','production_process']) assert.equal(payload[key],null,key);
 assert.equal(payload.report_length_mm,1430); assert.equal(payload.report_width_mm,500);
 assert.equal(payload.printing_colors,'黑色'); assert.equal(payload.printing_plate_mode,'no_plate');
@@ -122,7 +122,7 @@ assert.equal(payload.production_process,'打钉'); assert.equal(payload.report_l
 def test_compatible_name_only_marks_name_but_new_box_type_marks_all_links(tmp_path):
     _run_node(tmp_path, runtime() + """
 const form=legacy();
-assert.ok(vm.productCompatibleBoxStyleOptions().includes('WC 五层钉箱'));
+assert.equal(form.box_style,'A1/0201 普通开槽箱');
 form.box_style='A1/0201 普通开槽箱'; vm.onProductBoxStyleChange();
 assert.deepEqual(form._structure_edit_fields,['box_style']);
 assert.equal(form.flap_mm,null); assert.equal(form.splice_mode,null);

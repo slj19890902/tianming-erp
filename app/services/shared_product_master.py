@@ -293,6 +293,10 @@ def prepare_sync(db, product, updates, user):
                 shared._value(getattr(product,key)) != shared._value(updates[key]))}
     if not changed:
         return None
+    from app.services.box_type_rules import canonical_box_style, get_box_type_rule
+    existing_rule = get_box_type_rule(product.box_style)
+    alias_name_change = ('box_style' in changed and existing_rule is not None
+                         and canonical_box_style(updates['box_style']) == existing_rule.display_name)
     external_changed = bool(changed & set(EXTERNAL_SUPPLY))
     if external_changed and not policy.get('full_catalog'):
         raise HTTPException(409, '共用产品的外购供货资料需确认整套产品共用后才能同步，请先核对共用范围；本次修改未保存')
@@ -311,6 +315,10 @@ def prepare_sync(db, product, updates, user):
         require_customer_access(peer.customer_id, current_user=user, db=db)
         if peer.id == product.id:
             continue
+        # Bind the same-type check to the peer version used by the actual
+        # shared write plan; a later change is rejected by its existing CAS.
+        if alias_name_change and canonical_box_style(peer.box_style) != existing_rule.display_name:
+            raise HTTPException(409, '共用产品箱型不一致，请先核对；本次修改未保存')
         if peer.deleted_at or peer.purged_at:
             raise HTTPException(409, '共用产品已删除，请先调整共用范围')
         validated_peer_updates = deepcopy(peer_updates)

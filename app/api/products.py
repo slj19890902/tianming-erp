@@ -1471,6 +1471,13 @@ def _validated_product_versioned_updates(
     user: User,
 ) -> dict:
     preserve_process_input = _restore_product_structure_edit_intent(product, payload)
+    # Owner-confirmed names share one registry label; physical unknowns stay intact.
+    payload.box_style = canonical_box_style(payload.box_style)
+    if (product.box_style != payload.box_style
+            and canonical_box_style(product.box_style) == payload.box_style):
+        # A label-only edit must not silently reclassify a drifted shared peer.
+        from app.services.shared_product_master import prepare_sync
+        prepare_sync(db, product, {"box_style": payload.box_style}, user)
     from app.services.production_variants import validate_references as validate_variants
     validate_variants(db, payload.customer_id, payload.production_variants)
     if product.sheet_cutting_settings and "sheet_cutting_settings" not in payload.model_fields_set:
@@ -1627,6 +1634,7 @@ def _response(product: Product, user: User, *, bom_profiles: dict | None = None,
     from app.services.customer_document_fields import document_snapshot, source_candidates
     data = {
         **_product_payload_snapshot(product),
+        "box_style": canonical_box_style(product.box_style),
         **product_unit_info(product),
         "classification": classification(product),
         "customer_document": document_snapshot(product, allow_source_reference=False),

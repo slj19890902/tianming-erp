@@ -1,0 +1,19 @@
+--- installed/native.py
++++ candidate/native.py
+@@ -715,7 +715,15 @@
+             extra.update(runtime_extra)
+             missing = proof.get('missing_owner_preserved_sha256', [])
+             report['missing_owner_preserved_sha256'] = missing
+-            unknown_backup=bool(missing)
++            # Missing historical originals remain an incident, and all signed
++            # archives stay protected. They are not an existing unclassified
++            # backup or an additional live runtime role. Existing unknown
++            # backups below still protect every expansion, unchanged.
++            if missing:
++                extra.update(manifests)
++                report['retained'].append({'kind':'missing-historical-backup-originals',
++                    'reason':'protected-all-signed-originals-runtime-roles-preserved'})
++            unknown_backup=False
+             for row in proof['backups']:
+                 if not row['protected']:
+                     raise ValueError('Automatic deletion of formal backups is forbidden')

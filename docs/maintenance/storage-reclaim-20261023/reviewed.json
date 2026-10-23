@@ -1,0 +1,12 @@
+{
+  "before_sha256": "2366c320799006465093224f6e86a8b5d1083cd5e34e66d54083a5f48340e9eb",
+  "candidate_sha256": "952f85be1464ad004c8d03bc2efda3ec1869489a36ed6235c263e2efbf9c4929",
+  "installed": false,
+  "assets_sha256": "d1b0b10e9cf0de730a671ff892faee077b1795359532dea9a76ffa64483e3980",
+  "policy_sha256": "be54896918c813c4b7c1141d71f889ff21b81a08dbb7d08659c09eee4d849106",
+  "current": "ea1f60c7be10e237d796fdfc79d7ad1372ff8e23ef42be24bc5f515b3b2ba1e6",
+  "tests": {
+    "retention": 9,
+    "backup_regression": 13
+  }
+}

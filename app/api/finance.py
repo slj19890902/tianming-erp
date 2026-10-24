@@ -667,6 +667,7 @@ class StatementLineCorrection(BaseModel):
     model_config = {"extra": "forbid"}
     statement_item_id: int = Field(gt=0)
     unit_price: Decimal = Field(ge=0, max_digits=14, decimal_places=4)
+    tax_rate: Decimal | None = Field(default=None, ge=0, le=1, decimal_places=4)
 
 
 class StatementDisputeAdjustment(BaseModel):
@@ -675,6 +676,7 @@ class StatementDisputeAdjustment(BaseModel):
     remove_lines: list[StatementLineRemoval] = Field(default_factory=list)
     add_return_receipt_item_ids: list[int] = Field(default_factory=list)
     update_lines: list[StatementLineCorrection] = Field(default_factory=list)
+    tax_evidence_reference: str | None = Field(default=None, max_length=200)
 
     @field_validator("reason", mode="before")
     @classmethod
@@ -693,6 +695,10 @@ class StatementDisputeAdjustment(BaseModel):
         removal_ids = [item.statement_item_id for item in self.remove_lines]
         if len(removal_ids) != len(set(removal_ids)):
             raise ValueError("移出明细不能重复")
+        if any(item.tax_rate is not None for item in self.update_lines):
+            if not self.tax_evidence_reference or not self.tax_evidence_reference.strip():
+                raise ValueError("税率更正须填写实际票据或确认依据")
+            self.tax_evidence_reference = self.tax_evidence_reference.strip()
         correction_ids = [item.statement_item_id for item in self.update_lines]
         if len(correction_ids) != len(set(correction_ids)):
             raise ValueError("更正明细不能重复")
@@ -1740,6 +1746,7 @@ def _statement_detail_response(
             StatementItem.actual_received_quantity,
             StatementItem.unit_price_snapshot,
             StatementItem.price_tax_mode_snapshot,
+            StatementItem.tax_rate_snapshot,
             StatementItem.unit_cost_snapshot,
             StatementItem.receivable_amount,
             StatementItem.gross_profit_amount,
@@ -1814,6 +1821,7 @@ def _statement_detail_response(
             StatementItem.unit_snapshot,
             StatementItem.unit_price_snapshot,
             StatementItem.price_tax_mode_snapshot,
+            StatementItem.tax_rate_snapshot,
             StatementItem.unit_cost_snapshot,
             StatementItem.receivable_amount,
             StatementItem.gross_profit_amount,
@@ -7536,7 +7544,7 @@ def adjust_statement_dispute(
                 StatementInvoice.invoice_status == "issued",
             ).limit(1)
         )
-        if issued_invoice is not None or any(task.status == "issued" for task in tasks):
+        if statement.invoiced_amount != 0 or issued_invoice is not None or any(task.status == "issued" for task in tasks):
             raise HTTPException(
                 status_code=409,
                 detail="该对账单已登记开票，不能直接修改；请按红冲/重开流程处理。",
@@ -7569,17 +7577,24 @@ def adjust_statement_dispute(
                 raise HTTPException(status_code=400, detail="所选更正明细不属于当前对账单的送货明细")
             if line.price_tax_mode_snapshot not in VALID_PRICE_TAX_MODES or line.tax_rate_snapshot is None:
                 raise HTTPException(status_code=409, detail="更正明细缺少冻结税价口径，请先核对")
-            before = {"quantity": line.actual_received_quantity, "unit_price": str(line.unit_price_snapshot), "amount": str(line.receivable_amount)}
+            before = {"quantity": line.actual_received_quantity, "unit_price": str(line.unit_price_snapshot), "amount": str(line.receivable_amount),
+                      "price_tax_mode": line.price_tax_mode_snapshot, "tax_rate": str(line.tax_rate_snapshot)}
+            price_changed = line.unit_price_snapshot != correction.unit_price
+            if correction.tax_rate is not None:
+                line.tax_rate_snapshot = correction.tax_rate
             quantity = Decimal(line.actual_received_quantity)
             line.unit_price_snapshot = correction.unit_price
             amount = (quantity * correction.unit_price)
-            line.receivable_amount = (
-                amount + (amount * line.tax_rate_snapshot)
-                if line.price_tax_mode_snapshot == "tax_exclusive" else amount
-            )
-            line.gross_profit_amount = (quantity * (correction.unit_price - line.unit_cost_snapshot)).quantize(MONEY, rounding=ROUND_HALF_UP)
+            if price_changed or line.price_tax_mode_snapshot == "tax_exclusive":
+                line.receivable_amount = (
+                    amount + (amount * line.tax_rate_snapshot)
+                    if line.price_tax_mode_snapshot == "tax_exclusive" else amount
+                )
+            if price_changed:
+                line.gross_profit_amount = (quantity * (correction.unit_price - line.unit_cost_snapshot)).quantize(MONEY, rounding=ROUND_HALF_UP)
             corrected.append({"statement_item_id": line.id, "before": before,
-                              "after": {"quantity": line.actual_received_quantity, "unit_price": str(line.unit_price_snapshot), "amount": str(line.receivable_amount)}})
+                              "after": {"quantity": line.actual_received_quantity, "unit_price": str(line.unit_price_snapshot), "amount": str(line.receivable_amount),
+                                        "price_tax_mode": line.price_tax_mode_snapshot, "tax_rate": str(line.tax_rate_snapshot)}})
         removal_map = {
             item.statement_item_id: item.target_month for item in payload.remove_lines
         }
@@ -7701,6 +7716,8 @@ def adjust_statement_dispute(
             details={
                 "removed": removed,
                 "corrected": corrected,
+                "tax_evidence_reference": payload.tax_evidence_reference,
+                "scope": "statement_settlement_only",
                 "added_return_receipt_item_ids": added,
                 "voided_invoice_task_ids": voided_tasks,
             },
@@ -7716,6 +7733,8 @@ def adjust_statement_dispute(
                 "reason": payload.reason,
                 "removed": removed,
                 "corrected": corrected,
+                "tax_evidence_reference": payload.tax_evidence_reference,
+                "scope": "statement_settlement_only",
                 "added_return_receipt_item_ids": added,
                 "voided_invoice_task_ids": voided_tasks,
                 "before_version": before_version,
@@ -7725,7 +7744,7 @@ def adjust_statement_dispute(
         )
         db.commit()
         return _statement_detail_response(db, statement.id, user)
-    except HTTPException:
+    except Exception:
         db.rollback()
         raise
 

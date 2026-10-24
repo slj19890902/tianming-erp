@@ -42,6 +42,7 @@ from app.services.production_packaging_label import (
     build_supplier_requisition_packaging_label_package,
 )
 from app.services.warehouse_inventory import active_finished_reserved_qty
+from app.services.product_label_media import bind_print_media, assert_media_reprint_source
 
 
 class ProductionLabelOperationError(ValueError):
@@ -738,6 +739,9 @@ def _assert_prepared_job_is_current(
 
     if job.status != "prepared":
         return
+    if package.get("media_reprint_source"):
+        assert_media_reprint_source(db, package)
+        return
     if package.get("source_type") == "stock_receipt":
         from app.services.stock_receipt_labels import assert_current
         assert_current(db, job, package)
@@ -839,6 +843,7 @@ def prepare_packaging_label_job(
     requested_print_counts: dict[int, int] | None = None,
     requested_source_counts: dict[str, int] | None = None,
     operator_id: int,
+    print_media=None,
 ) -> PackagingLabelJobResult:
     if requested_source_counts is not None:
         if requested_print_counts is not None:
@@ -847,10 +852,10 @@ def prepare_packaging_label_job(
         task_ids, stock_ids = parse_selection_keys(set(requested_source_counts))
         if stock_ids:
             return prepare_job(db, order=order, key=idempotency_key.strip(),
-                fingerprint=expected_plan_fingerprint, counts=requested_source_counts, operator_id=operator_id)
+                fingerprint=expected_plan_fingerprint, counts=requested_source_counts, operator_id=operator_id, print_media=print_media)
         requested_print_counts = {task_id: requested_source_counts[f"task:{task_id}"] for task_id in task_ids}
     key = idempotency_key.strip()
-    request_hash = _canonical_hash(
+    request_hash = _canonical_hash(bind_print_media(
         {
             "supplier_order_id": int(order.id),
             "idempotency_key": key,
@@ -863,8 +868,8 @@ def prepare_packaging_label_job(
                 if requested_print_counts is not None
                 else "legacy_all_planned"
             ),
-        }
-    )
+        }, print_media
+    ))
     repeated = db.scalar(
         select(ProductionPackagingLabelPrintJob).where(
             ProductionPackagingLabelPrintJob.idempotency_key == key
@@ -931,6 +936,7 @@ def prepare_packaging_label_job(
     }:
         raise ProductionLabelOperationError("标签模板版本不受支持")
 
+    package = bind_print_media(package, print_media)
     frozen_json = _canonical_json(package)
     payload_hash = sha256(frozen_json.encode("utf-8")).hexdigest()
     job = ProductionPackagingLabelPrintJob(
@@ -971,10 +977,11 @@ def prepare_composite_packaging_label_job(
     expected_plan_fingerprint: str,
     requested_print_counts: dict[int, int] | None = None,
     operator_id: int,
+    print_media=None,
 ) -> PackagingLabelJobResult:
     key = idempotency_key.strip()
     normalized_item_ids = sorted({int(value) for value in selected_item_ids})
-    request_hash = _canonical_hash(
+    request_hash = _canonical_hash(bind_print_media(
         {
             "material_requisition_id": int(requisition.id),
             "selected_item_ids": normalized_item_ids,
@@ -988,8 +995,8 @@ def prepare_composite_packaging_label_job(
                 if requested_print_counts is not None
                 else "legacy_all_planned"
             ),
-        }
-    )
+        }, print_media
+    ))
     repeated = db.scalar(
         select(ProductionPackagingLabelPrintJob).where(
             ProductionPackagingLabelPrintJob.idempotency_key == key
@@ -1051,6 +1058,7 @@ def prepare_composite_packaging_label_job(
     }:
         raise ProductionLabelOperationError("标签模板版本不受支持")
 
+    package = bind_print_media(package, print_media)
     frozen_json = _canonical_json(package)
     payload_hash = sha256(frozen_json.encode("utf-8")).hexdigest()
     job = ProductionPackagingLabelPrintJob(
@@ -1144,6 +1152,7 @@ def prepare_delivery_packaging_label_job(
     expected_plan_fingerprint: str,
     requested_print_counts: dict[str, int] | None = None,
     operator_id: int,
+    print_media=None,
 ) -> PackagingLabelJobResult:
     key = idempotency_key.strip()
     normalized_counts = (
@@ -1151,7 +1160,7 @@ def prepare_delivery_packaging_label_job(
         if requested_print_counts is not None
         else None
     )
-    request_hash = _canonical_hash(
+    request_hash = _canonical_hash(bind_print_media(
         {
             "delivery_id": int(delivery.id),
             "idempotency_key": key,
@@ -1161,8 +1170,8 @@ def prepare_delivery_packaging_label_job(
                 if normalized_counts is not None
                 else "all_planned"
             ),
-        }
-    )
+        }, print_media
+    ))
     repeated = db.scalar(
         select(ProductionPackagingLabelPrintJob).where(
             ProductionPackagingLabelPrintJob.idempotency_key == key
@@ -1211,6 +1220,7 @@ def prepare_delivery_packaging_label_job(
     except ProductionPackagingLabelError as error:
         raise ProductionLabelOperationError(str(error)) from error
 
+    package = bind_print_media(package, print_media)
     frozen_json = _canonical_json(package)
     payload_hash = sha256(frozen_json.encode("utf-8")).hexdigest()
     job = ProductionPackagingLabelPrintJob(
@@ -1266,7 +1276,9 @@ def confirm_packaging_label_job_printed(
         raise ProductionLabelOperationError("只有待确认的标签打印作业可以登记实际打印")
 
     links = _validate_job_task_links(db, job, package)
-    if package.get("source_type") == "stock_receipt":
+    if package.get("media_reprint_source"):
+        assert_media_reprint_source(db, package)
+    elif package.get("source_type") == "stock_receipt":
         from app.services.stock_receipt_labels import assert_current
         assert_current(db, job, package, claim=True)
     elif package.get("source_type") == "supplier_sources":

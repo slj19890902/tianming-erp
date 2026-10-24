@@ -839,7 +839,11 @@ def confirm_purchase_material_variance(
         raise _purchase_receipt_fact_error("PURCHASE_MATERIAL_VARIANCE_CONFIRM_INVALID", str(error)) from error
 
 
+from app.services.product_label_media import ProductLabelPrintMedia, bind_print_media
+
+
 class ProductionPackagingLabelJobRequest(BaseModel):
+    print_media: ProductLabelPrintMedia | None = None
     idempotency_key: str = Field(min_length=1, max_length=120)
     plan_fingerprint: str = Field(min_length=64, max_length=64)
     confirmed: Literal[True]
@@ -22991,6 +22995,106 @@ def get_effective_production_packaging_label_layout(
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
+@router.get("/product-label-media")
+def get_product_label_media_catalog(user: User = Depends(can_read_production_labels)) -> dict:
+    from app.services.product_label_media import media_catalog
+    return media_catalog()
+
+
+class ProductLabelMediaReprintSelection(BaseModel):
+    model_config = {"extra": "forbid"}
+    kind: Literal["packaging", "finished"]
+    id: int = Field(gt=0, strict=True)
+
+
+class ProductLabelMediaReprintRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    jobs: list[ProductLabelMediaReprintSelection] = Field(min_length=1, max_length=50)
+    print_media: ProductLabelPrintMedia
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    reprint_confirmed: Literal[True]
+
+    @model_validator(mode="after")
+    def unique_jobs(self):
+        self.idempotency_key = self.idempotency_key.strip()
+        if not self.idempotency_key:
+            raise ValueError("换纸补打请求标识不能为空")
+        if len({(job.kind, job.id) for job in self.jobs}) != len(self.jobs):
+            raise ValueError("原标签作业不能重复选择")
+        return self
+
+
+@router.post("/product-label-media/reprints")
+def post_product_label_media_reprints(
+    payload: ProductLabelMediaReprintRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_production_labels),
+    _write_guard: None = Depends(production_label_write_guard),
+) -> dict:
+    from app.services.product_label_media import prepare_media_reprint, normalize_print_media
+    from app.services.production_label_operations import _canonical_hash
+    from app.services import finished_product_labels as finished_labels
+    from app.api.finished_product_labels import _scope as finished_label_scope
+    normalized = normalize_print_media(payload.print_media)
+    selections = sorted((row.model_dump() for row in payload.jobs), key=lambda row: (row['kind'], row['id']))
+    signature = _canonical_hash(dict(jobs=selections, print_media=normalized, reprint_confirmed=True))
+    try:
+        # Authorize the entire selection before creating any job; transaction
+        # rollback also protects later provenance/audit failures.
+        for row in selections:
+            if row['kind'] == 'finished':
+                _, original_package = finished_labels.read_job(db, row['id'])
+                finished_label_scope(db, user, original_package['customer_ids'])
+            else:
+                original = db.get(ProductionPackagingLabelPrintJob, row['id'])
+                if original is None:
+                    raise ProductionLabelOperationError('原标签打印作业不存在', 404)
+                _require_packaging_label_job_access(db, original, user)
+        audit_key = _supplier_label_batch_audit_key(db,
+            action_code='production.product_label_media.reprint_prepared',
+            idempotency_key=payload.idempotency_key, request_signature=signature, user_id=user.id)
+        jobs, packages, replays = [], [], []
+        for row in selections:
+            key = 'label-media-reprint-' + _canonical_hash(dict(key=payload.idempotency_key, **row))
+            job, package, replayed = prepare_media_reprint(db, kind=row['kind'], job_id=row['id'],
+                print_media=normalized, key=key, batch_hash=signature, operator_id=user.id)
+            result = (finished_labels.response(job, package, replayed=replayed) if row['kind'] == 'finished'
+                      else packaging_label_job_response(job, package, replayed=replayed))
+            jobs.append(dict(kind=row['kind'], **result))
+            packages.append(package)
+            replays.append(replayed)
+            if not replayed:
+                append_audit_event(db, event_category='business', result='success', source='web',
+                    module_code='production', action_code='production.product_label_media.reprint_prepared',
+                    actor=user, resource=type(job).__name__, entity_type='product_label_media_reprint',
+                    entity_id=job.id, batch_id=audit_key, description='沿原冻结内容换纸补打产品标签',
+                    details=dict(batch_request_hash=signature, original_job=row, print_media=normalized,
+                        payload_hash=job.payload_hash, plan_fingerprint=job.plan_fingerprint,
+                        label_count=package['label_count']))
+        layout_identities = {_canonical_hash(dict(template_version=p.get('template_version'),
+            template_dimensions=p.get('template_dimensions'), label_layout=p.get('label_layout')))
+            for p in packages}
+        if len(layout_identities) != 1:
+            raise ProductionLabelOperationError('所选历史标签使用不同模板或布局，请分批换纸补打')
+        combined = dict(packages[0])
+        combined.update(plans=[plan for p in packages for plan in p.get('plans', [])],
+            labels=[label for p in packages for label in p.get('labels', [])],
+            label_count=sum(p['label_count'] for p in packages), print_media=normalized)
+        if combined['label_count'] > 10000:
+            raise ProductionLabelOperationError('本次补打标签超过10000张，请减少选择')
+        db.commit()
+        return dict(jobs=jobs, package=combined, replayed=all(replays))
+    except ProductionLabelOperationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except (IntegrityError, OperationalError) as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail='换纸补打发生并发变化，请重试原请求') from error
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.get("/production-packaging-label-layout/admin")
 def get_production_packaging_label_layout_admin_state(
     db: Session = Depends(get_db),
@@ -23450,7 +23554,7 @@ def post_stock_bom_parent_label_job(
     try:
         result = prepare_job(db, stock_order_id=order_id, assembly_lot_id=assembly_lot_id,
             key=payload.idempotency_key, fingerprint=payload.plan_fingerprint,
-            count=payload.items[0].print_label_count, operator_id=user.id)
+            count=payload.items[0].print_label_count, operator_id=user.id, print_media=payload.print_media)
         if result.package["plans"][0]["selection_key"] != payload.items[0].selection_key:
             raise ProductionLabelOperationError("父件标签来源已变化，请刷新")
         if not result.replayed:
@@ -23616,6 +23720,7 @@ def post_composite_requisition_packaging_label_job(
                 else None
             ),
             operator_id=user.id,
+            print_media=payload.print_media,
         )
         if not result.replayed:
             append_audit_event(
@@ -23722,26 +23827,30 @@ def post_supplier_order_packaging_label_batch_job(
         raise HTTPException(status_code=409, detail="本次未选择需要打印的标签")
     request_signature = hashlib.sha256(
         json.dumps(
-            {
+            bind_print_media({
                 "order_ids": payload.order_ids,
                 "plan_fingerprint": payload.plan_fingerprint,
                 "items": [
                     [task_id, requested_counts[task_id]]
                     for task_id in sorted(requested_counts)
                 ],
-            },
+            }, payload.print_media),
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    audit_batch_id = _supplier_label_batch_audit_key(
-        db,
-        action_code="production.packaging_label_batch_job.prepared",
-        idempotency_key=payload.idempotency_key,
-        request_signature=request_signature,
-        user_id=user.id,
-    )
+    try:
+        audit_batch_id = _supplier_label_batch_audit_key(
+            db,
+            action_code="production.packaging_label_batch_job.prepared",
+            idempotency_key=payload.idempotency_key,
+            request_signature=request_signature,
+            user_id=user.id,
+        )
+    except ProductionLabelOperationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
     plans_by_order: dict[int, list[dict]] = {}
     for plan in current_package.get("plans") or []:
@@ -23763,9 +23872,10 @@ def post_supplier_order_packaging_label_batch_job(
                 for source in current_package["batch_source_fingerprints"]
                 if int(source["supplier_order_id"]) == int(order.id)
             )
-            child_key = "p0-label-batch-" + hashlib.sha256(
-                f"{payload.idempotency_key}|supplier_order:{order.id}".encode("utf-8")
-            ).hexdigest()
+            child_identity = f"{payload.idempotency_key}|supplier_order:{order.id}"
+            if payload.print_media is not None:
+                child_identity += "|media:" + json.dumps(bind_print_media({}, payload.print_media), sort_keys=True)
+            child_key = "p0-label-batch-" + hashlib.sha256(child_identity.encode("utf-8")).hexdigest()
             result = prepare_packaging_label_job(
                 db,
                 order=order,
@@ -23774,6 +23884,7 @@ def post_supplier_order_packaging_label_batch_job(
                 requested_print_counts=order_counts if not typed_sources else None,
                 requested_source_counts=order_counts if typed_sources else None,
                 operator_id=user.id,
+                print_media=payload.print_media,
             )
             results.append(result)
             if not result.replayed:
@@ -23806,6 +23917,7 @@ def post_supplier_order_packaging_label_batch_job(
         frozen_package = combine_supplier_requisition_packaging_label_packages(
             [result.package for result in results]
         )
+        frozen_package = bind_print_media(frozen_package, payload.print_media)
         db.commit()
         return {
             "jobs": [
@@ -23869,6 +23981,7 @@ def post_supplier_order_production_packaging_label_job(
             ),
             requested_source_counts={item.source_identity: item.print_label_count for item in payload.items} if typed_sources else None,
             operator_id=user.id,
+            print_media=payload.print_media,
         )
         # Persist the job and its exact task links atomically.  A prepared job
         # deliberately does not block a qualified task refresh.

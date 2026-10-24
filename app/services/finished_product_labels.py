@@ -1,4 +1,5 @@
 """Labels follow the completed lot identity, never the requisition's BOM expansion."""
+from app.services.product_label_media import bind_print_media, assert_media_reprint_source
 from datetime import datetime, timezone
 import json
 from sqlalchemy import select, update
@@ -114,6 +115,9 @@ def selections_from(package):
 
 
 def assert_current(db, package):
+    if package.get('media_reprint_source'):
+        assert_media_reprint_source(db, package)
+        return
     db.expire_all()
     current = build_package(db, selections_from(package))
     if current['plan_fingerprint'] != package['plan_fingerprint']:
@@ -126,9 +130,9 @@ def response(job, package, *, replayed=False):
         template_version=package['template_version']), package=package, replayed=replayed)
 
 
-def prepare(db, *, selections, key, fingerprint, counts, operator_id, reprint_confirmed=False):
-    request_hash = _canonical_hash(dict(source_type=SOURCE, selections=sorted(selections, key=lambda s:s['lot_id']),
-        fingerprint=fingerprint, counts=counts, reprint_confirmed=reprint_confirmed))
+def prepare(db, *, selections, key, fingerprint, counts, operator_id, reprint_confirmed=False, print_media=None):
+    request_hash = _canonical_hash(bind_print_media(dict(source_type=SOURCE, selections=sorted(selections, key=lambda s:s['lot_id']),
+        fingerprint=fingerprint, counts=counts, reprint_confirmed=reprint_confirmed), print_media))
     repeated = db.scalar(select(Job).where(Job.idempotency_key == key))
     if repeated is not None:
         if repeated.request_hash != request_hash or repeated.operator_id != operator_id:
@@ -141,6 +145,7 @@ def prepare(db, *, selections, key, fingerprint, counts, operator_id, reprint_co
     if package['plan_fingerprint'] != fingerprint:
         raise Error('标签计划已变化，请重新加载')
     frozen = apply_delivery_packaging_label_print_counts(package, counts)
+    frozen = bind_print_media(frozen, print_media)
     frozen['reprint_confirmed'] = reprint_confirmed
     job = Job(inventory_lot_id=package['lot_versions'][0]['lot_id'], idempotency_key=key,
         request_hash=request_hash, plan_fingerprint=fingerprint, payload_json=_canonical_json(frozen),
@@ -177,7 +182,7 @@ def confirm(db, *, job_id, key, operator_id):
     if result.rowcount != 1:
         raise Error('打印状态已变化，请刷新')
     assert_current(db, package)
-    if latest_printed_except(db, package, job_id) and not package.get('reprint_confirmed'):
+    if not package.get('media_reprint_source') and latest_printed_except(db, package, job_id) and not package.get('reprint_confirmed'):
         raise Error('所选成品已被其他作业打印，请重新核对并确认补打')
     return db.get(Job, job_id), package, False
 

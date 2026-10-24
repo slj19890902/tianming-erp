@@ -5488,7 +5488,11 @@ class StockReceiptLabelCount(BaseModel):
     print_label_count: int = Field(ge=0, strict=True)
 
 
+from app.services.product_label_media import ProductLabelPrintMedia
+
+
 class StockReceiptLabelRequest(BaseModel):
+    print_media: ProductLabelPrintMedia | None = None
     idempotency_key: str = Field(min_length=1, max_length=120)
     plan_fingerprint: str = Field(min_length=64, max_length=64)
     confirmed: Literal[True]
@@ -5539,7 +5543,7 @@ def stock_receipt_label_job(receipt_id: int, payload: StockReceiptLabelRequest,
         if len(counts) != len(payload.items) or not payload.idempotency_key.strip():
             raise HTTPException(422, '标签选择重复或请求标识为空')
         result = prepare_job(db, receipt_id=receipt_id, key=payload.idempotency_key.strip(),
-                             fingerprint=payload.plan_fingerprint, counts=counts, operator_id=user.id)
+                             fingerprint=payload.plan_fingerprint, counts=counts, operator_id=user.id, print_media=payload.print_media)
         if not result.replayed:
             append_audit_event(db, event_category='business', result='success', source='web',
                 module_code='production', action_code='production.stock_receipt_label_job.prepared',

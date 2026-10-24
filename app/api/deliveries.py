@@ -884,7 +884,11 @@ class DeliveryPackagingLabelJobItemRequest(BaseModel):
         return value
 
 
+from app.services.product_label_media import ProductLabelPrintMedia
+
+
 class DeliveryPackagingLabelJobRequest(BaseModel):
+    print_media: ProductLabelPrintMedia | None = None
     model_config = {"extra": "forbid"}
 
     idempotency_key: str = Field(min_length=8, max_length=120)
@@ -10502,6 +10506,7 @@ def post_delivery_production_packaging_label_job(
                 for item in payload.items
             },
             operator_id=user.id,
+            print_media=payload.print_media,
         )
         if not result.replayed:
             append_audit_event(
@@ -10609,6 +10614,7 @@ def post_delivery_production_packaging_label_job(
                         for item in payload.items
                     },
                     operator_id=user.id,
+                    print_media=payload.print_media,
                 )
                 db.commit()
                 return packaging_label_job_response(

@@ -3,6 +3,7 @@
 No synthetic sales orders or ProductionTasks; the existing immutable print-job
 payload holds receipt and preparation identities alongside the supplier FK.
 """
+from app.services.product_label_media import bind_print_media
 import json
 from sqlalchemy import select
 from app.models.incoming_receipt import IncomingReceiptItem
@@ -161,9 +162,9 @@ def assert_current(db, job, package, *, claim=False):
         raise Error('补库实收、加工记录、常用箱标签设置或布局已变化，请重新加载标签')
 
 
-def prepare_job(db, *, receipt_id, key, fingerprint, counts, operator_id):
-    request_hash = _canonical_hash(dict(source_type=SOURCE, receipt_id=receipt_id,
-                                       fingerprint=fingerprint, counts=counts))
+def prepare_job(db, *, receipt_id, key, fingerprint, counts, operator_id, print_media=None):
+    request_hash = _canonical_hash(bind_print_media(dict(source_type=SOURCE, receipt_id=receipt_id,
+                                       fingerprint=fingerprint, counts=counts), print_media))
     repeated = db.scalar(select(ProductionPackagingLabelPrintJob).where(
         ProductionPackagingLabelPrintJob.idempotency_key == key))
     if repeated is not None:
@@ -178,6 +179,7 @@ def prepare_job(db, *, receipt_id, key, fingerprint, counts, operator_id):
     from types import SimpleNamespace
     assert_current(db, SimpleNamespace(plan_fingerprint=fingerprint), package, claim=True)
     package = apply_delivery_packaging_label_print_counts(package, counts)
+    package = bind_print_media(package, print_media)
     job = ProductionPackagingLabelPrintJob(supplier_order_id=package['supplier_order_id'],
         idempotency_key=key, request_hash=request_hash, operator_id=operator_id,
         template_version=package['template_version'], plan_fingerprint=fingerprint,

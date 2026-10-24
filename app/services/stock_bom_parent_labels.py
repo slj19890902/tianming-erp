@@ -2,6 +2,7 @@
 
 The labels describe planned bundles. Printing never assembles or receives stock.
 """
+from app.services.product_label_media import bind_print_media
 import hashlib
 import json
 
@@ -216,14 +217,14 @@ def assert_current(db, job, package, *, claim=False):
         raise Error("BOM 父件标签计划已变化，请重新加载")
 
 
-def prepare_job(db, *, stock_order_id, assembly_lot_id=None, key, fingerprint, count, operator_id):
+def prepare_job(db, *, stock_order_id, assembly_lot_id=None, key, fingerprint, count, operator_id, print_media=None):
     from app.services.production_label_operations import (
         ProductionLabelOperationError as Error, PackagingLabelJobResult, _claim_package_product_versions,
         _canonical_hash, _canonical_json, _load_job_package, _assert_prepared_job_is_current,
     )
     from app.services.production_packaging_label import apply_delivery_packaging_label_print_counts
-    request_hash = _canonical_hash(dict(stock_order_id=stock_order_id,
-        assembly_lot_id=assembly_lot_id, fingerprint=fingerprint, count=count))
+    request_hash = _canonical_hash(bind_print_media(dict(stock_order_id=stock_order_id,
+        assembly_lot_id=assembly_lot_id, fingerprint=fingerprint, count=count), print_media))
     repeated = db.scalar(select(ProductionPackagingLabelPrintJob).where(ProductionPackagingLabelPrintJob.idempotency_key == key))
     if repeated:
         if repeated.request_hash != request_hash or repeated.operator_id != operator_id:
@@ -241,6 +242,7 @@ def prepare_job(db, *, stock_order_id, assembly_lot_id=None, key, fingerprint, c
         raise Error("父件标签来源已变化，请刷新")
     key_name = package["plans"][0]["selection_key"]
     frozen = apply_delivery_packaging_label_print_counts(package, {key_name: count})
+    frozen = bind_print_media(frozen, print_media)
     job = ProductionPackagingLabelPrintJob(supplier_order_id=package["supplier_order_id"],
         idempotency_key=key, request_hash=request_hash, operator_id=operator_id,
         template_version=package["template_version"], plan_fingerprint=fingerprint,

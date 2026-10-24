@@ -4,6 +4,7 @@ Printing a planned bundle label is not a receipt, production or inventory fact.
 Sales tasks retain their FK links; replenishment evidence is frozen with the
 supplier-order FK in the existing immutable print-job payload.
 """
+from app.services.product_label_media import bind_print_media
 import json
 import re
 from math import ceil
@@ -183,13 +184,13 @@ def assert_current(db, job, package, *, claim=False):
         raise Error("报料来源、产品标签设置或布局已变化，请重新加载标签")
 
 
-def prepare_job(db, *, order, key, fingerprint, counts, operator_id):
+def prepare_job(db, *, order, key, fingerprint, counts, operator_id, print_media=None):
     from types import SimpleNamespace
     from app.services.production_label_operations import (
         ProductionLabelOperationError as Error, PackagingLabelJobResult,
         _canonical_hash, _canonical_json, _load_job_package, _assert_prepared_job_is_current,
     )
-    request_hash = _canonical_hash(dict(supplier_order_id=order.id, fingerprint=fingerprint, source_counts=counts))
+    request_hash = _canonical_hash(bind_print_media(dict(supplier_order_id=order.id, fingerprint=fingerprint, source_counts=counts), print_media))
     repeated = db.scalar(select(ProductionPackagingLabelPrintJob).where(ProductionPackagingLabelPrintJob.idempotency_key == key))
     if repeated:
         if repeated.request_hash != request_hash or repeated.operator_id != operator_id:
@@ -202,6 +203,7 @@ def prepare_job(db, *, order, key, fingerprint, counts, operator_id):
         raise Error("所选报料产品标签资料不完整，请核对后刷新")
     assert_current(db, SimpleNamespace(supplier_order_id=order.id, plan_fingerprint=fingerprint), package, claim=True)
     package = apply_delivery_packaging_label_print_counts(package, counts)
+    package = bind_print_media(package, print_media)
     job = ProductionPackagingLabelPrintJob(supplier_order_id=order.id, idempotency_key=key,
         request_hash=request_hash, operator_id=operator_id, template_version=package["template_version"],
         plan_fingerprint=fingerprint, payload_json=_canonical_json(package), payload_hash=_canonical_hash(package), status="prepared")

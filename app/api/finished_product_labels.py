@@ -25,7 +25,11 @@ class PrintCount(BaseModel):
     print_label_count: int = Field(ge=0, le=10000, strict=True)
 
 
+from app.services.product_label_media import ProductLabelPrintMedia
+
+
 class Prepare(BaseModel):
+    print_media: ProductLabelPrintMedia | None = None
     selections: list[Selection] = Field(min_length=1, max_length=200)
     idempotency_key: str = Field(min_length=1, max_length=120)
     plan_fingerprint: str = Field(pattern=r'^[0-9a-f]{64}$')
@@ -112,7 +116,7 @@ def prepare(payload: Prepare, db: Session = Depends(get_db), user: User = Depend
     try:
         job, package, replayed = labels.prepare(db, selections=selections, key=payload.idempotency_key,
             fingerprint=payload.plan_fingerprint, counts={i.selection_key:i.print_label_count for i in payload.items},
-            operator_id=user.id, reprint_confirmed=payload.reprint_confirmed)
+            operator_id=user.id, reprint_confirmed=payload.reprint_confirmed, print_media=payload.print_media)
         _scope(db, user, package['customer_ids'])
         if not replayed:
             _audit(db, user, job, package, 'prepared', payload.idempotency_key)

@@ -153,6 +153,24 @@ def graph_material_sources(db, lot, *, _visited=frozenset()):
         return None
     if detail["bom_material_product_id"] != identity[0]:
         raise SubkitError("组套材料完工产品身份不一致")
+    rows = []
+    for source in detail.get("bom_material_inputs", []):
+        if not source.get("actual") or source["kind"] not in {"current_receipt", "allocation"}:
+            return None
+        rows.append(receipt_material_cost_source(db, lot, completion, detail, source))
+    if not rows or sum((r["amount"] for r in rows), Decimal(0)) != _amount(detail["capitalized_material_cost"]):
+        raise SubkitError("组套材料完工成本不守恒")
+    return rows
+
+
+def receipt_material_cost_source(db, lot, completion, detail, source):
+    """Verify one frozen current/prior receipt portion against its real allocation."""
+    original = db.get(InventoryLot, completion.inventory_lot_id)
+    if completion.status != "posted" or original is None:
+        raise SubkitError("组套材料完工成本来源无效")
+    identity = _same_output(db, lot, original)
+    if detail.get("bom_material_product_id") != identity[0]:
+        raise SubkitError("组套材料完工产品身份不一致")
     from app.services.multilevel_bom_output_history import completion_material_source_id
     from app.services.multilevel_bom_plan import BomPlanError
     try:
@@ -160,44 +178,38 @@ def graph_material_sources(db, lot, *, _visited=frozenset()):
             if "bom_material_source_snapshot_id" in detail else detail["bom_snapshot_id"])
     except BomPlanError as error:
         raise SubkitError(str(error)) from error
-    rows = []
-    for source in detail.get("bom_material_inputs", []):
-        if not source.get("actual"):
-            return None
-        if source["kind"] == "current_receipt":
-            allocations = list(db.scalars(select(IncomingReceiptPurposeAllocation).where(
-                IncomingReceiptPurposeAllocation.production_completion_id == completion.id,
-                IncomingReceiptPurposeAllocation.purchase_purpose_source_snapshot_id == source["id"])))
-            if len(allocations) != 1:
-                raise SubkitError("组套材料当前收料来源不唯一")
-            allocation = allocations[0]
-        elif source["kind"] == "allocation":
-            allocation = db.get(IncomingReceiptPurposeAllocation, source["id"])
-        else:
-            return None
-        fact = db.get(PurchaseReceiptFact, allocation.purchase_receipt_fact_id) if allocation else None
-        if allocation is None or allocation.status != "posted" or fact is None:
-            raise SubkitError("组套材料采购事实无效")
-        bom_source = db.get(RequisitionItemBomSource, allocation.source_bom_requisition_source_id) if allocation.source_bom_requisition_source_id else None
-        snapshot = db.get(SalesOrderItemBomComponent, bom_source.sales_order_item_bom_component_id) if bom_source else None
-        purpose = db.get(PurchasePurposeSourceSnapshot, allocation.purchase_purpose_source_snapshot_id)
-        if (snapshot is None or purpose is None
-                or allocation.customer_id != identity[1]
-                or snapshot.sales_order_item_id != completion.order_item_id
-                or snapshot.component_product_id != identity[0]
-                or snapshot.id != material_source_id):
-            raise SubkitError("组套材料采购产品或客户不一致")
-        expected = cost_slice(allocation.order_purpose_cost,
-            allocation.receipt_order_purpose_sheet_qty * int(purpose.yield_per_sheet_snapshot),
-            source["before"], source["quantity"])
-        if expected != _amount(source["total_cost"]):
-            raise SubkitError("组套材料采购成本分摊不一致")
-        rows.append({"allocation_id": allocation.id, "purchase_receipt_fact_id": fact.id,
-                     "amount": _amount(source["total_cost"]), "currency": fact.currency,
-                     "tax_included": fact.tax_included, "tax_rate": fact.tax_rate})
-    if not rows or sum((r["amount"] for r in rows), Decimal(0)) != _amount(detail["capitalized_material_cost"]):
-        raise SubkitError("组套材料完工成本不守恒")
-    return rows
+    if source["kind"] == "current_receipt":
+        allocations = list(db.scalars(select(IncomingReceiptPurposeAllocation).where(
+            IncomingReceiptPurposeAllocation.production_completion_id == completion.id,
+            IncomingReceiptPurposeAllocation.purchase_purpose_source_snapshot_id == source["id"])))
+        if len(allocations) != 1:
+            raise SubkitError("组套材料当前收料来源不唯一")
+        allocation = allocations[0]
+    elif source["kind"] == "allocation":
+        allocation = db.get(IncomingReceiptPurposeAllocation, source["id"])
+    else:
+        raise SubkitError("组套材料采购来源类型无效")
+    fact = db.get(PurchaseReceiptFact, allocation.purchase_receipt_fact_id) if allocation else None
+    if allocation is None or allocation.status != "posted" or fact is None:
+        raise SubkitError("组套材料采购事实无效")
+    bom_source = db.get(RequisitionItemBomSource, allocation.source_bom_requisition_source_id) if allocation.source_bom_requisition_source_id else None
+    snapshot = db.get(SalesOrderItemBomComponent, bom_source.sales_order_item_bom_component_id) if bom_source else None
+    purpose = db.get(PurchasePurposeSourceSnapshot, allocation.purchase_purpose_source_snapshot_id)
+    if (snapshot is None or purpose is None
+            or allocation.customer_id != identity[1]
+            or snapshot.sales_order_item_id != completion.order_item_id
+            or snapshot.component_product_id != identity[0]
+            or snapshot.id != material_source_id):
+        raise SubkitError("组套材料采购产品或客户不一致")
+    from app.services.incoming_actual_specs import receipt_yield
+    expected = cost_slice(allocation.order_purpose_cost,
+        allocation.receipt_order_purpose_sheet_qty * receipt_yield(db, allocation.incoming_receipt_item_id, purpose.yield_per_sheet_snapshot),
+        source["before"], source["quantity"])
+    if expected != _amount(source["total_cost"]):
+        raise SubkitError("组套材料采购成本分摊不一致")
+    return {"allocation_id": allocation.id, "purchase_receipt_fact_id": fact.id,
+                 "amount": _amount(source["total_cost"]), "currency": fact.currency,
+                 "tax_included": fact.tax_included, "tax_rate": fact.tax_rate}
 
 
 def _same_output(db, lot, original):

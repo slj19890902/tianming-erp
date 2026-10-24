@@ -22061,6 +22061,7 @@ def list_reported_documents(
 @router.get("/reported-items")
 def list_reported_items(
     customer_id: int | None = None,
+    grouped: bool = False,
     document_id: int | None = Query(default=None, ge=1),
     keyword: str | None = None,
     document_number: str | None = None,
@@ -22261,6 +22262,7 @@ def list_reported_items(
                     "customer_name": effective_customer_name,
                     "customer_short_name": effective_customer_short_name,
                     "candidate_document": document,
+                    "physical_line": line,
                 }
             )
 
@@ -22277,9 +22279,16 @@ def list_reported_items(
     elif sort_direction == "asc":
         item_candidates.sort(key=lambda row: row["reported_at"] or datetime.min)
 
-    total = len(item_candidates)
     start = (page - 1) * page_size
-    page_candidates = item_candidates[start : start + page_size]
+    if grouped:
+        from app.services.incoming_groups import reported_groups
+        groups = reported_groups(db, item_candidates)
+        total = len(groups)
+        page_candidates = [dict(row, group_sequence=index) for index, group in
+            enumerate(groups[start:start + page_size], start=start + 1) for row in group]
+    else:
+        total = len(item_candidates)
+        page_candidates = item_candidates[start : start + page_size]
     selected_documents: list[dict] = []
     selected_document_keys: set[tuple[str, int]] = set()
     for item_candidate in page_candidates:
@@ -22386,7 +22395,8 @@ def list_reported_items(
             )
         items.append(
             {
-                "sequence": offset,
+                "sequence": candidate.get("group_sequence", offset),
+                **({"purchase_group_key": candidate["purchase_group_key"]} if grouped else {}),
                 "stable_id": line.get("stable_id"),
                 "source_type": candidate["source_type"],
                 "document_id": candidate["document_id"],

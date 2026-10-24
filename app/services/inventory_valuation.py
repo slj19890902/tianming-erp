@@ -408,7 +408,8 @@ def frozen_cost(lot, db=None, visited=None):
     if not isinstance(detail, dict):
         return None, {}
     from app.services.entry_source_valuation import SOURCES, source_entry_cost
-    if lot.cost_snapshot_source in SOURCES:
+    if lot.cost_snapshot_source in SOURCES or (
+            lot.cost_snapshot_source == "purchase_receipt_actual" and detail.get("bom_material_inputs")):
         return source_entry_cost(db, lot, detail, set(visited or ()))
     currency = detail.get("currency")
     if not currency and db is not None and lot.cost_snapshot_source == 'purchase_receipt_actual' and detail.get('purchase_receipt_fact_id'):

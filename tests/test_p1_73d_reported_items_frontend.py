@@ -59,7 +59,8 @@ def test_compact_reported_item_table_drawer_and_fixed_columns_are_present() -> N
     ):
         assert heading in block
     assert "操作</th>" not in block
-    assert '<template v-for="row in requisitionItems" :key="row.stable_id">' in block
+    assert '<template v-for="group in reportedDisplayGroups()" :key="group.key">' in block
+    assert '<template v-for="row in group.rows" :key="row.stable_id">' in block
     assert "组合父件：" in block
     assert "撤销整组报料" in block
     assert '@click="openReportedItemDetail(row)"' in block

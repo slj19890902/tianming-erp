@@ -1,9 +1,38 @@
 """Read verified conversion costs without promoting reference prices to purchases."""
 import json
-from decimal import Decimal
+from decimal import Decimal, ROUND_FLOOR, ROUND_CEILING
 from sqlalchemy import select
 from app.services.inventory_transfer_lineage import is_original_or_location_split
 from app.models.warehouse_inventory import InventoryLot, InventoryLotTransfer, InventoryMovement, InventoryReservation
+
+
+def _assembly_input_cost_matches(origin, unit, evidence, quantity, amount):
+    """Validate the same exact total that source_cost apportions at posting.
+
+    Display unit costs have four decimals. Multiplying them back by a large
+    quantity loses the original purchase total. A cumulative four-decimal
+    slice can only be the floor or ceiling of the exact proportional amount;
+    consuming the whole source must preserve its exact total.
+    """
+    stored = (Decimal(str(origin.estimated_unit_cost_snapshot))
+              if origin.estimated_unit_cost_snapshot is not None else None)
+    if unit is None or stored is None or abs(unit - stored) > Decimal('.0001'):
+        return False
+    total, count = None, None
+    if origin.source_ref_type == 'production_completion' and 'bom_material_product_id' in evidence:
+        total, count = evidence.get('capitalized_material_cost'), evidence.get('finished_quantity')
+    elif origin.source_ref_type in {'bom_assembly', 'subkit_conversion'}:
+        total, count = evidence.get('total_cost'), evidence.get('quantity')
+    elif origin.source_ref_type == 'bom_external_receipt':
+        total, count = evidence.get('capitalized_material_cost'), evidence.get('quantity')
+    if total is not None and count is not None and Decimal(str(count)) >= quantity > 0:
+        exact = Decimal(str(total)) * quantity / Decimal(str(count))
+        if Decimal(str(count)) == quantity:
+            return amount == Decimal(str(total))
+        quantum = Decimal('.0001')
+        return amount in {exact.quantize(quantum, rounding=ROUND_FLOOR),
+                          exact.quantize(quantum, rounding=ROUND_CEILING)}
+    return abs(stored * quantity - amount) <= Decimal('.01')
 
 
 def derived_cost(db, lot, visited):
@@ -232,9 +261,7 @@ def derived_cost(db, lot, visited):
                 if origin.finished_detail and origin.finished_detail.product_id!=row.product_id:
                     return None, {'validation_issue':'组套投入产品与原批次不一致'}
                 unit,basis=frozen_cost(origin,db,visited)
-                # Existing assembly consumes its rounded four-decimal entry unit.
-                stored=Decimal(str(origin.estimated_unit_cost_snapshot)) if origin.estimated_unit_cost_snapshot is not None else None
-                if unit is None or stored is None or abs(unit-stored)>Decimal('.0001') or abs(stored*row.quantity-row.total_cost)>Decimal('.01'):
+                if not _assembly_input_cost_matches(origin, unit, basis, row.quantity, row.total_cost):
                     return None, {'validation_issue':'组套投入未能核对原批次成本'}
                 evidence.append(dict(input_id=row.id,lot_id=row.lot_id,quantity=row.quantity,cost=str(row.total_cost),basis=basis))
             result=assembly.total_cost/assembly.quantity

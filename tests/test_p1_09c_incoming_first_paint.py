@@ -61,7 +61,7 @@ def test_desktop_incoming_writes_only_refresh_received_after_its_tab_was_loaded(
     assert "if (this.incomingReceivedLoaded)" in refresh
     assert "this.loadIncomingReceived({force:true})" in refresh
     for method, next_method in (
-        ("async batchReceiveIncoming()", "async receiveIncoming(row)"),
+        ("async batchReceiveIncoming(groupRows=null)", "async receiveIncoming(row)"),
         ("async receiveIncoming(row)", "async acceptShortIncoming(row)"),
         ("async acceptShortIncoming(row)", "async revertIncoming(row)"),
     ):

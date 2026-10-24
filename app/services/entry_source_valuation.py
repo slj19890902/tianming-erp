@@ -71,7 +71,13 @@ def source_entry_cost(db, lot, detail, visited):
                 raise ValueError('加工冻结成本不守恒')
             currencies = set()
             for row in inputs:
-                if row['kind'] == 'reservation':
+                if row['kind'] == 'current_receipt':
+                    # The writer freezes this purpose id before its allocation
+                    # receives a database id. Resolve through the real completion.
+                    from app.services.multilevel_bom_cost_lineage import receipt_material_cost_source
+                    portion = receipt_material_cost_source(db, lot, completion, detail, row)
+                    currencies.add(portion['currency'])
+                elif row['kind'] == 'reservation':
                     reservation = db.get(InventoryReservation, row['id'])
                     origin = db.get(InventoryLot, row['lot_id'])
                     if not reservation or not origin or reservation.inventory_lot_id != origin.id:

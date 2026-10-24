@@ -1,5 +1,5 @@
 """Real-map receipt routing, shared cells, and explicit cancellation semantics."""
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from app.models.receipt_putaway import ProductStoragePreference, ReceiptStagingArea
 from app.models.product import Product
 from app.models.user import User
@@ -20,11 +20,12 @@ def is_staging_location(db, location):
     return is_staging_area(db, area)
 
 
-def location_issue(db, location, inventory_type="finished"):
+def location_issue(db, location, inventory_type="finished", *, projection_context=None):
     if location is None:
         return "货位不存在"
     return operational_location_issue(db, location, warehouse_types={inventory_type, "shared"},
-        require_published=True, require_map_geometry=True, required_inventory_type=inventory_type)
+        require_published=True, require_map_geometry=True, required_inventory_type=inventory_type,
+        projection_context=projection_context)
 
 
 def info(db, product_id):
@@ -154,13 +155,15 @@ def resolve(db, *, product_id=None, customer_id=None, claim=False, inventory_typ
                     return old, "fixed_shelf", None
             except ShelfError as exc:
                 raise ShelfError(f"固定货位不可用：{exc}") from exc
+    from app.services.location_candidates import load_warehouse_location_projection_contexts
+    contexts = load_warehouse_location_projection_contexts(db, [loc for loc in candidates if loc is not None]) if candidates else {}
     for loc in candidates:
-        if loc is None or loc.id in excluded or location_issue(db, loc, inventory_type):
+        if loc is None or loc.id in excluded or location_issue(db, loc, inventory_type, projection_context=contexts.get(loc.id)):
             continue
         if pref is not None and pref.location_id is None and operational_location_issue(
                 db, loc, warehouse_types={inventory_type, 'shared'},
                 require_published=True, require_map_geometry=True,
-                required_inventory_type=inventory_type, require_empty=True):
+                required_inventory_type=inventory_type, require_empty=True, projection_context=contexts.get(loc.id)):
             continue
         # Existing exclusive picking bindings remain protected even in mixed cells.
         from app.models.fixed_shelf import ShelfBinding
@@ -188,19 +191,28 @@ def resolve(db, *, product_id=None, customer_id=None, claim=False, inventory_typ
             continue
         area_locations = db.scalars(select(WarehouseLocation).where(WarehouseLocation.warehouse_floor == 1,
                 WarehouseLocation.area_code == area.area_code, WarehouseLocation.is_active.is_(True))).all()
+        # One bounded read per area, not a complete map/occupancy reload for
+        # every candidate cell. These values live only within this resolution;
+        # a receipt save still resolves again and claims the chosen version.
+        contexts = load_warehouse_location_projection_contexts(db, area_locations)
+        location_ids = [loc.id for loc in area_locations]
+        from app.models.fixed_shelf import ShelfBinding
+        bindings = {b.location_id: b for b in db.scalars(select(ShelfBinding).where(
+            ShelfBinding.location_id.in_(location_ids)))} if location_ids else {}
+        physical_by_location = dict(db.execute(select(InventoryLot.warehouse_location_id,
+            func.sum(InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged))
+            .where(InventoryLot.warehouse_location_id.in_(location_ids), InventoryLot.status.in_(["active", "frozen"]))
+            .group_by(InventoryLot.warehouse_location_id)).all()) if location_ids else {}
         reasons = set()
         for loc in area_locations:
             if loc.id in excluded:
                 continue
-            from app.models.fixed_shelf import ShelfBinding
-            binding = db.get(ShelfBinding, loc.id)
+            binding = bindings.get(loc.id)
             if binding and binding.product_id != product_id:
                 continue
-            issue = location_issue(db, loc, inventory_type)
+            issue = location_issue(db, loc, inventory_type, projection_context=contexts.get(loc.id))
             if issue is None:
-                physical = sum(int(x.quantity_available or 0) + int(x.quantity_reserved or 0) + int(x.quantity_damaged or 0)
-                    for x in db.scalars(select(InventoryLot).where(InventoryLot.warehouse_location_id == loc.id,
-                        InventoryLot.status.in_(["active", "frozen"]))).all())
+                physical = int(physical_by_location.get(loc.id) or 0)
                 staging.append((physical, loc.id, loc))
             else:
                 reasons.add(issue)

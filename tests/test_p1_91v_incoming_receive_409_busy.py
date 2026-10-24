@@ -51,7 +51,7 @@ def test_structured_409_releases_single_and_batch_attempts_and_drops_unselected_
 ) -> None:
     error_message = _method_body("errorMessage(error) {", "normalizeValidationErrors(")
     batch_receive = _method_body(
-        "async batchReceiveIncoming() {",
+        "async batchReceiveIncoming(groupRows=null) {",
         "async receiveIncoming(row) {",
     )
     single_receive = _method_body(
@@ -82,7 +82,7 @@ const vm={{
   showToast(message,isError){{toasts.push({{message:String(message),isError:!!isError}});}},
 }};
 vm.errorMessage=new FunctionCtor("error",{json.dumps(error_message, ensure_ascii=False)}).bind(vm);
-vm.batchReceiveIncoming=new AsyncFunction({json.dumps(batch_receive, ensure_ascii=False)}).bind(vm);
+vm.batchReceiveIncoming=new AsyncFunction('groupRows=null',{json.dumps(batch_receive, ensure_ascii=False)}).bind(vm);
 vm.receiveIncoming=new AsyncFunction("row",{json.dumps(single_receive, ensure_ascii=False)}).bind(vm);
 const expect=(value,message)=>{{if(!value)throw new Error(message);}};
 (async()=>{{
@@ -118,7 +118,7 @@ def test_batch_preparation_is_single_flight_and_always_releases_busy(
 ) -> None:
     error_message = _method_body("errorMessage(error) {", "normalizeValidationErrors(")
     batch_receive = _method_body(
-        "async batchReceiveIncoming() {",
+        "async batchReceiveIncoming(groupRows=null) {",
         "async receiveIncoming(row) {",
     )
     script = f"""
@@ -136,7 +136,7 @@ const vm={{
   showToast(){{}},
 }};
 vm.errorMessage=new FunctionCtor("error",{json.dumps(error_message, ensure_ascii=False)}).bind(vm);
-vm.batchReceiveIncoming=new AsyncFunction({json.dumps(batch_receive, ensure_ascii=False)}).bind(vm);
+vm.batchReceiveIncoming=new AsyncFunction('groupRows=null',{json.dumps(batch_receive, ensure_ascii=False)}).bind(vm);
 const expect=(value,message)=>{{if(!value)throw new Error(message);}};
 (async()=>{{
   const first=vm.batchReceiveIncoming();

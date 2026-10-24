@@ -38,7 +38,7 @@ def test_incomplete_batch_attempt_rebuilds_selection_and_never_posts_empty_items
     tmp_path: Path,
 ) -> None:
     batch_receive = _method_body(
-        "async batchReceiveIncoming() {",
+        "async batchReceiveIncoming(groupRows=null) {",
         "async receiveIncoming(row) {",
     )
     script = f"""
@@ -65,7 +65,7 @@ const vm={{
   showToast(message,isError){{toasts.push({{message:String(message),isError:!!isError}});}},
   errorMessage(error){{return error?.message||String(error);}},
 }};
-vm.batchReceiveIncoming=new AsyncFunction({json.dumps(batch_receive, ensure_ascii=False)}).bind(vm);
+vm.batchReceiveIncoming=new AsyncFunction('groupRows=null',{json.dumps(batch_receive, ensure_ascii=False)}).bind(vm);
 const expect=(value,message)=>{{if(!value)throw new Error(message);}};
 (async()=>{{
   await vm.batchReceiveIncoming();
@@ -88,7 +88,7 @@ def test_batch_prepare_classifies_mixed_rows_and_keeps_unknown_replay(
     tmp_path: Path,
 ) -> None:
     batch_receive = _method_body(
-        "async batchReceiveIncoming() {",
+        "async batchReceiveIncoming(groupRows=null) {",
         "async receiveIncoming(row) {",
     )
     script = f"""
@@ -117,7 +117,7 @@ function context(rows, ensure, responses){{
     showToast(message,isError){{toasts.push({{message:String(message),isError:!!isError}});}},
     errorMessage(error){{return error?.response?.data?.detail?.message||error?.message||String(error);}},
   }};
-  vm.batchReceiveIncoming=new AsyncFunction({json.dumps(batch_receive, ensure_ascii=False)}).bind(vm);
+  vm.batchReceiveIncoming=new AsyncFunction('groupRows=null',{json.dumps(batch_receive, ensure_ascii=False)}).bind(vm);
   return {{vm,writes,toasts,prepared}};
 }}
 (async()=>{{

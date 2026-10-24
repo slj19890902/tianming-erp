@@ -75,7 +75,7 @@ def test_desktop_receive_payload_carries_versions_not_client_allocations_or_pric
 
     batch = _source(
         DESKTOP,
-        "async batchReceiveIncoming() {",
+        "async batchReceiveIncoming(groupRows=null) {",
         "async receiveIncoming(row) {",
     )
     assert "this.incomingPayload(row)" in batch
@@ -108,7 +108,7 @@ def test_desktop_receive_distinguishes_rejected_and_uncertain_attempts() -> None
 def test_desktop_normal_batch_receive_has_no_confirmation_dialog() -> None:
     batch = _source(
         DESKTOP,
-        "async batchReceiveIncoming() {",
+        "async batchReceiveIncoming(groupRows=null) {",
         "async receiveIncoming(row) {",
     )
     assert "确认将选中的" not in batch

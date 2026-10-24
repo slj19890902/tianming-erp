@@ -46,7 +46,7 @@ def test_single_receipt_guides_only_order_linked_success() -> None:
 
 
 def test_batch_receipt_counts_only_successful_order_rows() -> None:
-    batch = _block("async batchReceiveIncoming()", "async receiveIncoming(row)")
+    batch = _block("async batchReceiveIncoming(groupRows=null)", "async receiveIncoming(row)")
 
     assert "const successfulResults = (data.results || []).filter(result => result.success);" in batch
     assert "successfulItemIds.has(String(itemId))" in batch

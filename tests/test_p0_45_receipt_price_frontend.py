@@ -55,7 +55,7 @@ def test_price_error_action_matches_existing_admin_only_material_write(role: str
 
 def test_desktop_price_repair_retry_keeps_quantity_and_idempotency_key(tmp_path: Path) -> None:
     receive = _method("async receiveIncoming(row) {", "async acceptShortIncoming(row) {")
-    recovery = _method('recordIncomingPriceError(row, error, idempotencyKey="") {', "async batchReceiveIncoming() {")
+    recovery = _method('recordIncomingPriceError(row, error, idempotencyKey="") {', "async batchReceiveIncoming(groupRows=null) {")
     route = _method("applyInitialMaterialPriceRoute() {", "returnToIncomingPriceRequest() {")
     _node(f"""
 const assert=require('node:assert/strict');
@@ -89,8 +89,8 @@ vm.applyInitialMaterialPriceRoute=new Function({json.dumps(route)}).bind(vm);
 
 
 def test_desktop_batch_keeps_failed_price_line_draft_after_successful_lines_refresh(tmp_path: Path) -> None:
-    batch = _method("async batchReceiveIncoming() {", "async receiveIncoming(row) {")
-    recovery = _method('recordIncomingPriceError(row, error, idempotencyKey="") {', "async batchReceiveIncoming() {")
+    batch = _method("async batchReceiveIncoming(groupRows=null) {", "async receiveIncoming(row) {")
+    recovery = _method('recordIncomingPriceError(row, error, idempotencyKey="") {', "async batchReceiveIncoming(groupRows=null) {")
     pending = _method("applyIncomingPendingResponse(data, {requestedPage=1, clearSelection=false}={}) {", "async loadIncomingPendingPage(")
     _node(f"""
 const assert=require('node:assert/strict');const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
@@ -102,7 +102,7 @@ canReceiveIncoming:()=>true,ensureAutomaticPurchaseReceiptFact:async()=>{{}},inc
 vm.recordIncomingPriceError=new Function('row','error','idempotencyKey',{json.dumps(recovery)}).bind(vm);
 vm.applyIncomingPendingResponse=new Function('data','{{requestedPage=1,clearSelection=false}}={{}}',{json.dumps(pending)}).bind(vm);
 vm.refreshIncomingAfterWrite=async()=>{{vm.applyIncomingPendingResponse({{items:[{{item_id:'sr2',remaining_quantity:99}}],page:1}});return true;}};
-vm.batchReceiveIncoming=new AsyncFunction({json.dumps(batch)}).bind(vm);
+vm.batchReceiveIncoming=new AsyncFunction('groupRows=null',{json.dumps(batch)}).bind(vm);
 (async()=>{{await vm.batchReceiveIncoming();assert.equal(vm.incomingPending.length,1);assert.equal(vm.incomingPending[0].incoming_quantity,13);assert.equal(vm.incomingPending[0]._receipt_price_retry_key,sent.items[1].idempotency_key);assert.equal(vm.incomingPriceRecovery.sr2.message,'缺价');assert.equal(vm.incomingBatchReceiveAttempt,null);}})().catch(e=>{{console.error(e);process.exit(1);}});
 """, tmp_path)
 

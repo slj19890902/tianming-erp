@@ -1238,6 +1238,7 @@ class BatchReceiveLine(BaseModel):
 
 
 class BatchReceiveRequest(BaseModel):
+    atomic: bool = False
     # Keep the upper bound in schema validation.  Empty input is handled by
     # the route so every client receives the same employee-facing Chinese
     # business error instead of Pydantic's English list-length text.
@@ -4420,12 +4421,13 @@ def pending_items(
     page: Annotated[int | None, Query(ge=1)] = None,
     page_size: Annotated[int | None, Query(ge=1, le=200)] = None,
     home_item_id: Annotated[str | None, Query(max_length=100)] = None,
+    grouped: bool = False,
 ) -> dict:
     response.headers["X-ERP-Session-Identity"] = f"{user.id}:{user.auth_version}"
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["Pragma"] = "no-cache"
     response.headers["Vary"] = "Cookie"
-    if page is None and page_size is None and home_item_id is None:
+    if page is None and page_size is None and home_item_id is None and not grouped:
         return {
             "items": [
                 _incoming_row_response(row)
@@ -4433,19 +4435,22 @@ def pending_items(
             ]
         }
 
-    eligible_routes = dashboard_pending_incoming_rows(db, user)
+    eligible_routes = _pending_incoming_route_rows(db, user) if grouped else dashboard_pending_incoming_rows(db, user)
     if home_item_id is not None:
         eligible_routes = [r for r in eligible_routes if str(r.get("item_id")) == home_item_id]
-    total = len(eligible_routes)
+    from app.services.incoming_groups import pending_groups
+    groups = pending_groups(db, eligible_routes) if grouped else [[row] for row in eligible_routes]
+    total = len(groups)
     resolved_page_size = min(max(int(page_size or 25), 1), 200)
     requested_page = max(int(page or 1), 1)
     last_page = max(1, (total + resolved_page_size - 1) // resolved_page_size)
     resolved_page = min(requested_page, last_page)
     start = (resolved_page - 1) * resolved_page_size
-    selected_routes = eligible_routes[start : start + resolved_page_size]
+    selected_routes = [row for group in groups[start : start + resolved_page_size] for row in group]
+    keys = {str(row["item_id"]): row.get("receipt_group_key") for row in selected_routes}
     return {
         "items": [
-            _incoming_row_response(row)
+            _incoming_row_response(dict(row, **({"receipt_group_key": keys.get(str(row["item_id"]))} if grouped else {})))
             for row in _rows(
                 db,
                 user=user,
@@ -4826,7 +4831,7 @@ def batch_receive_items(
             },
         )
     request_hash = canonical_purchase_receipt_hash(
-        {"items": [line.model_dump(mode="json") for line in payload.items]}
+        {"items": [line.model_dump(mode="json") for line in payload.items], **({"atomic": True} if payload.atomic else {})}
     )
     scope_value: str | list[int] = (
         "unrestricted"
@@ -4986,6 +4991,13 @@ def batch_receive_items(
                     "message": "系统处理失败，请刷新后重试",
                 }
             )
+    if payload.atomic and succeeded != len(payload.items):
+        failures = [{"item_id": row["item_id"], "message": row.get("message", "收料失败")}
+                    for row in results if not row.get("success")]
+        db.rollback()
+        raise HTTPException(status_code=409, detail={"code": "INCOMING_GROUP_NOT_SAVED",
+            "message": "本组合并收料未保存，原数量已保留；" + "；".join(row["message"] for row in failures[:3]),
+            "failures": failures})
     successful_facts = [row["_fact"] for row in results if row.get("success")]
     receipt_item_ids = [int(row.id) for row in successful_facts]
     allocations = (

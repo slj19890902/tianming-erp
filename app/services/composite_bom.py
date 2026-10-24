@@ -459,7 +459,9 @@ def replace_product_bom(
 ) -> dict[str, Any]:
     with atomic_bom(db):
         from app.services.shared_product_master import recipe_sync_plan,finish_recipe_sync
-        shared_plan=recipe_sync_plan(db,parent_product_id,user)
+        from app.services.shared_product_structure import owns_product_write
+        shared_plan=(None if owns_product_write(db,parent_product_id)
+                     else recipe_sync_plan(db,parent_product_id,user))
         result = _replace_product_bom(db, parent_product_id=parent_product_id,
             components=components, expected_version=expected_version, user=user,
             change_reason=change_reason, inventory_mode=inventory_mode,
@@ -510,8 +512,13 @@ def _replace_product_bom(
     mode = inventory_mode or (profile.source if profile else "legacy")
     if mode not in {"legacy", "manufactured", "purchased", "assembled", "separate"}:
         raise CompositeBOMError("请选择产品的自制、外购或组套来源")
-    material_mode = material_mode if material_mode is not None else (profile.material_mode if profile else None)
-    delivery_mode = delivery_mode if delivery_mode is not None else (profile.delivery_mode if profile else None)
+    from app.services.shared_product_structure import owns_product_write
+    remove_shared_profile = bool(profile and mode == 'legacy' and not components
+        and profile.source == 'assembled' and owns_product_write(db,parent.id))
+    material_mode = (None if remove_shared_profile else
+        material_mode if material_mode is not None else (profile.material_mode if profile else None))
+    delivery_mode = (None if remove_shared_profile else
+        delivery_mode if delivery_mode is not None else (profile.delivery_mode if profile else None))
     if parent.box_style == "BOM组合" and (mode != "assembled" or delivery_mode != "parent"):
         raise CompositeBOMError("BOM组合必须采用零件组装、父件交付；请同时保存箱型和配方")
     if material_mode is not None or delivery_mode is not None or mode == "separate":
@@ -527,7 +534,7 @@ def _replace_product_bom(
         old_group = db.get(ProductSubkit, parent.id)
         if old_group is not None and old_group.enabled:
             raise CompositeBOMError("旧旁路组套须先受控转换为真实子件关系，不能与多级BOM同时启用", 409)
-    if profile and not advanced:
+    if profile and not advanced and not remove_shared_profile:
         raise CompositeBOMError("已配置真实BOM的产品不能退回旧旁路模式")
     if bool(getattr(parent, "is_internal_component", False)) and not advanced:
         raise CompositeBOMError("内部组件不能同时作为组合品父产品")
@@ -902,6 +909,9 @@ def _replace_product_bom(
                 removed.is_internal_component = False
     db.flush()
 
+    if remove_shared_profile:
+        db.delete(profile)
+        db.flush()
     after = get_product_bom(db, parent.id)
     if advanced:
         from app.services.multilevel_bom_master import load_master_structure

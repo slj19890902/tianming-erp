@@ -49,7 +49,7 @@
     <script src="/static/drawing-workbench.js?v=20260930-543"></script>
     <script src="/static/js/sheet-cutting.js?v=f73ad78201c3"></script>
     <script src="/static/js/product-unit-labels.js?v=6733f6a35088"></script>
-    <script src="/static/js/product-structure-edit.js?v=475bbb9a5e4a"></script>
+    <script src="/static/js/product-structure-edit.js?v=c98db619f70b"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
     <script src="/static/assets/phone-display.js?v=b9c44d142168"></script>
     <style>
@@ -6899,7 +6899,7 @@
               <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">
                 转入常用箱前请确认单片报料尺寸。用户手填值不会被自动覆盖；只有点击“重新推荐”才会重算。
               </div>
-              <div v-if="productForm.shared_manufacturing_enabled" class="notice">共用产品：材质、报料及生产资料保存后同步至共用客户；各客户价格和历史单据保持独立。</div>
+              <div v-if="productForm.shared_manufacturing_enabled" class="notice">共用产品：箱型、材质、报料及生产资料共同保存。<template v-if="productForm.shared_catalog_policy_enabled">普通纸箱与 BOM组合可在这里共同转换；子件和用量同步核对，无需先解除共用。</template>各客户原售价保留；本页改价仅影响当前客户。计价单位随结构调整，请核对；历史订单和库存保留原记录。</div>
               <div class="product-form-row product-core-row">
                 <div class="field"><label>正式存货编码</label><input class="input" v-model.trim="quotationConvertForm.product_code" /></div>
                 <div class="field"><label>产品名称</label><input class="input" v-model.trim="quotationConvertForm.product_name" /></div>
@@ -32818,6 +32818,7 @@
           },
           onProductBoxStyleChange() {
             if (this.productForm.box_style != null) this.productForm.box_style = this.normalizeBoxTypeDisplay(this.productForm.box_style);
+            ERPProductStructure.sharedBomTransition(this.productForm, this.bomEditor, this.productForm._structure_last_box_style);
             const previousRule = this.productBoxTypeRule(this.productForm._structure_last_box_style);
             const nextRule = this.productBoxTypeRule(this.productForm.box_style);
             if (ERPProductStructure.chooseBoxStyle(this.productForm, previousRule, nextRule)) {

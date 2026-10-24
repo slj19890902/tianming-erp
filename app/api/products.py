@@ -2998,6 +2998,13 @@ def _update_product(product_id, payload, db, user, *, commit=True) -> dict:
     require_customer_access(product.customer_id, current_user=user, db=db)
     require_customer_access(payload.customer_id, current_user=user, db=db)
     price_only = _customer_price_only_updates(product, payload)
+    if commit and price_only is None and product.box_style == 'BOM组合' and payload.box_style != 'BOM组合':
+        from app.models.shared_finished_stock import SharedFinishedMember
+        from app.services.shared_product_master import receipt
+        member = db.get(SharedFinishedMember, product.id)
+        policy = receipt(db, member.group_id) if member else None
+        if policy and policy.get('full_catalog'):
+            raise HTTPException(422, '共用BOM转普通纸箱须同时停用配方并共同保存，请刷新常用箱后重新选择箱型')
     if payload.box_style == "BOM组合" and commit and price_only is None:
         from app.models.multilevel_bom import ProductBomProfile
         profile = db.get(ProductBomProfile, product_id)
@@ -3056,18 +3063,23 @@ def _save_product_with_bom(payload, db, user, product_id=None):
         raise HTTPException(409, "产品与 BOM 版本不一致，请刷新后重试")
     try:
         with atomic_bom(db):
-            saved = (_create_product(payload.product, db, user, commit=False)
-                     if product_id is None else
-                     _update_product(product_id, payload.product, db, user, commit=False))
-            product = _product_or_404(db, saved["id"])
-            bom_payload = payload.bom.model_copy(update={"expected_version": product.version})
-            bom = _update_product_bom(product.id, bom_payload, db, user, commit=False, preserve_parent_unit=True)
-            if product_id is None:
-                from app.services.customer_sharing import enroll_new_product
-                enroll_new_product(db,product,user,payload.product.share_with_customer_group)
-            db.flush()
-            db.refresh(product)
-            result = {"product": _response(product, user), "bom": bom}
+            result = None
+            if product_id is not None:
+                from app.services.shared_product_structure import save_if_shared
+                result = save_if_shared(db, product_id, payload, user)
+            if result is None:
+                saved = (_create_product(payload.product, db, user, commit=False)
+                         if product_id is None else
+                         _update_product(product_id, payload.product, db, user, commit=False))
+                product = _product_or_404(db, saved["id"])
+                bom_payload = payload.bom.model_copy(update={"expected_version": product.version})
+                bom = _update_product_bom(product.id, bom_payload, db, user, commit=False, preserve_parent_unit=True)
+                if product_id is None:
+                    from app.services.customer_sharing import enroll_new_product
+                    enroll_new_product(db,product,user,payload.product.share_with_customer_group)
+                db.flush()
+                db.refresh(product)
+                result = {"product": _response(product, user), "bom": bom}
         db.commit()
         return result
     except Exception:

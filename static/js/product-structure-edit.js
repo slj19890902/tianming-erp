@@ -75,7 +75,19 @@
     form._structure_process_reset = empty(form.production_process) && !(form._production_processes || []).length;
     return false;
   }
-  const api = {fields, initialize, mark, reset, applyPayload, canRecommend, chooseBoxStyle};
+  function sharedBomTransition(form, editor, previousStyle) {
+    if (!form.shared_catalog_policy_enabled || !editor) return;
+    if (previousStyle === "BOM组合" && form.box_style && form.box_style !== "BOM组合") {
+      editor._shared_assembled_draft = JSON.parse(JSON.stringify(editor.components || []));
+      Object.assign(editor, {enabled:false, inventory_mode:"legacy", components:[]});
+      Object.assign(form, {is_composite:false, is_virtual_composite_parent:false,
+        combination_mode:"parent_priced_set", composite_fulfillment_mode:"parent_delivery",
+        unit:(form._production_processes || []).includes("无需结合") ? "片" : "只"});
+    } else if (form.box_style === "BOM组合" && editor._shared_assembled_draft) {
+      editor.components = JSON.parse(JSON.stringify(editor._shared_assembled_draft));
+    }
+  }
+  const api = {fields, initialize, mark, reset, applyPayload, canRecommend, chooseBoxStyle, sharedBomTransition};
   root.ERPProductStructure = api;
   if (typeof module !== "undefined") module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

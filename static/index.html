@@ -7269,7 +7269,7 @@
                   <div class="product-material-context-head">
                     <div>
                       <strong>这款常用箱的报料材质轨迹</strong>
-                      <info-note>每笔正式报料独立保留；尚未匹配正式报料单的人工选材单独标识，不混入同客户其他产品。</info-note>
+                      <info-note>正式报料、人工选材和历史采购台账分别标识。台账保留原表行号与报料资料，采购张数、实际收料和库存分别核对。</info-note>
                     </div>
                     <button v-if="productForm.id" type="button" class="btn small" :disabled="productMaterialContext.loading" @click="loadProductMaterialContext(productForm.id)">{{ productMaterialContext.loading ? '读取中…' : '刷新' }}</button>
                   </div>
@@ -7278,14 +7278,15 @@
                   <div v-else-if="!productMaterialContext.material_history.length" class="muted">暂无报料材质轨迹。</div>
                   <div v-else class="product-material-context-list">
                     <div v-for="history in productMaterialContext.material_history" :key="`${history.source_type || 'history'}-${history.document_id || history.id}-${history.document_item_id || history.order_item_id || ''}`" class="product-material-history-row">
-                      <div class="product-material-context-meta">{{ history.document_date ? formatBeijingDate(history.document_date) : (history.created_at ? formatBeijingDate(history.created_at) : "-") }}</div>
+                      <div class="product-material-context-meta">{{ history.source_type === 'purchase_workbook' ? (history.source_date_label || '原表未记日期') : (history.document_date ? formatBeijingDate(history.document_date) : (history.created_at ? formatBeijingDate(history.created_at) : "-")) }}<div v-if="history.source_type === 'purchase_workbook'">原表日期／备注</div></div>
                       <div>
                         <div class="product-material-context-main">
-                          {{ history.material_code || history.material_snapshot || "历史材质待确认" }} / {{ history.layer_count || "-" }}层 / {{ fluteDisplay(history.flute_type) }}楞
-                          <span :class="['status', history.is_formal_requisition === false ? 'orange' : 'green']" style="margin-left:4px">{{ history.is_formal_requisition === false ? "选材轨迹" : "正式报料" }}</span>
+                          {{ history.material_code || history.material_snapshot || "原表未记材质" }}<template v-if="history.source_type !== 'purchase_workbook'"> / {{ history.layer_count || "-" }}层 / {{ fluteDisplay(history.flute_type) }}楞</template>
+                          <span :class="['status', history.is_formal_requisition === false ? 'orange' : 'green']" style="margin-left:4px">{{ history.source_type === 'purchase_workbook' ? '历史采购台账' : (history.is_formal_requisition === false ? "选材轨迹" : "正式报料") }}</span>
                         </div>
                         <div class="product-material-context-meta">{{ history.supplier_name || "未设置供应商" }} · {{ history.document_no || history.source_reference || "无单号" }}</div>
-                        <div class="product-material-context-meta">克重：{{ history.basis_weight_description || "未冻结且主档未维护" }}<template v-if="history.total_basis_weight_gsm != null">（合计 {{ Number(history.total_basis_weight_gsm) }}g/㎡）</template></div>
+                        <div v-if="history.source_type === 'purchase_workbook'" class="product-material-context-meta">原表报料尺寸：{{ history.report_dimensions_text || '未填写' }} · 压线／净毛：{{ history.crease_text || '未填写' }}</div>
+                        <div v-else class="product-material-context-meta">克重：{{ history.basis_weight_description || "未冻结且主档未维护" }}<template v-if="history.total_basis_weight_gsm != null">（合计 {{ Number(history.total_basis_weight_gsm) }}g/㎡）</template></div>
                         <div v-if="canViewCosts && history.current_effective_price != null" class="product-material-context-meta sensitive-price">
                           当前材质档案价，非报料时冻结价：￥{{ squarePrice(history.current_effective_price) }}/㎡
                           <template v-if="history.current_price_difference_to_lowest != null">
@@ -7295,11 +7296,14 @@
                         </div>
                       </div>
                       <div>
-                        <div class="product-material-history-qty">{{ history.requisition_qty != null || history.quantity != null ? `${Number(history.requisition_qty ?? history.quantity)} 张` : "尚无正式张数" }}</div>
+                        <div v-if="history.source_type === 'purchase_workbook'" class="product-material-history-qty">{{ history.source_purchase_sheet_qty != null ? `${history.shared_source_row ? '本行合计采购' : '原表采购'} ${Number(history.source_purchase_sheet_qty)} 张` : '原表未记采购张数' }}</div>
+                        <div v-else class="product-material-history-qty">{{ history.requisition_qty != null || history.quantity != null ? `${Number(history.requisition_qty ?? history.quantity)} 张` : "尚无正式张数" }}</div>
                         <div class="product-material-context-meta">{{ history.document_status || history.status || history.source_label || "历史记录" }}</div>
                       </div>
                     </div>
                   </div>
+                  <button v-if="productMaterialContext.purchase_trace_has_more" type="button" class="btn small" :disabled="productMaterialContext.purchase_trace_loading" @click="loadMoreProductPurchaseTraces">{{ productMaterialContext.purchase_trace_loading ? '读取中…' : '加载更多历史采购记录' }}</button>
+                  <div v-if="productMaterialContext.purchase_trace_error" class="notice error">{{ productMaterialContext.purchase_trace_error }}</div>
                 </section>
 
                 <section v-if="productMaterialActiveTab==='candidates' && productMaterialComparedCandidates.length" class="product-material-context-panel product-material-comparison-panel">
@@ -30085,6 +30089,10 @@
                 requisition_history: data.requisition_history || data.history || [],
                 material_history: data.material_history || data.requisition_history || data.history || [],
                 manual_selection_history: data.manual_selection_history || [],
+                purchase_trace_has_more: !!data.purchase_trace_has_more,
+                purchase_trace_next_before_id: data.purchase_trace_next_before_id || null,
+                purchase_trace_loading: false,
+                purchase_trace_error: "",
                 loading: false,
                 error: "",
               };
@@ -30111,6 +30119,39 @@
               this.productMaterialCompareKeys = [];
               return false;
             } finally {
+              this.finishLatestRequest(requestKey, controller);
+            }
+          },
+          async loadMoreProductPurchaseTraces() {
+            const requestedId = Number(this.productForm.id);
+            const context = this.productMaterialContext;
+            const beforeId = context.purchase_trace_next_before_id;
+            if (!requestedId || !beforeId || context.purchase_trace_loading) return false;
+            const requestKey = "product:purchase-traces";
+            const controller = this.beginLatestRequest(requestKey);
+            context.purchase_trace_loading = true;
+            context.purchase_trace_error = "";
+            try {
+              const { data } = await axios.get(`/api/requisition/products/${requestedId}/purchase-traces`, {
+                params: { before_id: beforeId }, signal: controller.signal,
+              });
+              if (latestRequestControllers.get(requestKey) !== controller
+                  || Number(this.productForm.id) !== requestedId
+                  || this.productMaterialContext !== context) return false;
+              const seen = new Set(context.material_history
+                .filter(row => row.source_type === 'purchase_workbook').map(row => row.document_id));
+              context.material_history.push(...(data.items || []).filter(row => !seen.has(row.document_id)));
+              context.purchase_trace_has_more = !!data.has_more;
+              context.purchase_trace_next_before_id = data.next_before_id || null;
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && Number(this.productForm.id) === requestedId
+                  && this.productMaterialContext === context) {
+                context.purchase_trace_error = this.errorMessage(error) || "历史采购记录读取失败，可重试";
+              }
+              return false;
+            } finally {
+              context.purchase_trace_loading = false;
               this.finishLatestRequest(requestKey, controller);
             }
           },

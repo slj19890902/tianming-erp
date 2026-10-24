@@ -11031,6 +11031,22 @@ def _current_material_comparison(
     return result
 
 
+@router.get("/products/{product_id}/purchase-traces")
+def product_purchase_traces(
+    product_id: int,
+    before_id: int | None = Query(default=None, gt=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    product = db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(404, "常用箱不存在")
+    require_customer_access(product.customer_id, user, db)
+    from app.services.purchase_workbook_history import history_page
+    return history_page(db, product, can_view_costs=has_permission(user, "cost.view"), before_id=before_id, limit=limit)
+
+
 @router.get("/products/{product_id}/material-context")
 def product_material_context(
     product_id: int,
@@ -11871,6 +11887,11 @@ def product_material_context(
     for row in manual_history:
         if isinstance(row.get("selected_at"), datetime):
             row["selected_at"] = utc_naive_to_api(row["selected_at"])
+    from app.services.purchase_workbook_history import history_page
+    purchase_traces = history_page(db, product, can_view_costs=can_view_costs)
+    # Original row order is retained separately from actual ERP event dates.
+    # Imported evidence never changes formal usage counts or recommendations.
+    material_history.extend(purchase_traces["items"])
     return {
         "product_id": product.id,
         "product_version": product.version,
@@ -11892,6 +11913,8 @@ def product_material_context(
         "requisition_history": requisition_history,
         "material_history": material_history,
         "manual_selection_history": manual_history,
+        "purchase_trace_has_more": purchase_traces["has_more"],
+        "purchase_trace_next_before_id": purchase_traces["next_before_id"],
     }
 
 

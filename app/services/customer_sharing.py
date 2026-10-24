@@ -72,8 +72,8 @@ def _sku_plan_base(db,p,customer_ids):
         if len(matches)>1:raise shared._error('同客户同编码同角色有多份资料，请在常用箱明确保留的产品')
         if matches:current.append(matches[0])
         else:missing.append(cid)
-    # Full-catalog setup must expose real quote conflicts, rather than pick a
-    # customer's most recent edit. Blank target fields can inherit the source.
+    # Manufacturing cost conflicts still need review. Customer selling-price
+    # differences are intentional and never block physical catalog sharing.
     for peer in current:
         if peer.id == p.id:
             continue
@@ -105,6 +105,10 @@ def _sku_plan_base(db,p,customer_ids):
 
 def _sku_plan(db,p,customer_ids):
     plan=_sku_plan_base(db,p,customer_ids)
+    # Tax profile changes must invalidate the user's price-inheritance preview,
+    # even when they do not increment a product/customer version.
+    plan['sale_price_initializations']={str(cid):access.sale_price_initialization(
+        db,p,target_customer_id=cid,target_unit=p.unit) for cid in customer_ids}
     ids=plan.get('ids') or plan.get('args',{}).get('product_ids') or [p.id]
     lots=list(db.scalars(select(InventoryLot).join(InventoryLot.finished_detail).where(
         FinishedGoodsInventoryDetail.product_id.in_(ids),InventoryLot.status=='active',InventoryLot.quantity_available>0)))
@@ -181,16 +185,31 @@ def activate_master(db,gid,actor,source_product_id=None):
     """Enable one canonical manufacturing version, without approving old drift."""
     products=[db.get(Product,pid) for pid in management.member_ids(db,gid)]
     source = next((p for p in products if p.id == source_product_id), products[0])
+    prior=master.receipt(db,gid) or dict(lots={},legacy_lot_ids=[])
+    price_initializations=prior.setdefault('customer_sale_price_initializations',{})
     from app.services.master_data_versioning import preview_versioned_update, _apply_versioned_update
     for p in products:
         updates={field:getattr(source,field) for field in master.COMMERCIAL
                  if getattr(p,field) is None and getattr(source,field) is not None}
+        # Treat gross/net fields as a pair: a saved customer price must not gain
+        # the other customer's unrelated net price. A prior marker also protects
+        # intentional later clearing when this sharing group is re-enabled.
+        if str(p.id) not in price_initializations:
+            initial=access.sale_price_initialization(db,source,target_customer_id=p.customer_id,target_unit=p.unit)
+            existing={field:getattr(p,field) for field in access.SALE_PRICE_FIELDS}
+            if any(value is not None for value in existing.values()):
+                initial.update(status='preserved',values=json.loads(access.canonical(existing)))
+            else:
+                updates.update(access.initial_sale_price_values(initial))
+            price_initializations[str(p.id)]=dict(initial,target_product_id=p.id,target_version=p.version)
         if updates:
             preview=preview_versioned_update(db,object_type='product',entity=p,updates=updates,
                 expected_version=p.version,user=actor)
             _apply_versioned_update(db,object_type='product',entity=p,updates=updates,
                 expected_version=p.version,user=actor,reason='管理员确认整套产品共用，补齐当前报价',
                 source='customer_sharing',confirmation_token=preview['confirmation_token'])
+        if str(p.id) in price_initializations:
+            price_initializations[str(p.id)].setdefault('applied_target_version',p.version)
     for p in products:
         _customer(db,p.customer_id,actor)
         member=master.effective_member(db,db.get(SharedFinishedMember,p.id))
@@ -210,7 +229,6 @@ def activate_master(db,gid,actor,source_product_id=None):
             _apply_versioned_update(db,object_type='product',entity=p,updates=updates,
                 expected_version=p.version,user=actor,reason='管理员确认同一产品共用，以已选来源统一当前生产资料',
                 source='customer_sharing',confirmation_token=check['confirmation_token'])
-    prior=master.receipt(db,gid) or dict(lots={},legacy_lot_ids=[])
     new_members={str(p.id):dict(identity_json=shared.member_identity(p),product_basis_json=shared.product_basis(p)) for p in products}
     # A newly added sales reference may use only old stock already approved
     # for an equivalent current member; a material-changed batch stays blocked.

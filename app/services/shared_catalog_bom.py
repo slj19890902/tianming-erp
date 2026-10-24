@@ -79,8 +79,9 @@ def clone_product(db,source,cid,actor):
     fields.update(is_composite=source.is_composite,is_internal_component=source.is_internal_component,
         is_virtual_composite_parent=source.is_virtual_composite_parent,combination_mode=source.combination_mode,
         composite_fulfillment_mode=source.composite_fulfillment_mode)
+    initial=access.sale_price_initialization(db,source,target_customer_id=cid,target_unit=fields['unit'])
     peer=Product(customer_id=cid,product_code=source.product_code,customer_material_code=source.product_code,
-        product_name=source.product_name,sale_unit_price=None,sale_unit_price_no_tax=None,**fields)
+        product_name=source.product_name,**access.initial_sale_price_values(initial),**fields)
     db.add(peer);db.flush()
     record_versioned_create(db,object_type='product',entity=peer,user=actor,reason='客户共用配方销售引用',source='customer_sharing')
     return peer

@@ -22,14 +22,15 @@ def catalog(db, data):
     return source, peer
 
 
-def test_quotes_share_original_precision_both_directions(reservation_db):
+def test_initial_quotes_keep_precision_and_customer_sale_edits_are_independent(reservation_db):
     db, data = reservation_db
     source, peer = catalog(db, data)
     assert peer.sale_unit_price_no_tax == source.sale_unit_price_no_tax == Decimal('0.733')
     assert peer.cost_unit_price == Decimal('0.31')
     edit(db, data, peer, {'sale_unit_price_no_tax': Decimal('0.73329'), 'sale_unit_price': Decimal('0.73329')})
     db.commit()
-    assert source.sale_unit_price_no_tax == peer.sale_unit_price_no_tax == Decimal('0.73329')
+    assert source.sale_unit_price_no_tax == Decimal('0.733')
+    assert peer.sale_unit_price_no_tax == Decimal('0.73329')
 
 
 def test_drawings_use_existing_originals_and_exclude_unrelated_products(reservation_db):

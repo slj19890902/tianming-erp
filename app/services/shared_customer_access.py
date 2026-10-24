@@ -1,7 +1,7 @@
 """One reviewed transaction for customer sales references and shared stock.
 
-A reference copies physical production fields only. It creates no stock and
-never guesses the customer's selling price, drawing, model or billing data.
+A reference copies physical production fields and the reviewed initial selling
+price once. It creates no stock and never guesses drawing/model/billing data.
 Preview performs reads only; allocated product IDs are assigned at confirmation.
 """
 import hashlib
@@ -20,6 +20,7 @@ from app.services.audit_log import append_audit_event
 
 PHYSICAL_FIELDS = sorted(set(FIELDS + shared.EXTRA_FIELDS + (
     'unit','length_mm','width_mm','height_mm','material_id','legacy_material_text','flute_type','mold_tool_id','die_cut_path','production_variants')))
+SALE_PRICE_FIELDS = ('sale_unit_price', 'sale_unit_price_no_tax')
 
 
 def canonical(value):
@@ -29,6 +30,30 @@ def canonical(value):
 
 def digest(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
+
+
+def sale_price_initialization(db, source, *, target_customer_id, target_unit):
+    """Freeze a reviewed baseline without inventing unit/tax conversions."""
+    from app.services.customer_price_tax import resolve_customer_price_tax_terms
+    source_terms = resolve_customer_price_tax_terms(db, source.customer_id)
+    target_terms = resolve_customer_price_tax_terms(db, target_customer_id)
+    source_mode, target_mode = source_terms.price_tax_mode, target_terms.price_tax_mode
+    compatible = (source.unit == target_unit and source_mode == target_mode
+                  and source_terms.tax_rate == target_terms.tax_rate)
+    values = {field: getattr(source, field) if compatible else None for field in SALE_PRICE_FIELDS}
+    status = ('initialized' if any(value is not None for value in values.values()) else
+              'incompatible_basis' if not compatible else 'source_price_missing')
+    return json.loads(canonical(dict(policy='customer-sale-price-v1', status=status,
+        source_product_id=source.id, source_customer_id=source.customer_id, source_version=source.version,
+        source_unit=source.unit, target_unit=target_unit, source_price_tax_mode=source_mode,
+        target_price_tax_mode=target_mode, source_tax_rate=source_terms.tax_rate, target_tax_rate=target_terms.tax_rate,
+        source_tax_profile_version=source_terms.profile_version, target_tax_profile_version=target_terms.profile_version,
+        values=values)))
+
+
+def initial_sale_price_values(initialization):
+    return {field: Decimal(value) if value is not None else None
+            for field, value in initialization['values'].items()}
 
 
 def can_reference(db, product):
@@ -72,9 +97,10 @@ def preview(db, *, source_product_id, product_ids, new_customer_ids, lot_ids=(),
         if db.scalar(select(Product.id).where(Product.customer_id==cid,Product.product_code==source.product_code,
                 Product.deleted_at.is_(None),Product.purged_at.is_(None)).limit(1)):
             raise shared._error('目标客户已有此存货编码的资料，请刷新并选择已有产品，不能重复补建')
+        initial_price = sale_price_initialization(db, source, target_customer_id=cid, target_unit=source.unit)
         new.append(dict(customer_id=cid,customer_name=customer.name,customer_version=customer.version,
-            code=source.product_code,name=source.product_name,sale_unit_price=None,customer_drawing_number=None,
-            customer_category=None,customer_model=None))
+            code=source.product_code,name=source.product_name,**initial_price['values'],
+            price_initialization=initial_price,customer_drawing_number=None,customer_category=None,customer_model=None))
     if len(ids)>1:
         value=shared.preview(db,product_ids=ids,lot_ids=lids,group_id=group.id if group else None,
             allow_new_members=bool(group),confirmed_lot_fields=confirmed_lot_fields)
@@ -132,10 +158,11 @@ def confirm(db, *, actor, preview_hash, operation_key, evidence, source='web', b
         for row in plan['new_sales_references']:
             product=Product(customer_id=row['customer_id'],product_code=source_product.product_code,
                 customer_material_code=source_product.product_code,product_name=source_product.product_name,
-                sale_unit_price=None,sale_unit_price_no_tax=None,customer_drawing_number=None,customer_model=None,
+                **initial_sale_price_values(row['price_initialization']),customer_drawing_number=None,customer_model=None,
                 customer_category=None,is_active=True,version=1,
                 **{f:getattr(source_product,f) for f in PHYSICAL_FIELDS})
-            db.add(product);db.flush();created.append(dict(product_id=product.id,customer_id=product.customer_id,code=product.product_code))
+            db.add(product);db.flush();created.append(dict(product_id=product.id,customer_id=product.customer_id,
+                code=product.product_code,price_initialization=row['price_initialization']))
         if plan['mold']:
             mold=db.get(MoldTool,plan['mold']['id'])
             claimed=db.execute(update(MoldTool).where(MoldTool.id==mold.id,MoldTool.version==plan['mold']['version'])

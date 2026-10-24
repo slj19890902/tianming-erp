@@ -20,7 +20,9 @@ REPORT = ('supplier_edge_type', 'base_supplier_edge_type', 'report_length_mm', '
           'crease_type', 'crease_left_mm', 'crease_middle_mm', 'crease_right_mm',
           'base_crease_type', 'base_crease_left_mm', 'base_crease_middle_mm', 'base_crease_right_mm',
           'default_cutting_mode', 'sheet_cutting_settings', 'production_variants')
-COMMERCIAL = ('sale_unit_price', 'sale_unit_price_no_tax', 'cost_unit_price', 'board_price', 'suggested_price')
+# Current manufacturing/quotation costs retain the full-catalog policy.
+# Customer selling prices are independent, even for the same physical product.
+COMMERCIAL = ('cost_unit_price', 'board_price', 'suggested_price')
 PRINTING = ('printing_plate_mode', 'printing_plate_1_id', 'printing_plate_2_id', 'printing_plate_3_id',
             'print_content', 'printing_colors', 'plate_alignment_value_mm', 'plate_mount_value_mm',
             'machine_set_length_mm', 'machine_set_width_mm', 'machine_set_height_mm')
@@ -224,6 +226,9 @@ def preview_reconcile(db, product_id, *, excluded_legacy_lot_ids=()):
                   added_lots=added, skipped_lots=skipped,unresolved_legacy_lots=unresolved,
                   products=[dict(id=p.id, version=p.version, code=p.product_code) for p in products],
                   members=members, lots=lots, legacy_lot_ids=sorted(f.lot_id for f in facts))
+    previous = receipt(db, gid)
+    if previous and 'customer_sale_price_initializations' in previous:
+        result['customer_sale_price_initializations'] = deepcopy(previous['customer_sale_price_initializations'])
     result['sha256'] = hashlib.sha256(shared._json(result).encode()).hexdigest()
     return result
 

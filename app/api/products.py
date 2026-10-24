@@ -9,6 +9,7 @@ import math
 import os
 import re
 import mimetypes
+from copy import deepcopy
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
@@ -555,7 +556,7 @@ class ProductPayload(BaseModel):
     sale_unit_price: Decimal | None = Field(default=None, ge=0)
     sale_unit_price_no_tax: Decimal | None = Field(default=None, ge=0)
 
-    @field_validator("sale_unit_price")
+    @field_validator("sale_unit_price", "sale_unit_price_no_tax")
     @classmethod
     def validate_sales_unit_price(cls, value):
         return price_value(value) if value is not None else None
@@ -837,14 +838,17 @@ class ProductStructureUpdatePayload(ProductPayload):
     # Only the normal editor's explicit controls add entries to this mask.
     structure_edit_fields: list[ProductStructureField] | None = None
     _structure_input: dict = PrivateAttr(default_factory=dict)
+    _update_input: dict = PrivateAttr(default_factory=dict)
 
     @model_validator(mode="wrap")
     @classmethod
     def capture_structure_input(cls, value, handler):
+        update_input = deepcopy(value) if isinstance(value, dict) else None
         raw = {key: value[key] for key in _PRODUCT_STRUCTURE_FIELDS if key in value} if isinstance(value, dict) else None
         result = handler(value)
         if raw is not None:
             result._structure_input = raw
+            result._update_input = update_input
         return result
 
 
@@ -1463,6 +1467,38 @@ def _restore_product_structure_edit_intent(product: Product, payload: ProductPay
     return "production_process" not in selected or raw["production_process"] is None
 
 
+def _customer_price_only_updates(product, payload):
+    """A local price edit must not normalize unrelated old production fields."""
+    from app.services.shared_customer_access import SALE_PRICE_FIELDS
+    raw = getattr(payload, '_update_input', {})
+    prices = set(SALE_PRICE_FIELDS) & set(raw)
+    if not prices:
+        return None
+    # Respect the existing explicit structure-edit mask before comparing a
+    # full form whose model defaults may have filled an old unknown structure.
+    _restore_product_structure_edit_intent(product, payload)
+    for field, value in raw.items():
+        if field not in ProductPayload.model_fields or field in SALE_PRICE_FIELDS:
+            continue
+        if field in {'external_supply', 'share_with_customer_group'}:
+            # Nonempty compound settings remain under their existing validator.
+            if value is not None:
+                return None
+            continue
+        if field in _PRODUCT_STRUCTURE_FIELDS:
+            value = getattr(payload, field)
+        current = getattr(product, field, None)
+        if isinstance(current, (Decimal, int)) and not isinstance(current, bool) and value is not None:
+            try:
+                if Decimal(str(value)) == Decimal(str(current)):
+                    continue
+            except (InvalidOperation, ValueError, TypeError):
+                return None
+        if normalize_json_value(current) != normalize_json_value(value):
+            return None
+    return {field: getattr(payload, field) for field in prices}
+
+
 def _validated_product_versioned_updates(
     db: Session,
     *,
@@ -1470,6 +1506,9 @@ def _validated_product_versioned_updates(
     payload: ProductPayload,
     user: User,
 ) -> dict:
+    price_only = _customer_price_only_updates(product, payload)
+    if price_only is not None:
+        return price_only
     preserve_process_input = _restore_product_structure_edit_intent(product, payload)
     # Owner-confirmed names share one registry label; physical unknowns stay intact.
     payload.box_style = canonical_box_style(payload.box_style)
@@ -2958,7 +2997,8 @@ def _update_product(product_id, payload, db, user, *, commit=True) -> dict:
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
     require_customer_access(payload.customer_id, current_user=user, db=db)
-    if payload.box_style == "BOM组合" and commit:
+    price_only = _customer_price_only_updates(product, payload)
+    if payload.box_style == "BOM组合" and commit and price_only is None:
         from app.models.multilevel_bom import ProductBomProfile
         profile = db.get(ProductBomProfile, product_id)
         if not profile or profile.source != "assembled" or profile.delivery_mode != "parent":
@@ -2971,7 +3011,7 @@ def _update_product(product_id, payload, db, user, *, commit=True) -> dict:
     )
     from app.models.bom_subkit import ProductSubkit
     group = db.get(ProductSubkit, product.id)
-    if group and group.enabled and (
+    if group and group.enabled and price_only is None and (
         updates.get("is_virtual_composite_parent", product.is_virtual_composite_parent)
         or not updates.get("is_composite", product.is_composite)
         or updates.get("composite_fulfillment_mode", product.composite_fulfillment_mode) != "parent_delivery"

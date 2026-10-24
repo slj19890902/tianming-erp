@@ -1,10 +1,10 @@
 {
   "type": "tianming.storage-reclaim-execution.v1",
-  "at": "2026-10-24T05:35:08.854887+00:00",
+  "at": "2026-10-24T05:36:06.805489+00:00",
   "units": "decimal GB = 1,000,000,000 bytes",
   "available_before_bytes": 40017551360,
-  "available_after_bytes": 200768786432,
-  "net_available_increase_bytes": 160751235072,
+  "available_after_bytes": 200765644800,
+  "net_available_increase_bytes": 160748093440,
   "target_available_bytes": 200000000000,
   "goal_met": true,
   "cleanup": {
@@ -53,7 +53,14 @@
     "budget_check_0_1GB_admitted": true,
     "budget_check_5GB_blocked": true,
     "budget_gate_scope": "ERP foreground development workflow, not an operating-system disk quota",
-    "targeted_tests_passed": 4
+    "targeted_tests_passed": 4,
+    "automatic_database_backup_latest_verified": {
+      "at": "2026-10-24T05:34:00.304910+00:00",
+      "name": "20261024-053400-06871925.tmdb",
+      "consecutive_failures": 0,
+      "status": "verified",
+      "old_database_points_retired": 1
+    }
   },
   "health": {
     "http": 200,
@@ -63,7 +70,6 @@
     "unclassified_test_links_preserved": 51,
     "failed_migrations_without_required_original_preserved": 2,
     "historically_missing_preserved_backup_originals": 4,
-    "automatic_backup_last_result": "insufficient-workspace before this cleanup; a later successful retry has not yet been verified",
     "unique_or_uncommitted_workspaces_preserved": true,
     "NAS_mount_is_local_proxy": "mounted readback alone does not prove independent remote persistence"
   },

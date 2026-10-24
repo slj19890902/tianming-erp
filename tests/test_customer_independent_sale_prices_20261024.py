@@ -1,4 +1,5 @@
 """Customer prices may differ while one physical inventory ledger is shared."""
+import json
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -267,3 +268,42 @@ def test_bom_new_customer_inherits_each_real_product_price_once(composite_requis
         db.commit()
         save(db, data, values)
         assert parent.sale_unit_price == Decimal('8.123456') and db.get(Product, 1).sale_unit_price == Decimal('5.123456')
+
+
+@pytest.mark.parametrize('mixed_production_edit', [False, True])
+def test_price_change_leaves_permanent_evidence_even_when_customers_return_to_same_price(reservation_db, mixed_production_edit):
+    db, data = reservation_db
+    source, target, _, _ = priced_pair(db, data)
+    save(db, data, args(data))
+    values = {'sale_unit_price': Decimal('8')}
+    if mixed_production_edit:
+        values['report_length_mm'] = 802
+    edit(db, data, source, values)
+    db.commit()
+    assert source.sale_unit_price == target.sale_unit_price == Decimal('8')
+    markers = [json.loads(row.result_json)['customer_independent_sale_price_v1']
+               for row in db.scalars(select(SharedFinishedMutation))
+               if '"customer_independent_sale_price_v1"' in row.result_json]
+    assert len(markers) == 1
+    assert markers[0]['product_id'] == source.id and markers[0]['customer_id'] == source.customer_id
+    assert markers[0]['version'] == source.version
+    assert markers[0]['fields']['sale_unit_price'] == {'before': '5', 'after': '8'}
+    edit(db, data, source, {'sale_unit_price': Decimal('8')})
+    db.commit()
+    assert len([row for row in db.scalars(select(SharedFinishedMutation))
+                if '"customer_independent_sale_price_v1"' in row.result_json]) == 1
+
+
+def test_price_evidence_failure_rolls_back_price_version_and_audit(reservation_db):
+    db, data = reservation_db
+    source, target, _, _ = priced_pair(db, data)
+    save(db, data, args(data))
+    before_version, before_count = source.version, db.query(MasterDataObjectVersion).count()
+    before_receipts = db.query(SharedFinishedMutation).count()
+    with patch.object(master, 'record_customer_sale_price_update', side_effect=RuntimeError('receipt write failed')):
+        with pytest.raises(RuntimeError, match='receipt write failed'):
+            edit(db, data, source, {'sale_unit_price': Decimal('8')})
+    db.rollback()
+    assert source.sale_unit_price == Decimal('5') and source.version == before_version
+    assert db.query(MasterDataObjectVersion).count() == before_count
+    assert db.query(SharedFinishedMutation).count() == before_receipts

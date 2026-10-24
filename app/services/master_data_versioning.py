@@ -1063,6 +1063,10 @@ def _apply_versioned_update(
     )
     db.add(revision)
     db.flush()
+    if object_type == "product":
+        from app.services.shared_product_master import record_customer_sale_price_update
+        record_customer_sale_price_update(db, entity, changed, actor=user, source=source,
+                                          change_set_id=change_set_id)
     return revision
 
 

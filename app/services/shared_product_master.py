@@ -98,6 +98,23 @@ def receipt(db, group_id):
     return json.loads(raw)[CAPABILITY] if raw else None
 
 
+def record_customer_sale_price_update(db, product, changed, *, actor, source, change_set_id):
+    """Keep independent-price semantics even if customers later have equal prices."""
+    from app.services.shared_customer_access import SALE_PRICE_FIELDS, canonical
+    fields = {field: changed[field] for field in SALE_PRICE_FIELDS if field in changed}
+    if not fields:
+        return
+    member = db.get(SharedFinishedMember, product.id)
+    if member is None:
+        return
+    evidence = dict(product_id=product.id, customer_id=product.customer_id, version=product.version,
+        fields=fields, actor_id=actor.id if actor else None, source=source, change_set_id=change_set_id)
+    db.add(SharedFinishedMutation(group_id=member.group_id,
+        operation_key='customer-sale-price-'+change_set_id, request_json=canonical(evidence),
+        result_json=canonical({'customer_independent_sale_price_v1': evidence})))
+    db.flush()
+
+
 def effective_member(db, member):
     if member is None:
         return None

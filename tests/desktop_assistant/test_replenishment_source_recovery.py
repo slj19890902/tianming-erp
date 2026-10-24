@@ -27,7 +27,7 @@ def scene(tmp_path, monkeypatch):
         path.mkdir(parents=True)
     database = shared / 'data/carton_erp.sqlite3'
     with sqlite3.connect(database) as db:
-        for table in ('products', 'users', 'stock_replenishment_order_items', 'inventory_reservations', 'inventory_lots'):
+        for table in ('products', 'users', 'customers', 'sales_orders', 'stock_replenishment_order_items', 'inventory_reservations', 'inventory_lots'):
             db.execute('CREATE TABLE "' + table + '"(id INTEGER PRIMARY KEY)')
             db.execute('INSERT INTO "' + table + '" VALUES(1)')
         db.execute('CREATE TABLE "scrap_production_jobs"(id INTEGER PRIMARY KEY, order_item_id INTEGER, status TEXT)')

@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.718"
-APP_VERSION_NAME = "对账开票一体办理与精度修复"
-APP_BUILD_DATE = "2026-10-23"
+APP_VERSION = "v0.22.719"
+APP_VERSION_NAME = "补库片料废料生产与用量调整"
+APP_BUILD_DATE = "2026-10-24"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -7075,3 +7075,18 @@ APP_VERIFICATION_STEPS = [
     "查找一个含跨月账单的客户，确认合并来源与历史票据可查且没有重复尾差；常用箱四至六位单价保存后保持原值，系统版本为 v0.22.718。",
 ]
 APP_CHANGELOG = [*(f"v0.22.718：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "库存预警独立补库支持采用库存片料或安排废料生产，原生产页可查看安排、登记实际完工及取消未执行安排。",
+    "片料生产按原批次计成本，实际少产恢复缺口；先完工或取消，再按实际余量采购，避免重复报料。",
+    "普通订单已安排片料可增加加工张数、全部使用或保留备用；实际投入和产出入账，订单需求覆盖仍封顶。",
+    "未开票对账明细可依据实际票据更正税率，保留含税金额、变更依据与审计；已开票和收款事实继续保护。",
+    "新增补库生产关联结构，不回填历史业务；实际生产事实存在时禁止旧程序有损回退。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新待报料，在80011641原库存预警补库行查看片料或废料生产入口；已采购的来源先按原流程核对采购。",
+    "按真实加工安排用料，再到生产安排登记实际合格产出；确认剩余报料按实际余量计算，取消未执行片料安排后库存恢复。",
+    "普通订单片料安排可调整本次加工张数或保留备用，实际完工前不虚增成品；系统版本显示v0.22.719。",
+]
+APP_CHANGELOG = [*(f"v0.22.719：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

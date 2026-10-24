@@ -5,6 +5,8 @@ const html=fs.readFileSync(require.resolve('../../static/index.html'),'utf8');
 function harness(){
   const requests=[], box={axios:{post:async(url,body)=>{requests.push({url,body});return {data:{can_update:true,current_version:7,confirmation_token:'bound-price-token'}};}}};
   vm.createContext(box);
+  vm.runInContext(fs.readFileSync(require.resolve('../../static/js/product-structure-edit.js'),'utf8'),box);
+  box.window=box;
   function actual(name){
     const m=html.match(new RegExp('^          (?:async )?'+name+'\\([^\\n]*\\) \\{','m'));
     assert.ok(m,name);
@@ -28,7 +30,8 @@ function harness(){
     errorMessage:error=>error.message,
   };
   for(const name of ['_productFormSaveFields','productOnlySalePriceChange','buildProductWritePayload',
-    'attachMasterUpdateMetadata','prepareProductOneClickSave']) c[name]=actual(name);
+    'attachMasterUpdateMetadata','prepareProductOneClickSave','productSaveBlockReason']) c[name]=actual(name);
+  c.modal={type:'product'};c.canEditProducts=true;
   c.productFormSnapshot=JSON.stringify(c._productFormSaveFields());
   return {c,requests};
 }
@@ -48,9 +51,9 @@ test('explicitly clearing a customer price sends null while zero remains a real 
   c.productForm.sale_unit_price='0';assert.equal(c.buildProductWritePayload().sale_unit_price,'0');
 });
 
-test('actual production and identity changes cannot be swallowed by the price-only route',()=>{
+test('actual production and customer ownership changes cannot be swallowed by the local route',()=>{
   const changes=[['material_id',71],['report_length_mm',802],['width_mm',400],['unit','片'],
-    ['customer_id',138],['product_code','DIFFERENT'],['production_notes','新增实际工艺'],
+    ['customer_id',138],['production_notes','新增实际工艺'],
     ['production_label_units_per_label',100],['_production_processes',['模切']],
     ['_structure_edit_fields',['production_process']],['sheet_cutting_settings',{schema:2}],
     ['supplier_edge_type','净料']];
@@ -59,6 +62,18 @@ test('actual production and identity changes cannot be swallowed by the price-on
     c.productForm.sale_unit_price='8';c.productForm[field]=value;
     assert.equal(c.productOnlySalePriceChange(),false,field);
     assert.throws(()=>c.buildProductWritePayload(),/physical validation retained/,field);
+  }
+});
+
+test('customer code/name/document corrections use the local payload despite unrelated old BOM gaps',()=>{
+  for(const field of ['product_code','product_name','customer_material_code','customer_drawing_number']) {
+    const {c}=harness();c.productForm[field]='CUSTOMER-ONLY';
+    assert.equal(c.productOnlySalePriceChange(),true,field);
+    assert.equal(c.buildProductWritePayload()[field],'CUSTOMER-ONLY');
+    assert.equal(c.buildProductWritePayload().material_id,undefined);
+    assert.equal(c.productSaveBlockReason(),'');
+    c.canEditProducts=false;
+    assert.equal(c.productSaveBlockReason(),'当前账号没有编辑权限');
   }
 });
 

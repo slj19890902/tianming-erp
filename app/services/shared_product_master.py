@@ -302,10 +302,12 @@ def prepare_sync(db, product, updates, user, *, allow_structure=False):
     if not pair or not receipt(db, pair[0]):
         return None
     gid, products = pair
-    identity_fields = ('customer_id','product_code') if allow_structure else (
-        'customer_id','product_code','is_composite','is_internal_component','is_virtual_composite_parent')
+    # Sales codes/names identify the customer's reference, not membership.
+    # Stable product IDs remain the authority for shared physical products.
+    identity_fields = ('customer_id',) if allow_structure else (
+        'customer_id','is_composite','is_internal_component','is_virtual_composite_parent')
     if any(updates.get(key, getattr(product,key)) != getattr(product,key) for key in identity_fields):
-        raise HTTPException(409, '共用产品的客户、编码和BOM角色不能单边变更，请先调整共用范围')
+        raise HTTPException(409, '客户归属不能直接变更；BOM角色请在常用箱连同配方共同保存')
     from app.services.shared_customer_access import PHYSICAL_FIELDS
     policy = receipt(db, gid)
     fields = set(PHYSICAL_FIELDS) | set(MATERIAL) | set(REPORT) | set(EXTERNAL_SUPPLY)

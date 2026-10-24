@@ -31,3 +31,12 @@ test('unshared and limited-stock relationships retain their existing editor cont
     assert.equal(editor.enabled,true);assert.equal(form.unit,'套');assert.equal(editor.components.length,1);
   }
 });
+
+test('older confirmed manufacturing groups use the real legacy payload on return to ordinary',()=>{
+  const form={id:1,box_style:'A1',shared_manufacturing_enabled:true,shared_catalog_policy_enabled:false,unit:'套'};
+  const editor={enabled:true,inventory_mode:'assembled',components:[{component_product_id:2}]};
+  structure.sharedBomTransition(form,editor,'BOM组合');
+  assert.equal(editor.enabled,false);
+  assert.equal(editor.inventory_mode,'legacy');
+  assert.deepEqual(editor.components,[]);
+});

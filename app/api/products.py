@@ -852,10 +852,20 @@ class ProductStructureUpdatePayload(ProductPayload):
         return result
 
 
+class ProductStorageUpdatePayload(BaseModel):
+    expected_version: int = Field(ge=0)
+    expected_shared_group_version: int | None = Field(default=None, gt=0)
+    area_id: int | None = Field(default=None, gt=0)
+    location_id: int | None = Field(default=None, gt=0)
+    address_version: int | None = Field(default=None, gt=0)
+    layout_version: int | None = Field(default=None, gt=0)
+
+
 class ProductUpdatePayload(ProductStructureUpdatePayload):
     expected_version: int = Field(ge=1)
     change_reason: str | None = Field(default=None, max_length=500)
     confirmation_token: str | None = None
+    receipt_storage: ProductStorageUpdatePayload | None = None
 
     @field_validator("change_reason", mode="before")
     @classmethod
@@ -1468,17 +1478,20 @@ def _restore_product_structure_edit_intent(product: Product, payload: ProductPay
 
 
 def _customer_price_only_updates(product, payload):
-    """A local price edit must not normalize unrelated old production fields."""
+    """Customer-local identity/pricing must not normalize old production facts."""
     from app.services.shared_customer_access import SALE_PRICE_FIELDS
+    from app.services.customer_document_fields import FIELDS
+    local_fields = {*SALE_PRICE_FIELDS, 'product_code', 'product_name',
+                    'customer_material_code', 'customer_specification', *FIELDS}
     raw = getattr(payload, '_update_input', {})
-    prices = set(SALE_PRICE_FIELDS) & set(raw)
-    if not prices:
+    selected = local_fields & set(raw)
+    if not selected:
         return None
     # Respect the existing explicit structure-edit mask before comparing a
     # full form whose model defaults may have filled an old unknown structure.
     _restore_product_structure_edit_intent(product, payload)
     for field, value in raw.items():
-        if field not in ProductPayload.model_fields or field in SALE_PRICE_FIELDS:
+        if field not in ProductPayload.model_fields or field in local_fields:
             continue
         if field in {'external_supply', 'share_with_customer_group'}:
             # Nonempty compound settings remain under their existing validator.
@@ -1496,7 +1509,14 @@ def _customer_price_only_updates(product, payload):
                 return None
         if normalize_json_value(current) != normalize_json_value(value):
             return None
-    return {field: getattr(payload, field) for field in prices}
+    values = {field: getattr(payload, field) for field in selected}
+    for field in ('product_code', 'customer_material_code'):
+        if field in values:
+            values[field] = clean_code(values[field])
+    for field in ('product_name', 'customer_specification', *FIELDS):
+        if values.get(field) is not None:
+            values[field] = values[field].strip()
+    return values
 
 
 def _validated_product_versioned_updates(
@@ -3003,7 +3023,7 @@ def _update_product(product_id, payload, db, user, *, commit=True) -> dict:
         from app.services.shared_product_master import receipt
         member = db.get(SharedFinishedMember, product.id)
         policy = receipt(db, member.group_id) if member else None
-        if policy and policy.get('full_catalog'):
+        if policy:
             raise HTTPException(422, '共用BOM转普通纸箱须同时停用配方并共同保存，请刷新常用箱后重新选择箱型')
     if payload.box_style == "BOM组合" and commit and price_only is None:
         from app.models.multilevel_bom import ProductBomProfile
@@ -3026,6 +3046,8 @@ def _update_product(product_id, payload, db, user, *, commit=True) -> dict:
     ):
         raise HTTPException(409, "请先停用子套件，再修改客户或父件交付方式")
     try:
+        if commit:
+            _save_product_storage(db, product_id, payload, user)
         revision = apply_versioned_update(
             db,
             object_type="product",
@@ -3052,7 +3074,22 @@ def _update_product(product_id, payload, db, user, *, commit=True) -> dict:
         db.rollback()
         raise
     db.refresh(product)
-    return _response(product, user)
+    result = _response(product, user)
+    if commit and payload.receipt_storage is not None:
+        from app.services.shared_product_storage import info
+        result['receipt_storage'] = info(db, product_id)
+    return result
+
+
+def _save_product_storage(db, product_id, payload, user):
+    if getattr(payload, 'receipt_storage', None) is None:
+        return
+    from app.services import shared_product_storage
+    from app.services.fixed_shelf import ShelfError
+    try:
+        shared_product_storage.save(db, product_id, actor=user, **payload.receipt_storage.model_dump())
+    except ShelfError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 def _save_product_with_bom(payload, db, user, product_id=None):
@@ -3066,6 +3103,7 @@ def _save_product_with_bom(payload, db, user, product_id=None):
         with atomic_bom(db):
             result = None
             if product_id is not None:
+                _save_product_storage(db, product_id, payload.product, user)
                 from app.services.shared_product_structure import save_if_shared
                 result = save_if_shared(db, product_id, payload, user)
             if result is None:
@@ -3081,6 +3119,9 @@ def _save_product_with_bom(payload, db, user, product_id=None):
                 db.flush()
                 db.refresh(product)
                 result = {"product": _response(product, user), "bom": bom}
+            if getattr(payload.product, 'receipt_storage', None) is not None:
+                from app.services.shared_product_storage import info
+                result['product']['receipt_storage'] = info(db, product_id)
         db.commit()
         return result
     except WarehouseInventoryError as error:

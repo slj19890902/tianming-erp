@@ -37,7 +37,7 @@ def _product_basis(product, source=None):
     die_cut = source == "manufactured" and (setting.is_die_cut if setting else product.box_category == "die_cut")
     values.update(mold_tool_id=product.mold_tool_id if die_cut else None,
                   die_cut_path=product.die_cut_path if die_cut else None)
-    specification = product_stock_specification(product)
+    specification = product_stock_specification(product, physical_identity=True)
     if source == "purchased":
         specification = str(product.external_packaging_specification_summary or "").strip() or specification
     return _document(product.id, product.unit, specification,

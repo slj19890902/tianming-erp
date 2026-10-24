@@ -23,6 +23,7 @@ can_write = PermissionChecker("warehouse.execute")
 
 class StoragePayload(BaseModel):
     expected_version: int = Field(ge=0)
+    expected_shared_group_version: int | None = Field(default=None, gt=0)
     area_id: int | None = Field(default=None, gt=0)
     location_id: int | None = Field(default=None, gt=0)
     address_version: int | None = Field(default=None, gt=0)
@@ -48,7 +49,8 @@ def receipt_storage(product_id: int, db: Session = Depends(get_db), user: User =
             item["area_name"] = contexts[row.id]["area"].area_name
             item["issue"] = None
             locations.append(item)
-    return {**receipt_putaway.info(db, product_id), "locations": locations}
+    from app.services import shared_product_storage
+    return {**shared_product_storage.info(db, product_id), "locations": locations}
 
 
 @router.put("/receipt-storage/{product_id}")
@@ -57,9 +59,10 @@ def save_receipt_storage(product_id: int, payload: StoragePayload, request: Requ
     if user.role not in {"admin", "boss"}:
         raise HTTPException(403, "仅管理员或老板可设置默认货位")
     product_for_user(db, user, product_id)
-    from app.services import receipt_putaway
+    from app.services import shared_product_storage
     return mutate(db, user, request, "warehouse.receipt_storage.configure", product_id, payload,
-        lambda: receipt_putaway.save(db, product_id, **payload.model_dump(exclude={"idempotency_key"})))
+        lambda: shared_product_storage.save(db, product_id, actor=user,
+            **payload.model_dump(exclude={"idempotency_key"})))
 
 
 class BindingPayload(BaseModel):
@@ -114,7 +117,10 @@ def lot_for_user(db, user, lot_id):
 
 
 def mutate(db, user, request, action, resource_id, payload, operation):
-    raw = json.dumps({"actor": user.id, "action": action, "id": resource_id, "payload": payload.model_dump()}, sort_keys=True)
+    fields = payload.model_dump()
+    if isinstance(payload, StoragePayload) and fields.get('expected_shared_group_version') is None:
+        fields.pop('expected_shared_group_version', None)
+    raw = json.dumps({"actor": user.id, "action": action, "id": resource_id, "payload": fields}, sort_keys=True)
     digest = hashlib.sha256(raw.encode()).hexdigest()
     previous = db.get(ShelfMutation, payload.idempotency_key)
     if previous:

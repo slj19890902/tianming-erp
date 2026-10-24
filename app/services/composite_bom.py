@@ -982,7 +982,7 @@ def _snapshot_kwargs(
         and relation.get("mold_tool_id") == component.mold_tool_id
     ):
         selected_mold = component.mold_tool
-    spec = product_stock_specification(component)
+    spec = product_stock_specification(component, physical_identity=True)
     semantic_values = [
         (("sales_order_item_id", "order_item_id"), order_item.id),
         (("parent_product_id",), parent.id),

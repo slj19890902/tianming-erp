@@ -96,7 +96,10 @@ def save_if_shared(db, product_id, payload, actor):
         return None
     gid, products = pair
     policy = master.receipt(db, gid)
-    if not policy or not policy.get('full_catalog'):
+    # Older confirmed manufacturing groups predate the full-catalog flag.
+    # They already synchronize physical fields and must use this coordinator
+    # too, without granting unrelated shared assets or altering membership.
+    if not policy:
         return None
     profile = db.get(ProductBomProfile, source.id)
     target_bom = payload.bom.inventory_mode == 'assembled'
@@ -104,8 +107,8 @@ def save_if_shared(db, product_id, payload, actor):
                     and bool(payload.product.box_style) and payload.product.box_style != 'BOM组合')
     if not target_bom and not (target_plain and profile and profile.source == 'assembled'):
         return None
-    if payload.product.customer_id != source.customer_id or payload.product.product_code != source.product_code:
-        raise HTTPException(409, '共同修改结构不改变客户或存货编码，请保留原身份后保存')
+    if payload.product.customer_id != source.customer_id:
+        raise HTTPException(409, '共同修改结构不能变更客户归属')
     _check_members(db, products, actor)
     if source.is_internal_component or any(p.is_internal_component for p in products):
         raise HTTPException(409, '该产品仍是其他BOM的子件，请先核对父件关系，不能直接改为成套父件')

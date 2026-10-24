@@ -2,6 +2,21 @@
 (function(root) {
   "use strict";
   const fields = ["box_style", "splice_mode", "pieces_per_box", "flap_mm", "production_process"];
+  const localFields = ["sale_unit_price", "sale_unit_price_no_tax", "product_code", "product_name",
+    "customer_material_code", "customer_drawing_number", "customer_category", "customer_model", "customer_specification"];
+  function localOnlyChange(before, after) {
+    const left={...before},right={...after};
+    const changed=localFields.some(key=>JSON.stringify(left[key])!==JSON.stringify(right[key]));
+    localFields.forEach(key=>{delete left[key];delete right[key];});
+    return changed && JSON.stringify(left)===JSON.stringify(right);
+  }
+  function localPayload(form) {
+    const result={customer_id:form.customer_id,box_category:form.box_category,structure_edit_fields:[]};
+    for (const key of localFields) if (form[key] !== undefined) {
+      result[key]=key.startsWith('sale_unit_price') && form[key]==='' ? null : form[key];
+    }
+    return result;
+  }
   const empty = value => value === null || value === undefined || value === "";
   const paperStructure = form => form.supply_mode !== "external_purchase"
     && !form.is_virtual_composite_parent && form.box_style !== "BOM组合";
@@ -76,7 +91,7 @@
     return false;
   }
   function sharedBomTransition(form, editor, previousStyle) {
-    if (!form.shared_catalog_policy_enabled || !editor) return;
+    if (!(form.shared_manufacturing_enabled || form.shared_catalog_policy_enabled) || !editor) return;
     if (previousStyle === "BOM组合" && form.box_style && form.box_style !== "BOM组合") {
       editor._shared_assembled_draft = JSON.parse(JSON.stringify(editor.components || []));
       Object.assign(editor, {enabled:false, inventory_mode:"legacy", components:[]});
@@ -87,7 +102,7 @@
       editor.components = JSON.parse(JSON.stringify(editor._shared_assembled_draft));
     }
   }
-  const api = {fields, initialize, mark, reset, applyPayload, canRecommend, chooseBoxStyle, sharedBomTransition};
+  const api = {fields, localFields, localOnlyChange, localPayload, initialize, mark, reset, applyPayload, canRecommend, chooseBoxStyle, sharedBomTransition};
   root.ERPProductStructure = api;
   if (typeof module !== "undefined") module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

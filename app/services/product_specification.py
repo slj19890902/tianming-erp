@@ -72,7 +72,7 @@ def product_dimension_specification(product: Product | None) -> str | None:
     )
 
 
-def product_stock_specification(product: Product | None) -> str | None:
+def product_stock_specification(product: Product | None, *, physical_identity: bool = False) -> str | None:
     """Keep die identity without pretending a multi-up tool is one piece's size.
 
     A registered die and explicit mold count identify an existing die-cut SKU.
@@ -99,7 +99,26 @@ def product_stock_specification(product: Product | None) -> str | None:
             or getattr(mold, "archive_status", "active") != "active"
             or getattr(product, "mold_tool_id", None) != mold.id):
         return None
-    return f"模切成品 {code}；模具 {mold_code}；{setting.mold_count}模"
+    result = f"模切成品 {code}；模具 {mold_code}；{setting.mold_count}模"
+    if physical_identity and isinstance(product, Product):
+        # Old dimensionless die-cut identities embedded a customer sales code.
+        # Preserve that descriptive fragment for the same approved tool/count;
+        # changing a customer's code cannot turn an existing shared part into
+        # another physical part. Display specs still use the customer's code.
+        from sqlalchemy.orm import object_session
+        from app.models.shared_finished_stock import SharedFinishedMember
+        from app.services.shared_product_master import effective_member
+        import json
+        db = object_session(product)
+        member = effective_member(db, db.get(SharedFinishedMember, product.id)) if db else None
+        if member:
+            frozen = json.loads(member.product_basis_json)
+            previous = frozen.get('spec') or ''
+            if (str(frozen.get('mold_tool_id')) == str(product.mold_tool_id)
+                    and previous.startswith('模切成品 ')
+                    and previous.endswith(f'；模具 {mold_code}；{setting.mold_count}模')):
+                return previous
+    return result
 
 
 def strip_unregistered_size_note(value: str) -> str:

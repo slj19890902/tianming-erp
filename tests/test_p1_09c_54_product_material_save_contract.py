@@ -15,7 +15,7 @@ def _method_body(signature: str, next_signature: str) -> str:
 
 
 def _business_footer() -> str:
-    start = INDEX.index('<div v-if="![\'product\',\'orderPdfImport\'].includes(modal?.type)" class="modal-foot">')
+    start = INDEX.index('<div v-if="![\'product\',\'orderPdfImport\',\'delivery\'].includes(modal?.type)" class="modal-foot">')
     return INDEX[start : INDEX.index("</div>", start) + 6]
 
 
@@ -60,7 +60,8 @@ let preflightCalls=0,releasePreflight;
 const notices=[];
 const vm={{
   modal:{{type:"product"}},masterSavePending:false,masterPendingSaveOptions:null,
-  masterChangeConfirm:{{entity:null}},loading:false,
+  masterChangeConfirm:{{entity:null}},loading:false,productForm:{{id:7}},bomEditor:{{}},
+  productOnlySalePriceChange(){{return false;}},_productBomDirty(){{return false;}},
   masterCurrentForm(){{return {{id:7}};}},masterLocalChanges(){{return [{{field:"product_name"}}];}},
   prepareProductOneClickSave(){{preflightCalls+=1;return new Promise(resolve=>releasePreflight=resolve);}},
   showToast(message,error=false){{notices.push([message,error]);}}
@@ -95,7 +96,8 @@ let writes=0,closed=0;const notices=[];
 global.axios={{post:async()=>{{writes+=1;return {{data:{{id:9,version:1}}}};}}}};
 const vm={{
   modal:{{type:"product"}},masterSavePending:false,masterPendingSaveOptions:null,
-  masterChangeConfirm:{{entity:null}},loading:false,productForm:{{id:null}},drawingFile:null,
+  masterChangeConfirm:{{entity:null}},loading:false,productForm:{{id:null}},drawingFile:null,bomEditor:{{}},
+  productOnlySalePriceChange(){{return false;}},
   productEditReturnContext:null,productFormSnapshot:"dirty",
   masterCurrentForm(){{return this.productForm;}},_productFormDirty(){{return true;}},_productBomDirty(){{return false;}},
   hydrateProductForm(data){{return data;}},beginMasterEdit(){{}},_productFormSaveFields(){{return this.productForm;}},

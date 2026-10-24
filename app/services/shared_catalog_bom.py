@@ -23,11 +23,17 @@ def physical(p):
 
 
 def counterpart(db,p,cid):
-    rows=list(db.scalars(select(Product).where(Product.customer_id==cid,Product.product_code==p.product_code,
+    member=db.get(SharedFinishedMember,p.id)
+    existing=db.scalar(select(SharedFinishedMember).where(SharedFinishedMember.group_id==member.group_id,
+        SharedFinishedMember.customer_id==cid)) if member else None
+    rows=([db.get(Product,existing.product_id)] if existing else list(db.scalars(select(Product).where(
+        Product.customer_id==cid,Product.product_code==p.product_code,
         Product.is_composite==p.is_composite,Product.is_internal_component==p.is_internal_component,
-        Product.deleted_at.is_(None),Product.purged_at.is_(None))))
+        Product.deleted_at.is_(None),Product.purged_at.is_(None)))))
     if len(rows)>1:raise shared._error(f'{p.product_code}同角色有多份资料，请核对具体产品')
-    if rows and (not rows[0].is_active or physical(rows[0])!=physical(p)):
+    if rows and (not rows[0] or rows[0].deleted_at or rows[0].purged_at or not rows[0].is_active
+                 or rows[0].is_composite!=p.is_composite or rows[0].is_internal_component!=p.is_internal_component
+                 or physical(rows[0])!=physical(p)):
         raise shared._error(f'{p.product_code}对应产品规格、材质或报料资料不同，请在常用箱核对')
     return rows[0] if rows else None
 

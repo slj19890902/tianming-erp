@@ -49,7 +49,7 @@
     <script src="/static/drawing-workbench.js?v=20260930-543"></script>
     <script src="/static/js/sheet-cutting.js?v=f73ad78201c3"></script>
     <script src="/static/js/product-unit-labels.js?v=6733f6a35088"></script>
-    <script src="/static/js/product-structure-edit.js?v=c98db619f70b"></script>
+    <script src="/static/js/product-structure-edit.js?v=740a93918d6c"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
     <script src="/static/assets/phone-display.js?v=b9c44d142168"></script>
     <style>
@@ -6949,7 +6949,7 @@
               <div v-if="quotationConvertCreaseMismatch" class="status orange" style="display:block;white-space:normal;margin-top:8px">{{ quotationConvertCreaseMismatch }}</div>
             </div>
             <div v-else-if="modal.type === 'product'">
-              <div v-if="productForm.shared_manufacturing_enabled" class="notice">共用产品：箱型和生产资料共同保存，售价各自保留。<template v-if="productForm.shared_catalog_policy_enabled">普通纸箱与 BOM组合可共同转换；单价数值保留，请核对计价单位。</template></div>
+              <div v-if="productForm.shared_manufacturing_enabled" class="notice">共用产品：箱型、BOM配方、生产工艺和默认库位共同保存；售价、存货编码、产品名称及客户送货资料各自保存。普通纸箱与 BOM组合可共同转换；单价数值保留，请核对计价单位。</div>
               <div v-if="productForm.id && canProductionExecute && !productForm.is_composite && productForm.supply_mode!=='external_purchase'" class="toolbar-group" style="margin-bottom:8px"><button class="btn small" type="button" @click="openScrapProduction({product_id:productForm.id})">废料生产 / 直接成品入库</button><span class="muted">沿用已保存资料；本次工艺及数量不修改常用箱。</span></div>
               <div v-if="productForm.id && !canEditProducts" class="notice readonly-hint">当前为只读查看；常用箱资料控件已禁用。</div>
               <fieldset class="product-edit-grid product-compact-editor" :class="'readonly-fieldset'" :disabled="!!productForm.id && !canEditProducts">
@@ -10283,7 +10283,7 @@
               <button type="button" class="btn" :disabled="masterSavePending || !drawingFile" @click="retryProductDrawing">仅重试图纸</button>
               <details><summary>查看已保存常用箱</summary><div>编号：{{ productSaveRecovery.id }} · 存货编码：{{ productSaveRecovery.record.customer_material_code || productSaveRecovery.record.product_code }} · 品名：{{ productSaveRecovery.record.product_name }}</div></details>
             </div>
-            <button type="button" class="btn primary product-inline-save" :disabled="(!!productForm.id && !canEditProducts) || loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : (productEditReturnContext && productEditReturnContext.source!=='bom' ? (productEditReturnContext.source==='requisition' ? '保存并返回报料' : '保存并返回订单') : '保存') }}</button>
+            <button type="button" class="btn primary product-inline-save" :disabled="!!productSaveBlockReason" @click="saveModal()">{{ masterSavePending ? '保存中…' : (productEditReturnContext && productEditReturnContext.source!=='bom' ? (productEditReturnContext.source==='requisition' ? '保存并返回报料' : '保存并返回订单') : '保存') }}</button>
           </div>
           <div v-if="modal.type==='delivery'" class="delivery-editor-foot">
             <template v-if="!deliveryBatchPicker.visible"><div class="delivery-editor-total">合计 {{ deliveryEditorLines.length }} 条<strong v-if="canViewSalesAmounts">总金额 {{ deliveryFormAmount() }}</strong></div><div class="delivery-footer-actions"><button class="btn" :disabled="deliveryEditorPage<=1" @click="deliveryEditorPage--">上一页</button><span>第 {{ deliveryEditorPage }}/{{ deliveryEditorPages }} 页 · 共 {{ deliveryEditorPages }} 页</span><button class="btn" :disabled="deliveryEditorPage>=deliveryEditorPages" @click="deliveryEditorPage++">下一页</button><button class="btn delivery-save-button" :disabled="!canSaveModal || deliveryEditorBusy || !!deliveryValidationError" @click="saveModal()">{{ deliverySaveState.saving?'保存中…':'保存' }}</button><button class="btn delivery-print-button" :disabled="!canSaveModal || deliveryEditorBusy || !!deliveryValidationError" @click="deliveryEditorPrint">打印</button></div></template>
@@ -12182,6 +12182,7 @@
             if (this.productForm.id && !this.canEditProducts) return "当前账号没有编辑权限";
             if (this.masterSavePending) return "正在保存，请稍候";
             if (this.loading) return "资料正在读取，请稍候";
+            if (this.productOnlySalePriceChange()) return "";
             return this.productCreaseMismatch || this.productMoldError || this.productPrintingPlateError || this.productPrintingColorError || this.productProductionLabelError || "";
           },
           stockReplenishmentCreaseBlocked() {
@@ -12976,19 +12977,32 @@
                 || Number(state.area_id||0)!==Number(state.saved_area_id||0)
                 || Number(state.location_id||0)!==Number(state.saved_location_id||0));
           },
+          receiptStoragePayload(clear) {
+            const state=this.receiptStorage;
+            const loc=clear?null:state.locations.find(x=>x.location_id===state.location_id);
+            return {expected_version:state.version,expected_shared_group_version:state.shared_group_version??null,
+              area_id:clear?null:state.area_id,location_id:clear?null:state.location_id,
+              address_version:loc?.address_version||null,layout_version:loc?.layout_version||null};
+          },
+          applyReceiptStorageSaved(data) {
+            if (!data || Number(data.product_id)!==Number(this.productForm.id)) return;
+            const state=this.receiptStorage;
+            const floor=data.area_id?state.floor:null;
+            Object.assign(state,data,{floor,saved_floor:floor,saved_area_id:data.area_id||null,
+              saved_location_id:data.location_id||null,
+              saved_label:data.location?.name||(data.area_id?'区域内自动分配':'已取消自动记忆'),
+              message:data.shared_group_version?'共用产品默认位置已共同保存':'默认位置已保存'});
+          },
           async saveReceiptStorage(clear) {
             const state=this.receiptStorage,id=this.productForm.id;
             if(state.product_id!==id || state.loading || state.error || state.saving)return false;
-            const loc=clear?null:state.locations.find(x=>x.location_id===state.location_id);
             state.saving=true;state.message='';
             try {
               const {data}=await axios.put(`/api/warehouse/fixed-shelf/receipt-storage/${id}`,{
-                expected_version:state.version,area_id:clear?null:state.area_id,location_id:clear?null:state.location_id,
-                address_version:loc?.address_version||null,layout_version:loc?.layout_version||null,
+                ...this.receiptStoragePayload(clear),
                 idempotency_key:`receipt-storage:${id}:${createIdempotencyKey()}`});
               if(this.productForm.id!==id)return false;
-              const savedLabel=data.location?.name||(data.area_id?'区域内自动分配':(data.configured?'已取消自动记忆':'首次添加后自动记住'));
-              Object.assign(state,data,{floor:clear?null:state.floor,saved_label:savedLabel,message:clear?'已取消，后续添加不会再次自动记住':'默认位置已保存',saved_floor:clear?null:state.floor,saved_area_id:data.area_id||null,saved_location_id:data.location_id||null});
+              this.applyReceiptStorageSaved(data);
               if(this.activePage==='incoming' && this.incomingTab==='pending') {
                 try { await this.loadIncomingPendingPage({page:this.incomingPendingAppliedPage,clearSelection:false}); }
                 catch (_error) { state.message='默认位置已保存；收料列表刷新失败，请手动刷新'; }
@@ -13611,18 +13625,13 @@
             if (!this.productForm?.id || !this.productFormSnapshot || this.drawingFile || this._productBomDirty() || this.receiptStorageDirty?.()) return false;
             try {
               const before=JSON.parse(this.productFormSnapshot),after=this._productFormSaveFields();
-              const priceChanged=JSON.stringify(before.sale_unit_price)!==JSON.stringify(after.sale_unit_price);
-              delete before.sale_unit_price;delete after.sale_unit_price;
-              return priceChanged && JSON.stringify(before)===JSON.stringify(after);
+              return window.ERPProductStructure.localOnlyChange(before,after);
             } catch (_) { return false; }
           },
           buildProductWritePayload(options = null) {
             if (this.productOnlySalePriceChange()) {
               const form=this.productForm;
-              return this.attachMasterUpdateMetadata("product",{
-                customer_id:form.customer_id,product_code:form.product_code,product_name:form.product_name,
-                box_category:form.box_category,sale_unit_price:form.sale_unit_price === "" ? null : form.sale_unit_price,structure_edit_fields:[]
-              },options);
+              return this.attachMasterUpdateMetadata("product",window.ERPProductStructure.localPayload(form),options);
             }
             const isExternal = this.productForm.supply_mode === "external_purchase";
             const productCreaseError = isExternal || this.productForm.box_style === "BOM组合" ? null : this.validateProductCreaseAndReport(this.productForm);
@@ -13760,7 +13769,9 @@
               payload.production_label_units_per_label = null;
             }
             if (payload.sale_unit_price === "") payload.sale_unit_price = null;
-            return this.attachMasterUpdateMetadata("product",payload,options);
+            const write = this.attachMasterUpdateMetadata("product",payload,options);
+            if (this.receiptStorageDirty?.()) write.receipt_storage=this.receiptStoragePayload(!this.receiptStorage.floor);
+            return write;
           },
           async prepareProductOneClickSave() {
             const productId = Number(this.productForm?.id);
@@ -13773,7 +13784,7 @@
                 `/api/master/products/${encodeURIComponent(productId)}/update-preview`,
                 payload
               );
-              const hasRelatedWrite = !!this.drawingFile || this._productBomDirty();
+              const hasRelatedWrite = !!this.drawingFile || this._productBomDirty() || this.receiptStorageDirty?.();
               if (!data.can_update && !hasRelatedWrite) {
                 this.closeModal();
                 this.showToast("未检测到可保存的变化");
@@ -41328,15 +41339,10 @@
             }
             if (masterSaveEntity) this.masterSavePending = true;
             try {
-            let storageSaved = false;
-            if (masterSaveEntity === "product" && this.receiptStorageDirty?.()) {
+            const storageDirty = masterSaveEntity === "product" && this.receiptStorageDirty?.();
+            if (storageDirty) {
               if (this.receiptStorage.floor && !this.receiptStorage.area_id) {
                 this.showToast("请先选默认区域，再保存常用箱", true);
-                return false;
-              }
-              storageSaved = await this.saveReceiptStorage(!this.receiptStorage.floor);
-              if (!storageSaved) {
-                this.showToast(this.receiptStorage.message || "默认位置未保存，常用箱编辑仍保留", true);
                 return false;
               }
             }
@@ -41346,12 +41352,11 @@
             const masterForm = masterEntity ? this.masterCurrentForm(masterEntity) : null;
             if (masterEntity && masterForm?.id && !masterOptions) {
               const changes = this.masterLocalChanges(masterEntity);
-              if (changes.length || (masterEntity === "product" && this._productFormDirty())) {
+              if (changes.length || (masterEntity === "product" && (this._productFormDirty() || storageDirty))) {
                 if (masterEntity === "product") {
                   const preflight = await this.prepareProductOneClickSave();
                   if (!preflight) return false;
                   if (preflight.completed) {
-                    if (storageSaved) this.showToast("默认位置已保存；其他常用箱字段没有新的变化");
                     return true;
                   }
                   masterOptions = preflight.options;
@@ -41364,10 +41369,10 @@
                 else this.openMasterChangeConfirmation(masterEntity,changes);
                 if (masterEntity !== "product") return false;
               }
-              if (!changes.length) {
+              if (!changes.length && !storageDirty) {
                 if (!(masterEntity === "product" && this._productBomDirty())) {
                   this.closeModal();
-                  this.showToast(storageSaved ? "默认位置已保存" : "未检测到可保存的变化");
+                  this.showToast("未检测到可保存的变化");
                   return true;
                 }
                 const bomError = this.validateProductBom();
@@ -41458,7 +41463,7 @@
                 successMessage = supplierTarget.wasEditing ? "供应商已更新" : "供应商已新增";
               }
               if (this.modal.type === "product") {
-                const productDirty = this._productFormDirty();
+                const productDirty = this._productFormDirty() || storageDirty;
                 const bomDirty = this._productBomDirty();
                 if (bomDirty) {
                   const bomError = this.validateProductBom();
@@ -41493,6 +41498,7 @@
                   this.beginMasterEdit("product",this.productForm);
                   this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
                 }
+                if (saved?.receipt_storage) this.applyReceiptStorageSaved(saved.receipt_storage);
                 if (this.productEditReturnContext && this.productEditReturnContext.source !== "bom") {
                   this.productEditReturnContext.saved = true;
                 }

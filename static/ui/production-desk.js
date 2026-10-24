@@ -29,7 +29,16 @@
     if(this.productionTab!=='pending')this.productionEntry=null;
    },
    productionRecordLabel(row){return ({manual:'手工加工',receipt_auto:'收料自动形成',stock_preparation:'备库生产',stock_assembly:'备库组套',bom_assembly:'订单组套'})[row.origin]||'历史记录';},
-   openProductionEntry(row){this._productionFocus=document.activeElement;this.productionEntry=row;this.refreshProductionPreview(row);this.focusProductionDialog();},
+   async openProductionEntry(row){
+    this._productionFocus=document.activeElement;this.productionEntry=row;this.refreshProductionPreview(row);this.focusProductionDialog();
+    const auth=this.authGeneration;
+    if(!this.canWarehouseExecute||row.completion_actionable===false)return;
+    const ready=await this.ensureProductionLocations();
+    if(!ready||auth!==this.authGeneration||this.productionEntry!==row)return;
+    const storage=this.productionDefaultStorage(row);
+    if(!row.completion_mode&&this.productionHasProductStorage(row)&&storage.location_id&&!storage.issue)row.completion_mode='stock';
+    if(row.completion_mode==='stock')await this.ensureProductionMode(row);
+   },
    focusProductionDialog(){this.$nextTick(()=>document.querySelector('.production-desk-dialog button,.production-desk-dialog input')?.focus());},
    closeProductionDialog(){if(this.productionBusy||this.productionMaterialsBusy)return;this.productionEntry=null;this.productionMaterials=null;this._productionFocus?.focus();},
    trapProductionFocus(event){const nodes=[...event.currentTarget.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),a[href]')].filter(n=>n.getClientRects().length);if(!nodes.length)return;const first=nodes[0],last=nodes[nodes.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}},

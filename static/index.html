@@ -5058,7 +5058,7 @@
                 <iframe v-if="productionMap.url" ref="productionMapFrame" :src="productionMap.url" title="生产仓库地图" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"></iframe><p v-else-if="!productionMap.error">正在核对当前库存和货位…</p>
                 <footer v-if="productionMap.placement"><div><strong>{{productionMap.target ? '目标：'+inventoryLocation(productionMap.target) : '请点击地图货位或货架层格，再点“确定此货位”'}}</strong><div>归位 {{productionMap.row.movable_quantity}} {{productionMap.row.output_unit}} · {{productionMap.checking ? '正在核对货位…' : '确认归位前不会改变库存'}}</div></div><button type="button" class="btn success" :disabled="productionBusy || productionMap.checking || !productionMap.target || !canWarehouseExecute || !canProductionExecute" @click="confirmProductionMapPlacement">{{productionBusy ? '正在归位…' : '确认归位'}}</button></footer>
               </div>
-              <div v-if="productionEntry" class="workspace-dialog-mask" @keydown.esc.stop="closeProductionDialog" @keydown.tab="trapProductionFocus"><section class="workspace-dialog production-desk-dialog" role="dialog" aria-modal="true" aria-label="登记实际产出"><template v-for="row in [productionEntry]" :key="row.id"><div class="toolbar"><h3>登记产出 · {{row.product_code}} {{row.product_name}}</h3><button class="btn" :disabled="productionBusy" @click="closeProductionDialog">关闭</button></div><div class="production-source-note">计划 {{row.planned_output_quantity}} {{productionOutputUnit(row)}} · 本单成品覆盖 {{row.finished_coverage_snapshot||0}} {{productionOutputUnit(row)}}<span v-if="row.cut_contract"> · 裁切批次须按已预占片料整批确认</span></div><div class="production-entry-body"><div><div v-if="row?.completion_actionable === false" class="status blue" style="display:block;white-space:normal">{{ row.completion_block_message || '该任务由收料用途自动推进，不能手工重复完工。' }}</div><template v-else><div class="production-input-line"><label class="muted">实际投入</label><input class="input" type="number" min="1" aria-label="实际投入张数" v-model.number="row.actual_input_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">张</span></div><div class="production-input-line"><label class="muted">合格产出</label><input class="input" type="number" min="1" aria-label="合格产出数量" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">{{ productionOutputUnit(row) }}｜损耗 {{ productionDefectiveQuantity(row) }}</span></div></template><div v-if="row.preview_loading" role="status">正在核对产出分配…</div><div v-else-if="row.preview_error" class="status orange" role="alert">{{row.preview_error}}</div><template v-else-if="row.output_preview"><div>本次补给订单 <strong>{{row.output_preview.order_quantity}}</strong> {{productionOutputUnit(row)}}</div><div>超出订单成品 <strong>{{row.output_preview.surplus_quantity}}</strong> {{productionOutputUnit(row)}}</div><div class="muted">理论产出 {{row.output_preview.theoretical_quantity}} · 损耗 {{row.output_preview.defective_quantity}}</div></template><info-note>未用整张材料、可复用边料与报废不计入超产成品。</info-note></div><div><div v-if="row.completion_actionable === false"><div class="muted">成品由收料流水自动进入真实成品库位；不能重复完工。</div><button v-if="canDelivery && pageAllowed('deliveries') && receiptManagedDeliveryQuantity(row) > 0" type="button" class="btn small primary" style="margin-top:6px" :disabled="productionBusy || row._delivery_opening" @click="openReceiptManagedDelivery(row)">{{ row._delivery_opening ? '正在打开…' : `订单内送货（${receiptManagedDeliveryQuantity(row)}）` }}</button><div v-else-if="!canDelivery || !pageAllowed('deliveries')" class="muted" style="margin-top:6px">请由有送货权限的账号开送货单</div><div v-else class="muted" style="margin-top:6px">当前没有可送的已自动成品</div></div><template v-else><select class="select" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">订单内直接待送</option><option value="stock" :disabled="!canWarehouseExecute">合格品全部入库</option></select><div v-if="productionNeedsLocation(row)" class="production-location-picker" style="margin-top:4px"><div v-if="productionLocationsLoading" class="muted">正在读取可用库位…</div><div v-else-if="productionLocationsError" class="status orange" style="display:block">{{ productionLocationsError }} <button class="btn small" @click="ensureProductionLocations({force:true})">重试</button></div><template v-else><select class="select" v-model.number="row.location_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'location_floor_number','location_area_code','location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloorsForRow(row)" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.location_area_code" :disabled="productionBusy || !row.location_floor_number" @change="onProductionAreaChange(row,'location_floor_number','location_area_code','location_id')"><option value="">{{ row.location_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForRow(row,row.location_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.location_id" :disabled="productionBusy || !row.location_area_code" @change="onProductionLocationSelection(row)"><option :value="null">{{ row.location_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForRowArea(row,row.location_floor_number,row.location_area_code)" :key="location.id" :value="location.id" :disabled="productionLocationUsedByOther(location.id,row)">{{ inventoryLocation(location) }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></template></div><div v-if="row.completion_mode==='direct'" class="muted" style="margin-top:4px">{{ productionPreferredAreaHint(row) || '系统自动选择真实空成品位置' }}</div><div v-else-if="productionPreferredAreaHint(row)" class="muted" style="margin-top:4px">{{ productionPreferredAreaHint(row) }}</div><div v-if="row.completion_mode==='stock' && productionPreferredAreaIds(row).length && !productionLocationsForRow(row).length" class="status orange" style="display:block;margin-top:6px">指定区域暂无空位；不会改放其他区域</div><div v-else-if="productionSurplusQuantity(row)>0" class="muted" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }} 个，随整批入库</div><div v-if="row._direct_submitting" class="status blue" style="display:block;margin-top:6px">正在确认…</div><div v-else-if="productionSelected[row.id]" class="status blue" style="display:block;margin-top:6px">去向已选，请核对后登记产出</div><div v-else-if="row.completion_mode==='stock' && productionLocationsForRow(row).length" class="status orange" style="display:block;margin-top:6px">请选择入库位置</div></template></div></div><button class="btn success" :disabled="productionBusy||!canConfirmProductionRow(row)||row.preview_loading||!row.output_preview?.allowed||!!row.preview_error" @click="registerProductionOutput(row)">登记产出并入库</button></template></section></div>
+              <div v-if="productionEntry" class="workspace-dialog-mask" @keydown.esc.stop="closeProductionDialog" @keydown.tab="trapProductionFocus"><section class="workspace-dialog production-desk-dialog" role="dialog" aria-modal="true" aria-label="登记实际产出"><template v-for="row in [productionEntry]" :key="row.id"><div class="toolbar"><h3>登记产出 · {{row.product_code}} {{row.product_name}}</h3><button class="btn" :disabled="productionBusy" @click="closeProductionDialog">关闭</button></div><div class="production-source-note">计划 {{row.planned_output_quantity}} {{productionOutputUnit(row)}} · 本单成品覆盖 {{row.finished_coverage_snapshot||0}} {{productionOutputUnit(row)}}<span v-if="row.cut_contract"> · 裁切批次须按已预占片料整批确认</span></div><div class="production-entry-body"><div><div v-if="row?.completion_actionable === false" class="status blue" style="display:block;white-space:normal">{{ row.completion_block_message || '该任务由收料用途自动推进，不能手工重复完工。' }}</div><template v-else><div class="production-input-line"><label class="muted">实际投入</label><input class="input" type="number" min="1" aria-label="实际投入张数" :disabled="productionBusy" v-model.number="row.actual_input_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">张</span></div><div class="production-input-line"><label class="muted">合格产出</label><input class="input" type="number" min="1" aria-label="合格产出数量" :disabled="productionBusy" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">{{ productionOutputUnit(row) }}｜损耗 {{ productionDefectiveQuantity(row) }}</span></div></template><div v-if="row.preview_loading" role="status">正在核对产出分配…</div><div v-else-if="row.preview_error" class="status orange" role="alert">{{row.preview_error}}</div><template v-else-if="row.output_preview"><div>本次补给订单 <strong>{{row.output_preview.order_quantity}}</strong> {{productionOutputUnit(row)}}</div><div>超出订单成品 <strong>{{row.output_preview.surplus_quantity}}</strong> {{productionOutputUnit(row)}}</div><div class="muted">理论产出 {{row.output_preview.theoretical_quantity}} · 损耗 {{row.output_preview.defective_quantity}}</div></template><info-note>未用整张材料、可复用边料与报废不计入超产成品。</info-note></div><div><div v-if="row.completion_actionable === false"><div class="muted">成品由收料流水自动进入真实成品库位；不能重复完工。</div><button v-if="canDelivery && pageAllowed('deliveries') && receiptManagedDeliveryQuantity(row) > 0" type="button" class="btn small primary" style="margin-top:6px" :disabled="productionBusy || row._delivery_opening" @click="openReceiptManagedDelivery(row)">{{ row._delivery_opening ? '正在打开…' : `订单内送货（${receiptManagedDeliveryQuantity(row)}）` }}</button><div v-else-if="!canDelivery || !pageAllowed('deliveries')" class="muted" style="margin-top:6px">请由有送货权限的账号开送货单</div><div v-else class="muted" style="margin-top:6px">当前没有可送的已自动成品</div></div><template v-else><select class="select" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">订单内直接待送</option><option value="stock" :disabled="!canWarehouseExecute">合格品全部入库</option></select><div v-if="productionNeedsLocation(row)" class="production-location-picker" style="margin-top:4px"><div v-if="productionLocationsLoading" class="muted">正在读取可用库位…</div><div v-else-if="productionLocationsError" class="status orange" style="display:block">{{ productionLocationsError }} <button class="btn small" @click="ensureProductionLocations({force:true})">重试</button></div><template v-else><select class="select" v-model.number="row.location_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'location_floor_number','location_area_code','location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloorsForRow(row)" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个位置）</option></select><select class="select" v-model="row.location_area_code" :disabled="productionBusy || !row.location_floor_number" @change="onProductionAreaChange(row,'location_floor_number','location_area_code','location_id')"><option value="">{{ row.location_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForRow(row,row.location_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个位置）</option></select><select class="select" v-model.number="row.location_id" :disabled="productionBusy || !row.location_area_code" @change="onProductionLocationSelection(row)"><option :value="null">{{ row.location_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForRowArea(row,row.location_floor_number,row.location_area_code)" :key="location.id" :value="location.id">{{ inventoryLocation(location) }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></template></div><div v-if="row.production_default_storage?.issue" class="status orange" style="display:block;margin-top:6px">常用箱默认位置：{{row.production_default_storage.issue}}</div><div v-if="row.completion_mode==='direct'" class="muted" style="margin-top:4px">{{ productionPreferredAreaHint(row) || '系统按默认设置选择真实成品位置' }}</div><div v-else-if="productionPreferredAreaHint(row)" class="muted" style="margin-top:4px">{{ productionPreferredAreaHint(row) }}</div><div v-if="row.completion_mode==='stock' && productionPreferredAreaIds(row).length && !productionLocationsForRow(row).length" class="status orange" style="display:block;margin-top:6px">指定区域暂无可用位置；不会改放其他区域</div><div v-else-if="productionSurplusQuantity(row)>0" class="muted" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }} 个，随整批入库</div><div v-if="row._direct_submitting" class="status blue" style="display:block;margin-top:6px">正在确认…</div><div v-else-if="productionSelected[row.id]" class="status blue" style="display:block;margin-top:6px">去向已选，请核对后登记产出</div><div v-else-if="row.completion_mode==='stock' && productionLocationsForRow(row).length" class="status orange" style="display:block;margin-top:6px">请选择入库位置</div></template></div></div><button class="btn success" :disabled="productionBusy||!canConfirmProductionRow(row)||row.preview_loading||!row.output_preview?.allowed||!!row.preview_error" @click="registerProductionOutput(row)">登记产出并入库</button></template></section></div>
               <div v-if="productionMaterials" class="workspace-dialog-mask" @keydown.esc.stop="closeProductionDialog" @keydown.tab="trapProductionFocus"><section class="workspace-dialog production-desk-dialog production-material-print" role="dialog" aria-modal="true" aria-label="本单计划用料"><div class="toolbar"><h3>{{productionMaterials.tasks.length>1?'合并用料清单':'本单用料'}}</h3><div class="no-print"><button class="btn" :disabled="productionMaterialsBusy" @click="printProductionMaterials">打印清单</button> <button class="btn" :disabled="productionMaterialsBusy" @click="closeProductionDialog">关闭</button></div></div><div class="production-source-note">下列为当前有效预占的计划取用量，尚不代表已领料。查看和打印不扣库存；按真实批次与当前位置分配。</div>
                 <div v-for="task in productionMaterials.tasks" :key="task.id" class="material-order"><img v-if="task.task_qr" :src="task.task_qr" :alt="'任务 '+task.id+' 二维码'" class="production-task-qr" /><strong>{{task.customer_po||task.order_number}} · {{task.product_code}} {{task.product_name}}</strong><div class="muted">生产任务 {{task.id}} · 扫码查看当前用料</div><div>计划加工 {{task.planned_output_quantity}} {{task.output_unit||'个'}} · 现成品覆盖 {{task.finished_coverage_snapshot||0}}（另行配货） · 采购实收 {{task.material_received_quantity||0}} 张</div><div v-if="task.cut_contract" class="status orange">整批分切：投入 {{task.cut_contract.input_quantity}} 张，计划产出 {{task.cut_contract.planned_output}} {{task.output_unit}}；本批暂不支持拆批登记。</div></div>
                 <div v-for="source in productionMaterials.sources" :key="source.inventory_lot_id+'-'+source.location_id" class="material-grid"><div><strong>{{source.material_kind}} · {{source.display_name}}</strong><div>{{materialSpec(source)}}</div><div class="muted">已完成加工：{{source.recorded_processing||'未登记'}}<span v-if="source.has_cut_plan"> · 已冻结裁切方案</span></div></div><div><strong>{{source.location_name||'位置待核'}}</strong><div v-if="source.location_id"><a class="no-print" :href="materialMap(source)" target="_blank" rel="noopener">地图定位</a></div><div v-if="source.lot_status!=='active'" class="status orange">库存状态需核对，不能直接取用</div></div><div><div class="production-plan-quantity">{{source.remaining_sheet_quantity}} {{source.unit||'张'}}</div><div v-for="a in source.allocations" :key="a.id">{{a.customer_po||a.order_number}} · {{a.product_code}}：{{a.quantity}} {{source.unit||'张'}}<div class="muted">覆盖 {{a.covered_pieces}} 片 · 每张出 {{source.stock_yield_per_sheet||1}} 片 · 已耗 {{a.consumed}} {{source.unit||'张'}}</div></div></div></div>
@@ -12569,6 +12569,9 @@
           },
           productionAvailableLocations() {
             return (this.productionLocations || []).filter(location => location.is_empty || location.storage_type === "rack");
+          },
+          productionOutputLocations() {
+            return (this.productionLocations || []).filter(location => location.can_store !== false && location.is_active !== false);
           },
           productionLocationFloors() {
             const counts = new Map();
@@ -21469,12 +21472,12 @@
             const lastPage = Math.max(Math.ceil(total / Number(pending.data.page_size || this.productionPendingPageSize() || 1)), 1);
             if (page > lastPage) return this.loadProductionPage(lastPage);
             const locationItems = this.productionLocations || [];
-            const floorNumbers = [...new Set(locationItems.filter(location => location.is_empty).map(location => Number(location.warehouse_floor)).filter(Boolean))];
+            const floorNumbers = [...new Set(locationItems.map(location => Number(location.warehouse_floor)).filter(Boolean))];
             const defaultFloorNumber = floorNumbers.length === 1 ? floorNumbers[0] : null;
             const previous = new Map(this.productionPending.map(row => [String(row.id), row]));
             this.productionPending = (pending.data.items || []).map(row => {
               const old = previous.get(String(row.id));
-              const preferenceSignature = value => JSON.stringify((value?.preferred_finished_storage_area_ids || []).map(Number));
+              const preferenceSignature = value => JSON.stringify({areas:(value?.preferred_finished_storage_area_ids || []).map(Number),storage:value?.production_default_storage || null});
               const canReuseOld = old && Number(old.version) === Number(row.version) && preferenceSignature(old) === preferenceSignature(row);
               const sourceOrder = this.orders.find(order => Number(order.id) === Number(row.order_id));
               const selectedLocation = locationItems.find(location => Number(location.id) === Number(canReuseOld ? old?.location_id : null));
@@ -21665,7 +21668,7 @@
             });
             const { data } = await axios.get("/api/production/completions", { params,signal:controller.signal });
             if(controller.signal.aborted || latestRequestControllers.get("production:history")!==controller)return;
-            const floorNumbers = [...new Set(this.productionLocations.filter(location => location.is_empty).map(location => Number(location.warehouse_floor)).filter(Boolean))];
+            const floorNumbers = [...new Set(this.productionAvailableLocations.map(location => Number(location.warehouse_floor)).filter(Boolean))];
             const defaultFloorNumber = floorNumbers.length === 1 ? floorNumbers[0] : null;
             this.productionHistory = (data.items || []).map(row => ({
               ...row,
@@ -21743,7 +21746,7 @@
             this.loadProductionPlacement();
           },
           productionLocation(locationId) {
-            return this.productionAvailableLocations.find(location => Number(location.id) === Number(locationId));
+            return this.productionOutputLocations.find(location => Number(location.id) === Number(locationId));
           },
           productionLocationAreaCode(location) {
             const zone = String(location?.address_zone_code || "").trim().toUpperCase();
@@ -21791,13 +21794,31 @@
               ? row.preferred_finished_storage_areas
               : [];
           },
+          productionDefaultStorage(row) {
+            const storage = row?.production_default_storage;
+            return storage && typeof storage === "object" ? storage : {};
+          },
+          productionHasProductStorage(row) {
+            const storage = this.productionDefaultStorage(row);
+            return storage.configured && ["product_location","product_area","fixed_shelf"].includes(storage.source);
+          },
           productionPreferredAreaIds(row) {
+            if (this.productionHasProductStorage(row)) {
+              const areaId = Number(this.productionDefaultStorage(row).area_id);
+              return Number.isInteger(areaId) && areaId > 0 ? [areaId] : [];
+            }
             const explicit = Array.isArray(row?.preferred_finished_storage_area_ids)
               ? row.preferred_finished_storage_area_ids
               : this.productionPreferredAreas(row).map(area => area.area_id);
             return explicit.map(value => Number(value)).filter(value => Number.isInteger(value) && value > 0);
           },
           productionPreferredAreaHint(row) {
+            const storage = this.productionDefaultStorage(row);
+            if (this.productionHasProductStorage(row)) {
+              if (storage.issue) return "";
+              const label = storage.location?.name || storage.location?.location_name || this.inventoryLocation(this.productionLocation(storage.location_id));
+              return label ? `常用箱默认位置：${label}` : "按常用箱设置的区域入库";
+            }
             const areas = this.productionPreferredAreas(row);
             if (!areas.length) return "";
             const labels = areas.map(area => `${area.floor_name || `${area.floor_number || '-'}F`}/${area.area_name || area.area_code || `区域${area.area_id}`}`);
@@ -21805,9 +21826,9 @@
           },
           productionLocationsForRow(row) {
             const preferredIds = this.productionPreferredAreaIds(row);
-            if (!preferredIds.length) return this.productionAvailableLocations;
+            if (!preferredIds.length) return this.productionOutputLocations;
             const rank = new Map(preferredIds.map((areaId,index) => [areaId,index]));
-            return this.productionAvailableLocations
+            return this.productionOutputLocations
               .filter(location => rank.has(Number(location.area_id)))
               .slice()
               .sort((a,b) => (rank.get(Number(a.area_id)) ?? 999) - (rank.get(Number(b.area_id)) ?? 999));
@@ -21927,6 +21948,7 @@
             if (!Number.isInteger(input) || input <= 0 || !Number.isInteger(output) || output <= 0 || output > theoretical) return false;
             if (!["direct","stock"].includes(row.completion_mode)) return false;
             if (this.productionNeedsLocation(row)) {
+              if (this.productionHasProductStorage(row) && this.productionDefaultStorage(row).issue) return false;
               const locationReady = this.canWarehouseExecute && this.productionLocationsForRow(row).some(location => Number(location.id) === Number(row.location_id));
               if (!locationReady) return false;
               return true;
@@ -22037,13 +22059,17 @@
               if (!locationsReady) return;
               const preferredIds = this.productionPreferredAreaIds(row);
               const allowedLocations = this.productionLocationsForRow(row);
-              if (preferredIds.length) {
-                const first = allowedLocations.find(location => !this.productionLocationUsedByOther(location.id,row));
-                row.location_floor_number = first ? this.productionLocationFloorNumber(first) : null;
-                row.location_area_code = first ? this.productionLocationAreaCode(first) : "";
-                row.location_id = first ? Number(first.id) : null;
-              } else if (!row.location_floor_number && this.productionLocationFloors.length === 1) {
-                row.location_floor_number = this.productionLocationFloors[0].number;
+              const current = allowedLocations.find(location => Number(location.id) === Number(row.location_id));
+              const storage = this.productionDefaultStorage(row);
+              const preferred = !storage.issue && allowedLocations.find(location => Number(location.id) === Number(storage.location_id));
+              const selected = current || preferred || (!storage.issue && preferredIds.length ? allowedLocations[0] : null);
+              if (selected) {
+                row.location_floor_number = this.productionLocationFloorNumber(selected);
+                row.location_area_code = this.productionLocationAreaCode(selected);
+                row.location_id = Number(selected.id);
+              } else {
+                row.location_id = null;
+                if (!row.location_floor_number && this.productionLocationFloors.length === 1) row.location_floor_number = this.productionLocationFloors[0].number;
               }
               if (row.location_id) this.autoSelectProductionRow(row);
             } else if (!this.productionNeedsLocation(row)) {
@@ -22142,14 +22168,6 @@
                 && this.canConfirmProductionRow(row);
             });
           },
-          productionLocationUsedByOther(locationId, currentRow) {
-            return this.productionPending.some(row =>
-              row.id !== currentRow.id
-              && this.productionSelected[row.id]
-              && this.productionNeedsLocation(row)
-              && Number(row.location_id) === Number(locationId)
-            );
-          },
           productionCompletionIsStock(row) {
             return ["stock","split"].includes(row?.initial_disposition) || Number(row?.stock_quantity || 0) > 0 || !!row?.stock_transfer_id;
           },
@@ -22175,11 +22193,6 @@
             if (this.productionBusy) return;
             const rows = this.productionPending.filter(row => this.productionUsesBatchConfirmation(row) && this.productionSelected[row.id] && this.canConfirmProductionRow(row));
             if (!rows.length) { this.showToast("请先选择完工去向并勾选至少一条待生产明细", true); return; }
-            const stockLocationIds = rows.filter(row => this.productionNeedsLocation(row)).map(row => Number(row.location_id));
-            if (new Set(stockLocationIds).size !== stockLocationIds.length) {
-              this.showToast("同一批入库明细不能选择同一空库位", true);
-              return;
-            }
             const groups = new Map();
             rows.forEach(row => {
               const customerId = Number(row.customer_id);
@@ -22235,7 +22248,16 @@
                 this.loadKpi(),
               ]);
               if (this.hasPermission("dashboard.view")) await this.loadOverview();
-              this.productionTab = "history";
+              if (this.productionEntry) {
+                const previousEntry = this.productionEntry;
+                const currentEntry = this.productionPending.find(row => Number(row.id) === Number(previousEntry.id));
+                this.productionEntry = failedGroups.length
+                  && !succeededRows.some(row => Number(row.id) === Number(previousEntry.id))
+                  && currentEntry && Number(currentEntry.version) === Number(previousEntry.version)
+                  ? currentEntry : null;
+                if (this.productionEntry) this.refreshProductionPreview(this.productionEntry);
+              }
+              this.productionTab = failedGroups.length ? "pending" : "history";
               if (failedGroups.length) {
                 const failedText = failedGroups.map(group => `${group.customer_name} ${group.count} 条：${group.message}`).join("；");
                 this.showToast(`已入库 ${succeededRows.length} 条；失败 ${rows.length - succeededRows.length} 条。${failedText}。失败项已保留，可直接重试`, true);

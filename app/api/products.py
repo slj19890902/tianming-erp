@@ -3057,6 +3057,7 @@ def _update_product(product_id, payload, db, user, *, commit=True) -> dict:
 
 def _save_product_with_bom(payload, db, user, product_id=None):
     from app.services.bom_transactions import atomic_bom
+    from app.services.warehouse_inventory import WarehouseInventoryError
 
     expected = payload.product.expected_version if product_id is not None else 1
     if payload.bom.expected_version != expected:
@@ -3082,6 +3083,9 @@ def _save_product_with_bom(payload, db, user, product_id=None):
                 result = {"product": _response(product, user), "bom": bom}
         db.commit()
         return result
+    except WarehouseInventoryError as error:
+        db.rollback()
+        raise HTTPException(error.status_code, str(error)) from error
     except Exception:
         db.rollback()
         raise

@@ -6899,7 +6899,6 @@
               <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">
                 转入常用箱前请确认单片报料尺寸。用户手填值不会被自动覆盖；只有点击“重新推荐”才会重算。
               </div>
-              <div v-if="productForm.shared_manufacturing_enabled" class="notice">共用产品：箱型、材质、报料及生产资料共同保存。<template v-if="productForm.shared_catalog_policy_enabled">普通纸箱与 BOM组合可在这里共同转换；子件和用量同步核对，无需先解除共用。</template>各客户原售价保留；本页改价仅影响当前客户。计价单位随结构调整，请核对；历史订单和库存保留原记录。</div>
               <div class="product-form-row product-core-row">
                 <div class="field"><label>正式存货编码</label><input class="input" v-model.trim="quotationConvertForm.product_code" /></div>
                 <div class="field"><label>产品名称</label><input class="input" v-model.trim="quotationConvertForm.product_name" /></div>
@@ -6928,6 +6927,7 @@
               <div v-if="quotationConvertCreaseMismatch" class="status orange" style="display:block;white-space:normal;margin-top:8px">{{ quotationConvertCreaseMismatch }}</div>
             </div>
             <div v-else-if="modal.type === 'product'">
+              <div v-if="productForm.shared_manufacturing_enabled" class="notice">共用产品：箱型和生产资料共同保存，售价各自保留。<template v-if="productForm.shared_catalog_policy_enabled">普通纸箱与 BOM组合可共同转换；单价数值保留，请核对计价单位。</template></div>
               <div v-if="productForm.id && canProductionExecute && !productForm.is_composite && productForm.supply_mode!=='external_purchase'" class="toolbar-group" style="margin-bottom:8px"><button class="btn small" type="button" @click="openScrapProduction({product_id:productForm.id})">废料生产 / 直接成品入库</button><span class="muted">沿用已保存资料；本次工艺及数量不修改常用箱。</span></div>
               <div v-if="productForm.id && !canEditProducts" class="notice readonly-hint">当前为只读查看；常用箱资料控件已禁用。</div>
               <fieldset class="product-edit-grid product-compact-editor" :class="'readonly-fieldset'" :disabled="!!productForm.id && !canEditProducts">

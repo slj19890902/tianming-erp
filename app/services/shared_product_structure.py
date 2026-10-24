@@ -152,8 +152,19 @@ def save_if_shared(db, product_id, payload, actor):
         action = sharing._sku_plan(db, child, customers)
         if action['kind'] == 'bom':
             raise HTTPException(409, '多级组合子件请按原多级BOM入口核对，本次全部未保存')
-        child_gid = sharing._apply_sku(db, action, actor,
-            include_existing_stock=False, preserve_existing_prices=True)
+        existing_gid = action.get('group_id') if action['kind'] == 'link' else None
+        existing_members = (list(db.scalars(select(SharedFinishedMember).where(
+            SharedFinishedMember.group_id == existing_gid))) if existing_gid else [])
+        existing_policy = master.receipt(db, existing_gid) if existing_gid else None
+        if (existing_policy and existing_policy.get('full_catalog')
+                and {m.product_id for m in existing_members} == set(action['ids'])):
+            # Editing an already approved recipe is a product write, not a
+            # new membership registration. Keep the original editor access;
+            # adding references still goes through administrator-only enrolment.
+            child_gid = existing_gid
+        else:
+            child_gid = sharing._apply_sku(db, action, actor,
+                include_existing_stock=False, preserve_existing_prices=True)
         child_groups.add(child_gid)
         members = list(db.scalars(select(SharedFinishedMember).where(SharedFinishedMember.group_id == child_gid)))
         mapping[child.id] = {m.customer_id: m.product_id for m in members}

@@ -859,7 +859,9 @@ def apply_versioned_update(db, *, object_type, entity, updates, expected_version
     from app.services.bom_transactions import atomic_bom
     from app.services.warehouse_inventory import WarehouseInventoryError
     try:
-        plan = prepare_sync(db, entity, updates, user) if object_type == "product" else None
+        from app.services.shared_product_structure import owns_product_write
+        plan = (prepare_sync(db, entity, updates, user)
+                if object_type == "product" and not owns_product_write(db, entity.id) else None)
         if plan is None:
             return _apply_versioned_update(db, object_type=object_type, entity=entity,
                 updates=updates, expected_version=expected_version, user=user,

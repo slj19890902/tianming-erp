@@ -181,7 +181,7 @@ def preview(db,*,customer_id,source_customer_id,product_ids=None,new_products_sh
     return result
 
 
-def activate_master(db,gid,actor,source_product_id=None):
+def activate_master(db,gid,actor,source_product_id=None,*,preserve_existing_prices=False):
     """Enable one canonical manufacturing version, without approving old drift."""
     products=[db.get(Product,pid) for pid in management.member_ids(db,gid)]
     source = next((p for p in products if p.id == source_product_id), products[0])
@@ -197,7 +197,7 @@ def activate_master(db,gid,actor,source_product_id=None):
         if str(p.id) not in price_initializations:
             initial=access.sale_price_initialization(db,source,target_customer_id=p.customer_id,target_unit=p.unit)
             existing={field:getattr(p,field) for field in access.SALE_PRICE_FIELDS}
-            if any(value is not None for value in existing.values()):
+            if preserve_existing_prices or any(value is not None for value in existing.values()):
                 initial.update(status='preserved',values=json.loads(access.canonical(existing)))
             else:
                 updates.update(access.initial_sale_price_values(initial))
@@ -259,7 +259,7 @@ def activate_master(db,gid,actor,source_product_id=None):
         master.sync_processing_profile(db,db.get(Product,profile.product_id),profile,actor)
 
 
-def _apply_sku(db,action,actor):
+def _apply_sku(db,action,actor,*,include_existing_stock=True,preserve_existing_prices=False):
     key='customer-catalog-'+uuid4().hex
     evidence='管理员确认客户共用同一产品、生产报料资料和合法库存'
     if action['kind']=='bom':
@@ -285,8 +285,9 @@ def _apply_sku(db,action,actor):
     policy=db.get(SharedFinishedPolicy,gid)
     if policy:policy.auto_enroll=True
     else:db.add(SharedFinishedPolicy(group_id=gid,auto_enroll=True))
-    activate_master(db,gid,actor,action['source_id'])
-    _attach_stock(db,gid,action,actor)
+    activate_master(db,gid,actor,action['source_id'],preserve_existing_prices=preserve_existing_prices)
+    if include_existing_stock:
+        _attach_stock(db,gid,action,actor)
     return gid
 
 

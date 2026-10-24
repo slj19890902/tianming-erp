@@ -297,21 +297,25 @@ def reconcile(db, *, product_id, preview_hash, operation_key, evidence, actor, e
         return dict(group_id=gid, replayed=False)
 
 
-def prepare_sync(db, product, updates, user):
+def prepare_sync(db, product, updates, user, *, allow_structure=False):
     pair = _pair(db, product)
     if not pair or not receipt(db, pair[0]):
         return None
     gid, products = pair
-    if any(updates.get(key, getattr(product,key)) != getattr(product,key)
-           for key in ('customer_id','product_code','is_composite','is_internal_component','is_virtual_composite_parent')):
+    identity_fields = ('customer_id','product_code') if allow_structure else (
+        'customer_id','product_code','is_composite','is_internal_component','is_virtual_composite_parent')
+    if any(updates.get(key, getattr(product,key)) != getattr(product,key) for key in identity_fields):
         raise HTTPException(409, '共用产品的客户、编码和BOM角色不能单边变更，请先调整共用范围')
     from app.services.shared_customer_access import PHYSICAL_FIELDS
     policy = receipt(db, gid)
     fields = set(PHYSICAL_FIELDS) | set(MATERIAL) | set(REPORT) | set(EXTERNAL_SUPPLY)
+    if allow_structure:
+        fields |= {'is_composite','is_virtual_composite_parent','combination_mode','composite_fulfillment_mode'}
     if policy.get('full_catalog'):
         fields |= set(COMMERCIAL) | set(PRINTING)
     changed = {key for key in fields if key in updates and
-               (getattr(product,key) != updates[key] if key == 'sheet_cutting_settings' else
+               (getattr(product,key) != updates[key] if key in (
+                    'sheet_cutting_settings','is_composite','is_virtual_composite_parent') else
                 shared._value(getattr(product,key)) != shared._value(updates[key]))}
     if not changed:
         return None

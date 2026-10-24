@@ -2396,6 +2396,22 @@ def _existing_reservation_batch(
     )
 
 
+def has_full_sheet_input(db, order_item_id, component_type, bom_snapshot_id):
+    rows = db.scalars(select(InventoryReservation).join(OrderItemSemiRequirement,
+        OrderItemSemiRequirement.id == InventoryReservation.semi_requirement_id).where(
+        InventoryReservation.order_item_id == order_item_id,
+        InventoryReservation.reservation_type == 'semi_order',
+        InventoryReservation.sales_order_item_bom_component_id == bom_snapshot_id,
+        OrderItemSemiRequirement.component_type == component_type,
+        InventoryReservation.status.in_(['active', 'partial']),
+        InventoryReservation.consumed_stock_quantity == 0,
+        InventoryReservation.reserved_stock_quantity > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity))
+    return any(json.loads(row.cut_plan_json or '{}').get('full_sheet_output_v1') is True
+        and int(row.credited_requirement_quantity or 0) > int(row.released_requirement_quantity or 0)
+        for row in rows)
+
+
 def reserve_semi_finished_inventory(
     db: Session,
     *,
@@ -2411,10 +2427,12 @@ def reserve_semi_finished_inventory(
     reverse_crease_override_reason: str | None = None,
     allow_rotation: bool = False,
     explicit_stock_quantity: int | None = None,
+    allow_extra_only: bool = False,
 ) -> SemiFinishedReservationBatch:
     if not confirmed:
         raise WarehouseInventoryError("半成品库存抵扣必须人工确认", 409)
-    if requested_requirement_quantity <= 0:
+    if requested_requirement_quantity < 0 or (requested_requirement_quantity == 0
+            and not (allow_extra_only and explicit_stock_quantity)):
         raise WarehouseInventoryError("本次抵扣需求片数必须大于0")
     if not idempotency_key or len(idempotency_key) > 80:
         raise WarehouseInventoryError("请求标识长度必须为1到80个字符")
@@ -2506,7 +2524,10 @@ def reserve_semi_finished_inventory(
                 requirement.required_piece_quantity - already_credited, 0
             )
         target = min(requested_requirement_quantity, remaining_requirement)
-        if target <= 0:
+        if target <= 0 and not (allow_extra_only and explicit_stock_quantity
+                and remaining_requirement == 0 and requirement.component_type == 'whole'
+                and has_full_sheet_input(db, item.id, requirement.component_type,
+                    requirement.sales_order_item_bom_component_id)):
             raise WarehouseInventoryError("该半成品需求已全部抵扣", 409)
         inventory_lots = db.scalars(
             select(InventoryLot)
@@ -2548,7 +2569,7 @@ def reserve_semi_finished_inventory(
             allocation_yield = cut_plan["yield_factor"] if cut_plan else detail.stock_yield_per_sheet
             capacity = lot.quantity_available * allocation_yield
             credited = min(remaining_target, capacity)
-            if credited <= 0:
+            if credited <= 0 and not (allow_extra_only and explicit_stock_quantity):
                 break
             stock_quantity = ceil(credited / allocation_yield)
             if explicit_stock_quantity is not None:
@@ -2883,6 +2904,7 @@ def consume_semi_finished_reservation(
     idempotency_key: str,
     delivery_item_id: int | None = None,
     reason: str = "送货出库消耗半成品预占",
+    allow_extra_input: bool = False,
 ) -> SemiFinishedReservationMutation:
     repeated = _idempotent_mutation(
         db,
@@ -2917,7 +2939,10 @@ def consume_semi_finished_reservation(
             current_requirement_credit,
             stock_quantity * int(reservation.yield_factor or 1),
         )
-        if consumed_requirement_quantity <= 0:
+        extra_plan = json.loads(reservation.cut_plan_json or '{}')
+        if consumed_requirement_quantity <= 0 and not (allow_extra_input
+                and delivery_item_id is None and extra_plan.get('actual_sheet_input_v1') is True
+                and extra_plan.get('full_sheet_output_v1') is True):
             raise WarehouseInventoryError("该预占没有可消耗的需求片数余额", 409)
         delivery_item = None
         if delivery_item_id is not None:

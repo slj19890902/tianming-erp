@@ -2282,6 +2282,7 @@ class SemiReleasePayload(BaseModel):
 class ManualSheetAdjustmentItem(BaseModel):
     reservation_id: int = Field(gt=0, strict=True)
     keep_stock_quantity: int = Field(ge=0, strict=True)
+    warning_acknowledged_codes: list[str] = Field(default_factory=list, max_length=30)
 
 
 class ManualSheetAdjustmentPayload(BaseModel):
@@ -4218,13 +4219,17 @@ def _bom_manual_sheet_state(db, snapshot_id, component_type, user, match_mode='e
     procurement = _manual_sheet_procurement_state(db, item, component, snapshot=snapshot)
     remaining = max(required - coverage["total_piece_quantity"] - procurement["committed_piece_qty"], 0)
     rows, can_further_match = _manual_sheet_candidates(db, requirement, user, match_mode)
+    from app.services.semi_finished_inventory import has_full_sheet_input
+    extra_input_allowed = (remaining > 0 or (required <= coverage['total_piece_quantity']
+        and has_full_sheet_input(db, item.id, component, snapshot.id)))
     for row in rows:
         row['match_mode'] = match_mode
         yield_factor = max(int(row["stock_yield_per_sheet"]), 1)
         row["max_stock_quantity"] = min(int(row["available_stock_quantity"]), (remaining + yield_factor - 1) // yield_factor)
+        row['extra_stock_allowed'] = bool(component == 'whole' and match_mode == 'auto' and row.get('cut_plan')
+            and extra_input_allowed)
         row['actual_max_stock_quantity'] = (int(row['available_stock_quantity'])
-            if component == 'whole' and match_mode == 'auto' and row.get('cut_plan') and remaining > 0
-            else row['max_stock_quantity'])
+            if row['extra_stock_allowed'] else row['max_stock_quantity'])
         row["review_hash"] = _manual_sheet_digest({
             "snapshot_id": snapshot.id, "component": component,
             "order_revision": _manual_order_revision(item), "procurement_revision": procurement["revision"], "requirement": _semi_requirement_dict(requirement),
@@ -4282,13 +4287,17 @@ def _order_manual_sheet_state(db, item_id, component_type, user, match_mode='exa
     procurement = _manual_sheet_procurement_state(db, item, component_type)
     remaining = max(current["remaining_required_piece_qty"] - procurement["committed_piece_qty"], 0)
     rows, can_further_match = _manual_sheet_candidates(db, requirement, user, match_mode)
+    from app.services.semi_finished_inventory import has_full_sheet_input
+    extra_input_allowed = (remaining > 0 or (current['remaining_required_piece_qty'] == 0
+        and has_full_sheet_input(db, item.id, component_type, None)))
     for row in rows:
         row['match_mode'] = match_mode
         output = max(int(row["stock_yield_per_sheet"]),1)
         row["max_stock_quantity"] = min(int(row["available_stock_quantity"]),(remaining+output-1)//output)
+        row['extra_stock_allowed'] = bool(component_type == 'whole' and match_mode == 'auto' and row.get('cut_plan')
+            and extra_input_allowed)
         row['actual_max_stock_quantity'] = (int(row['available_stock_quantity'])
-            if component_type == 'whole' and match_mode == 'auto' and row.get('cut_plan') and remaining > 0
-            else row['max_stock_quantity'])
+            if row['extra_stock_allowed'] else row['max_stock_quantity'])
         row["review_hash"] = _manual_sheet_digest({"order_item_id":item.id,"component":component_type,
             "order_revision":_manual_order_revision(item),"procurement_revision":procurement["revision"],"requirement":_semi_requirement_dict(requirement),
             "remaining":remaining,"row":row})
@@ -4443,6 +4452,7 @@ def _reserve_manual_sheet_inventory(target_id, payload, db, user, *, is_bom, com
             allow_rotation=(candidate.get('cut_plan') or {}).get('rotated') is True,
             explicit_stock_quantity=(payload.stock_quantity if payload.produce_extra_stock
                 and payload.stock_quantity > (credited + candidate['stock_yield_per_sheet'] - 1) // candidate['stock_yield_per_sheet'] else None),
+            allow_extra_only=bool(payload.produce_extra_stock and candidate.get('extra_stock_allowed')),
         )
         if sum(row.reserved_stock_quantity for row in result.reservations) != payload.stock_quantity:
             raise WarehouseInventoryError("本次实际预占张数与填写数量不一致，已取消抵扣", 409)
@@ -4560,7 +4570,8 @@ def _reserve_manual_sheet_batch(target_id, payload, db, user, *, is_bom):
                 raise WarehouseInventoryError('库存或匹配依据已变化，请重新查看片料后抵扣', 409)
             output = int(row['stock_yield_per_sheet'])
             limit = row['actual_max_stock_quantity'] if payload.produce_extra_stock else row['max_stock_quantity']
-            if selected.stock_quantity > limit or remaining <= 0:
+            if selected.stock_quantity > limit or (remaining <= 0 and not (
+                    payload.produce_extra_stock and row.get('extra_stock_allowed'))):
                 raise WarehouseInventoryError('所选片数超过可用库存或剩余需求', 409)
             credited = min(selected.stock_quantity * output, remaining)
             if not payload.produce_extra_stock and ceil(credited / output) != selected.stock_quantity:
@@ -4596,7 +4607,7 @@ def _reserve_manual_sheet_batch(target_id, payload, db, user, *, is_bom):
             'allocated_requirement_quantity': sum(row['allocated_requirement_quantity'] for row in responses),
             'reservation_ids': [rid for row in responses for rid in row['reservation_ids']],
             'internal_requisition_changes': [change for row in responses for change in row['internal_requisition_changes']]}
-        response['message'] = (f"已使用 {response['stock_quantity']} 片库存片料，" +
+        response['message'] = (f"已安排 {response['stock_quantity']} 张库存片料，" +
             ('本项无需再报料' if response['remaining_required_piece_qty'] == 0 else
              f"剩余 {response['remaining_required_piece_qty']} 片仍需报料"))
         if scrap_result:

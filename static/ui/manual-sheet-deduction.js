@@ -136,6 +136,7 @@
       differences(row) {return (row.signature_differences || []).filter(name=>!['board_length_mm','board_width_mm'].includes(name)).map(name=>differenceNames[name] || name).join('、');},
       credit(row) {return Math.min(chosenQuantity(row) * Number(row.stock_yield_per_sheet), this.preview?.remaining_required_piece_qty || 0);},
       selection() {return this.rows.filter(row=>row.selected);},
+      canProduceExtra(row) {return row.extra_stock_allowed===true || Number(row.actual_max_stock_quantity)>Number(row.max_stock_quantity);},
       totals() {
         const selected=this.selection(),need=Number(this.preview?.remaining_required_piece_qty || 0);
         const pieces=selected.reduce((sum,row)=>sum+chosenQuantity(row)*Number(row.stock_yield_per_sheet),0);
@@ -146,8 +147,8 @@
           const credit=Math.min(quantity*output,remaining);remaining-=credit;
           const over=Math.ceil(credit/output)<quantity;
           extra=extra || over;
-          return row.selectable && quantity>0 && output>0 && credit>0 &&
-            (!over || Number(row.actual_max_stock_quantity)>Number(row.max_stock_quantity));
+          return row.selectable && quantity>0 && output>0 && (credit>0 || this.canProduceExtra(row)) &&
+            (!over || this.canProduceExtra(row));
         });
         const perBox=Math.max(Number(this.preview?.pieces_per_box || 1),1);
         const uncovered=Math.max(need-pieces,0),scrap=this.scrapCount()*perBox;
@@ -160,7 +161,7 @@
         if(row.selected && !chosenQuantity(row)) {
           const other=this.selection().filter(item=>item!==row).reduce((sum,item)=>sum+chosenQuantity(item)*Number(item.stock_yield_per_sheet),0);
           const need=Math.max(Number(this.preview?.remaining_required_piece_qty || 0)-other,0);
-          row.inputQuantity=Math.min(row.max_stock_quantity,Math.ceil(need/Number(row.stock_yield_per_sheet))) || '';
+          row.inputQuantity=Math.min(row.max_stock_quantity,Math.ceil(need/Number(row.stock_yield_per_sheet))) || (this.canProduceExtra(row)?1:'');
         }
       },
       yieldText(row) {
@@ -218,16 +219,32 @@
       },
       adjustmentValid() {
         const changes=this.adjustmentChanges();
+        const byLot=new Map();
+        for(const row of changes)byLot.set(row.lot_id,(byLot.get(row.lot_id)||0)+Number(row.keep_stock_quantity)-Number(row.remaining_stock_quantity));
         return changes.length>0 && changes.every(row=>row.can_adjust && row.keep_stock_quantity!=='' &&
           Number.isSafeInteger(Number(row.keep_stock_quantity)) && Number(row.keep_stock_quantity)>=0 &&
-          Number(row.keep_stock_quantity)<Number(row.remaining_stock_quantity));
+          Number(row.keep_stock_quantity)<=Number(row.max_stock_quantity ?? row.remaining_stock_quantity) &&
+          (Number(row.keep_stock_quantity)<=Number(row.remaining_stock_quantity) || row.can_increase) &&
+          (byLot.get(row.lot_id)||0)<=Number(row.available_stock_quantity||0));
+      },
+      keepSpare(row, value) {
+        const total=Number(row.remaining_stock_quantity)+Number(row.available_stock_quantity||0),spare=Number(value);
+        row.keep_stock_quantity=value!=='' && Number.isSafeInteger(spare) && spare>=0 && spare<=total?total-spare:'';
+      },
+      plannedInputSummary() {
+        const rows=this.preview?.existing_reservations || [],perBox=Math.max(Number(this.preview?.pieces_per_box||1),1);
+        const stock=rows.reduce((sum,row)=>sum+Math.max(Number(row.keep_stock_quantity)||0,0),0);
+        const pieces=rows.reduce((sum,row)=>sum+Math.max(Number(row.keep_stock_quantity)||0,0)*Number(row.stock_yield_per_sheet||1),0);
+        const needed=Number(this.preview?.remaining_required_piece_qty||0)+Number(this.preview?.semi_finished_reserved_piece_qty||0);
+        return {stock,pieces,boxes:Math.floor(pieces/perBox),extra:Math.max(pieces-needed,0)};
       },
       async saveAdjustment() {
         if(this.busy || this.loading || this.disabled || this.uncertain || !this.adjustmentValid())return;
-        if(root.confirm && !root.confirm('确认减少未加工片料安排？减少部分退回可用库存，差额重新进入待报料；已采购和已完工记录保持原事实。'))return;
+        if(root.confirm && !root.confirm('确认调整本次加工张数？增加部分从可用库存安排，减少部分退回库存；实际加工后再登记完工，超出订单的合格成品入库存。'))return;
         const payload={component_type:this.componentType,expected_adjustment_revision:this.preview.adjustment_revision,
           idempotency_key:operationKey(),items:this.adjustmentChanges().map(row=>({
-            reservation_id:row.reservation_id,keep_stock_quantity:Number(row.keep_stock_quantity)}))};
+            reservation_id:row.reservation_id,keep_stock_quantity:Number(row.keep_stock_quantity),
+            ...(Number(row.keep_stock_quantity)>Number(row.remaining_stock_quantity)?{warning_acknowledged_codes:row.warning_codes||[]}:{} )}))};
         this.hold(payload,false,true);
         await this.submitHeld();
       },
@@ -324,13 +341,18 @@
             <div class="manual-sheet-body" :aria-busy="loading || busy">
               <div v-if="preview" class="manual-sheet-demand"><strong>{{preview.product_code}} · {{preview.product_name}}</strong><span>所需箱片 {{preview.board_length_mm}} × {{preview.board_width_mm}} mm · {{preview.flute_type==='NONE'?'卡纸':preview.flute_type+' 瓦'}} · {{preview.material_code}}</span><b>待用箱片 {{preview.remaining_required_piece_qty}} 片</b></div>
               <section v-if="preview?.existing_reservations?.length && !uncertain" class="manual-sheet-existing">
-                <strong>已安排片料</strong>
+                <strong>调整本次加工片料</strong>
                 <div v-for="reservation in preview.existing_reservations" :key="reservation.reservation_id" class="manual-sheet-existing-row">
                   <div>{{reservation.board_length_mm}} × {{reservation.board_width_mm}} · {{reservation.material_code}}<small>{{reservation.location_name}}</small></div>
-                  <label>保留采用 <input class="input" type="number" min="0" step="1" :max="reservation.remaining_stock_quantity" v-model="reservation.keep_stock_quantity" :disabled="busy || loading || disabled || !reservation.can_adjust" :aria-label="'保留采用张数 '+reservation.reservation_id"> 张</label>
+                  <div>已安排 {{reservation.remaining_stock_quantity}} 张 · 另有可用 {{reservation.available_stock_quantity || 0}} 张</div>
+                  <label>本次加工 <input class="input" type="number" min="0" step="1" :max="reservation.max_stock_quantity ?? reservation.remaining_stock_quantity" v-model="reservation.keep_stock_quantity" :disabled="busy || loading || disabled || !reservation.can_adjust" :aria-label="'本次加工张数 '+reservation.reservation_id"> 张</label>
+                  <label>保留备用 <input class="input" type="number" min="0" step="1" :max="reservation.remaining_stock_quantity+(reservation.available_stock_quantity||0)" :value="reservation.keep_stock_quantity===''?'':reservation.remaining_stock_quantity+(reservation.available_stock_quantity||0)-Number(reservation.keep_stock_quantity)" @input="keepSpare(reservation,$event.target.value)" :disabled="busy || loading || disabled || !reservation.can_adjust" :aria-label="'保留备用张数 '+reservation.reservation_id"> 张</label>
+                  <button class="btn small" type="button" :disabled="busy || loading || disabled || !reservation.can_increase" @click="reservation.keep_stock_quantity=reservation.max_stock_quantity">本批全部使用</button>
                   <small v-if="reservation.blocked_reason">{{reservation.blocked_reason}}</small>
+                  <small v-else-if="!reservation.can_increase && reservation.available_stock_quantity">{{reservation.increase_blocked_reason}}</small>
+                  <details v-if="reservation.warning_messages?.length"><summary>本批加工须核对</summary><p v-for="warning in reservation.warning_messages" :key="warning">{{warning}}</p></details>
                 </div>
-                <p>减少的张数退回可用库存，缺口重新报料；增加采用量请在下方选择可用片料。</p>
+                <p>计划加工 {{plannedInputSummary().stock}} 张，预计可出 {{preview.is_bom || componentType!=='whole'?plannedInputSummary().pieces+' 片部件':plannedInputSummary().boxes+' '+(preview.output_unit||'只')}}<span v-if="plannedInputSummary().extra">；其中超出本单库存用料需求 {{plannedInputSummary().extra}} 片，实际完工后入库存</span>。减少后不足的部分可继续用其他库存或补报料。</p>
                 <button class="btn" type="button" :disabled="busy || loading || disabled || !adjustmentValid()" @click="saveAdjustment">保存用料调整</button>
               </section>
               <p v-if="matchMode==='swapped'" class="manual-sheet-swap">长宽交换匹配 · 请核对本次使用方向</p>
@@ -339,14 +361,14 @@
               <template v-if="uncertain"><p>原批次和片数已保留，核对后再继续操作。</p><button class="btn primary" type="button" :disabled="busy" @click="submitHeld">{{busy?'正在核对…':'核对上次抵扣结果'}}</button></template>
               <div v-else-if="rows.length" class="manual-sheet-table-wrap"><table class="manual-sheet-table"><thead><tr><th>选择</th><th>库存片料尺寸／材质</th><th>可用数量</th><th>库位</th><th>每张产出</th><th>本次使用</th></tr></thead><tbody>
                 <tr v-for="row in rows" :key="row.lot_id" :class="{'manual-sheet-selected':row.selected}">
-                  <td><input type="checkbox" v-model="row.selected" :aria-label="'选择 '+row.board_length_mm+' × '+row.board_width_mm+'，'+(row.warehouse_location?.location_name || row.warehouse_location?.name || '位置待核对')" :disabled="busy || !row.selectable || !row.max_stock_quantity" @change="choose(row)"></td>
+                  <td><input type="checkbox" v-model="row.selected" :aria-label="'选择 '+row.board_length_mm+' × '+row.board_width_mm+'，'+(row.warehouse_location?.location_name || row.warehouse_location?.name || '位置待核对')" :disabled="busy || !row.selectable || !(row.actual_max_stock_quantity ?? row.max_stock_quantity)" @change="choose(row)"></td>
                   <td><strong>{{row.board_length_mm}} × {{row.board_width_mm}} mm</strong><div>{{row.material_code}} / {{row.flute_type}} · {{row.recommendation_label || '同尺寸'}}</div><details v-if="differences(row) || row.warning_messages?.length" class="manual-sheet-details" :class="{'manual-sheet-review':!!differences(row)}"><summary>{{differences(row)?'需核对：'+differences(row):'查看详情'}}</summary><div>{{row.internal_name || '库存片料'}} · {{row.material_code}} / {{row.flute_type}}</div><p v-for="(warning,index) in row.warning_messages" :key="index">{{warning}}</p></details></td>
                   <td><b>{{row.available_stock_quantity}}</b> 张</td><td><button v-if="row.warehouse_location?.id" type="button" class="manual-sheet-location" :disabled="busy" :title="'在地图定位：'+locationName(row)" @click="openMap(row)">{{locationName(row)}}</button><span v-else>位置待核对</span></td><td>{{yieldText(row)}}<div class="manual-sheet-score" :class="'manual-sheet-score-'+(row.match_color || 'unknown')">{{row.utilization_percent==null?'匹配度待核算':'利用率 '+row.utilization_percent+'%'}}</div><div class="manual-sheet-waste">{{wasteText(row)}}</div></td>
                   <td><label><input class="input" type="number" min="1" step="1" :max="row.actual_max_stock_quantity ?? row.max_stock_quantity" v-model="row.inputQuantity" :disabled="busy || !row.selected" :aria-label="'本次使用张数，最多 '+(row.actual_max_stock_quantity ?? row.max_stock_quantity)+' 张'"> 张</label><small class="manual-sheet-waste">本单建议 {{row.max_stock_quantity}} 张</small></td>
                 </tr>
               </tbody></table></div>
               <div v-else-if="!loading && preview && !uncertain" class="manual-sheet-empty">
-                <p v-if="!preview.remaining_required_piece_qty">当前用料需求已覆盖，无需再报料。</p><p v-else>{{matchMode==='swapped'?'暂无长宽交换后可用的同楞型片料。':'暂无符合材质楞型及加工用途的可用片料（已查询同尺寸、大张裁切和交换方向）。'}}</p>
+                <p v-if="!preview.remaining_required_piece_qty">订单用料已覆盖，可在上方调整本批加工量；有其他适用批次时也可追加加工。</p><p v-else>{{matchMode==='swapped'?'暂无长宽交换后可用的同楞型片料。':'暂无符合材质楞型及加工用途的可用片料（已查询同尺寸、大张裁切和交换方向）。'}}</p>
                 <button v-if="matchMode==='exact' && preview.can_further_match" class="btn" type="button" :disabled="busy" @click="load('swapped')">进一步匹配（交换长宽）</button>
               </div>
               <p v-if="rows.length" class="manual-sheet-explain">同尺寸优先，其次大张裁切、交换方向；组内按利用率推荐。裁余是矩形排版估算，含边料，不含模切内部挖空；可再利用的边料不等于报废。</p>

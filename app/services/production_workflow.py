@@ -1453,6 +1453,7 @@ def _production_stock_location(
     pallet_id: int | None,
     allowed_existing_pallet_id: int | None = None,
     capacity_source_location_id: int | None = None,
+    allow_occupied: bool = False,
 ) -> WarehouseLocation:
     if location_id is None:
         raise ProductionWorkflowError("库存完工必须选择成品库位", 400)
@@ -1478,6 +1479,15 @@ def _production_stock_location(
             409,
         )
     require_published_location = has_space_ledger(db)
+    pallet = _current_pallet(db, location.id)
+    if allow_occupied and pallet is not None:
+        if pallet.status != "active":
+            raise ProductionWorkflowError("所选库位当前栈板状态不可用，请先核对", 409)
+        if require_published_location and location.storage_type == "rack":
+            raise ProductionWorkflowError("货架格仍绑定实体栈板，请先核对已有空间事实", 409)
+        # Reusing one real pallet does not increase the area's pallet count.
+        # The inventory writer still checks its actual ground/shelf capacity.
+        capacity_source_location_id = location.id
     issue = operational_location_issue(
         db,
         location,
@@ -1497,9 +1507,12 @@ def _production_stock_location(
     if (
         location_has_live_inventory(db, location.id)
         and allowed_existing_pallet_id is None
+        and not allow_occupied
     ):
         raise ProductionWorkflowError("所选库位已有活动库存，请选择空位", 409)
-    pallet = _current_pallet(db, location.id)
+    if (allow_occupied and pallet is None and location.storage_type != "rack"
+            and location_has_live_inventory(db, location.id)):
+        raise ProductionWorkflowError("现有地面库存缺少当前真实栈板，请先核对空间事实", 409)
     if pallet is not None:
         item_exists = db.scalar(
             select(InventoryPalletItem.id)
@@ -1507,10 +1520,11 @@ def _production_stock_location(
             .limit(1)
         )
         if (
-            pallet_id != pallet.id
+            (pallet_id != pallet.id and not (allow_occupied and pallet_id is None))
             or (
                 item_exists is not None
                 and allowed_existing_pallet_id != pallet.id
+                and not allow_occupied
             )
         ):
             raise ProductionWorkflowError("所选成品库位已占用，请选择空位", 409)
@@ -1524,9 +1538,45 @@ def _ensure_customer_finished_storage_location(
     *,
     customer_id: int,
     location: WarehouseLocation,
+    product_id: int | None = None,
 ) -> None:
     """Keep manual stock completion inside an explicitly configured route."""
 
+    if product_id is not None:
+        from app.models.receipt_putaway import ProductStoragePreference
+        preference = db.get(ProductStoragePreference, product_id, populate_existing=True)
+        if preference is not None and (preference.area_id or preference.location_id):
+            area = db.get(WarehouseArea, preference.area_id) if preference.area_id else None
+            if area is None or area.construction_status != "enabled" or area.floor.construction_status != "enabled":
+                raise ProductionWorkflowError("产品默认存放区域不可用，请先到常用箱修改或取消默认位置", 409)
+            if preference.location_id:
+                try:
+                    configured = _production_stock_location(db, preference.location_id, pallet_id=None, allow_occupied=True)
+                except ProductionWorkflowError as error:
+                    raise ProductionWorkflowError(f"产品默认货位不可用：{error}；请先到常用箱修改或取消默认位置", 409) from error
+                if configured.area_code != area.area_code or configured.warehouse_floor != area.floor.floor_number:
+                    raise ProductionWorkflowError("产品默认货位与保存的区域不一致，请先到常用箱重新选择", 409)
+                from app.models.fixed_shelf import ShelfBinding
+                binding = db.get(ShelfBinding, configured.id)
+                if binding is not None and binding.product_id != product_id:
+                    raise ProductionWorkflowError("产品默认货位已被其他产品专用绑定，请先到常用箱修改或取消默认位置", 409)
+            if location.area_code != area.area_code or location.warehouse_floor != area.floor.floor_number:
+                raise ProductionWorkflowError("该产品已指定默认存放区域，请选择该区域内有效库位", 409)
+            return
+        if preference is None:
+            from app.models.fixed_shelf import ShelfBinding
+            primary = db.scalar(select(ShelfBinding).where(
+                ShelfBinding.product_id == product_id, ShelfBinding.priority == 0))
+            if primary is not None:
+                from app.services.fixed_shelf import incoming_primary_location, ShelfError
+                try:
+                    configured = incoming_primary_location(db, product_id=product_id, customer_id=customer_id)
+                except ShelfError as error:
+                    raise ProductionWorkflowError(str(error), 409) from error
+                if configured is None:
+                    raise ProductionWorkflowError("产品固定货位已变化，请刷新后重试", 409)
+                if location.area_code == configured.area_code and location.warehouse_floor == configured.warehouse_floor:
+                    return
     preferred_area_ids = ordered_preferred_area_ids(db, int(customer_id))
     if not preferred_area_ids:
         return
@@ -1538,7 +1588,7 @@ def _ensure_customer_finished_storage_location(
         preferred_area_ids
     ):
         raise ProductionWorkflowError(
-            "该客户已指定默认成品区域，请选择指定区域内的空位；系统不会改放其他区域",
+            "该客户已指定默认成品区域，请选择指定区域内的有效库位；系统不会改放其他区域",
             409,
         )
 
@@ -2708,6 +2758,7 @@ def _bind_direct_completion_lots_to_system_pallet(
 
 
 def list_temporary_locations(db: Session, *, stock_materials: bool = False) -> list[dict]:
+    space_ledger = has_space_ledger(db)
     locations = list_operational_locations(
         db,
         warehouse_types={"finished", "shared", "semi_finished"} if stock_materials else {"finished", "shared"},
@@ -2718,7 +2769,10 @@ def list_temporary_locations(db: Session, *, stock_materials: bool = False) -> l
         if candidate.location.location_code
         != DIRECT_DELIVERY_STAGING_LOCATION_CODE
     ]
-    if has_space_ledger(db):
+    pallets = {pallet.location_id: pallet for pallet in db.scalars(select(InventoryPallet).where(
+        InventoryPallet.location_id.in_([row.location.id for row in locations]),
+        InventoryPallet.is_current.is_(True))) }
+    if space_ledger:
         locations = [
             candidate
             for candidate in locations
@@ -2730,10 +2784,13 @@ def list_temporary_locations(db: Session, *, stock_materials: bool = False) -> l
                 require_map_geometry=True,
                 required_inventory_type=None if stock_materials else "finished",
                 projection_context=candidate.projection_context,
+                capacity_source_location_id=(candidate.location.id
+                    if (not stock_materials and pallets.get(candidate.location.id) is not None
+                        and pallets[candidate.location.id].status == "active") else None),
             )
             is None
         ]
-    if not has_space_ledger(db):
+    if not space_ledger:
         locations = [
             candidate
             for candidate in locations
@@ -2743,8 +2800,15 @@ def list_temporary_locations(db: Session, *, stock_materials: bool = False) -> l
     result: list[dict] = []
     for candidate in locations:
         location = candidate.location
-        pallet = _current_pallet(db, location.id)
+        pallet = pallets.get(location.id)
         occupied = candidate.occupied
+        if not stock_materials:
+            if pallet is not None and pallet.status != "active":
+                continue
+            if space_ledger and location.storage_type == "rack" and pallet is not None:
+                continue
+            if occupied and location.storage_type != "rack" and pallet is None:
+                continue
         readable_location_name = employee_location_name(
             location,
             area=candidate.area,
@@ -2785,10 +2849,12 @@ def list_temporary_locations(db: Session, *, stock_materials: bool = False) -> l
                 "current_address_name": readable_location_name,
                 "employee_location_name": readable_location_name,
                 "layout_version": (
-                    int(location.floor3_layout.version)
-                    if location.floor3_layout is not None
+                    int(candidate.projection_context["layout"].version)
+                    if candidate.projection_context and candidate.projection_context.get("layout") is not None
+                    else int(location.floor3_layout.version) if location.floor3_layout is not None
                     else None
                 ),
+                "address_version": location.address_version,
                 "pallet_id": pallet.id if pallet is not None else None,
                 "pallet_code": pallet.pallet_code if pallet is not None else None,
                 "is_empty": not occupied,
@@ -3141,6 +3207,7 @@ def _stock_completion_lot(
     require_empty_pallet = True
     existing_location_id: int | None = None
     existing_pallet_id: int | None = None
+    reused_pallet_movement_floor: int | None = None
     is_parent_delivery_component = (
         snapshot is not None
         and snapshot.snapshot_schema_version != 5
@@ -3228,12 +3295,24 @@ def _stock_completion_lot(
             if location.id != location_id_override:
                 raise ProductionWorkflowError("一楼待送区库位已变化，请刷新后重试", 409)
     else:
+        allow_occupied = isinstance(command, CompletionCommand) and command.disposition == "stock"
         location = _production_stock_location(
             db,
             command.location_id,
             pallet_id=pallet_id,
             allowed_existing_pallet_id=existing_pallet_id,
+            allow_occupied=allow_occupied,
         )
+        if allow_occupied:
+            require_empty_pallet = False
+            existing_pallet = _current_pallet(db, location.id)
+            if existing_pallet is not None:
+                if command.pallet_code and command.pallet_code.strip() != existing_pallet.pallet_code:
+                    raise ProductionWorkflowError("该库位已有真实栈板，请沿用现有栈板，不另建栈板编号", 409)
+                pallet_id = existing_pallet.id
+                reused_pallet_movement_floor = int(db.scalar(select(func.coalesce(
+                    func.max(InventoryLocationMovement.id), 0)).where(
+                        InventoryLocationMovement.pallet_id == existing_pallet.id)) or 0)
     product_id = snapshot.component_product_id if snapshot is not None else item.product_id
     if is_parent_delivery_component:
         if existing_location_id is not None and existing_location_id != location.id:
@@ -3313,6 +3392,21 @@ def _stock_completion_lot(
         ),
         ground_capacity_quantity=ground_capacity_quantity,
     )
+    if reused_pallet_movement_floor is not None:
+        # Bind the new membership event to this exact completion. Pallet move
+        # timestamps use a historical wall-clock contract; monotonic movement
+        # IDs distinguish earlier moves without guessing a timezone or rewriting
+        # old facts. Later moves still block ordinary completion reversal.
+        anchors = list(db.scalars(select(InventoryLocationMovement).where(
+            InventoryLocationMovement.pallet_id == pallet_id,
+            InventoryLocationMovement.movement_type == "add_item",
+            InventoryLocationMovement.id > reused_pallet_movement_floor,
+            InventoryLocationMovement.from_location_id == location.id,
+            InventoryLocationMovement.to_location_id == location.id)))
+        if len(anchors) != 1 or anchors[0].idempotency_key is not None:
+            raise ProductionWorkflowError("本次共位入库的栈板位置凭据不唯一，请刷新后重试", 409)
+        anchors[0].idempotency_key = _stable_key("production-completion", completion.id, "pallet-placement")
+        db.flush()
     if snapshot is None:
         reserve_quantity = max(
             int(completion.order_reserved_quantity)
@@ -3734,6 +3828,7 @@ def complete_production_batch(
                 command.location_id,
                 pallet_id=resolved_pallet_id,
                 allowed_existing_pallet_id=allowed_existing_pallet_id,
+                allow_occupied=True,
             )
             # A historical parent-delivery component must remain beside its
             # already stored siblings.  Every new/manual placement otherwise
@@ -3744,6 +3839,7 @@ def complete_production_batch(
                     db,
                     customer_id=int(order.customer_id),
                     location=location,
+                    product_id=(component_snapshot.component_product_id if is_component_task else item.product_id),
                 )
         else:
             if (
@@ -4736,12 +4832,20 @@ def _reverse_completion_finished_lot(
     ):
         raise ProductionWorkflowError("生产完工成品预占已发生后续变化，不能自动回退", 409)
     pallet = lot.pallet_item.pallet if lot.pallet_item is not None else None
+    placement_anchor = (db.scalar(select(InventoryLocationMovement).where(
+        InventoryLocationMovement.idempotency_key == _stable_key("production-completion", completion.id, "pallet-placement"),
+        InventoryLocationMovement.pallet_id == pallet.id,
+        InventoryLocationMovement.movement_type == "add_item",
+        InventoryLocationMovement.from_location_id == completion.warehouse_location_id,
+        InventoryLocationMovement.to_location_id == completion.warehouse_location_id,
+    )) if pallet is not None else None)
     from app.services.admin_order_reversal_scope import may_reverse_at_current_location
     # Administrator order/receipt reversal targets the exact unchanged lot at
     # its CURRENT location. All source, quantity, consumption, reservation and
     # CAS checks above/below still apply; unscoped callers retain the move guard.
     if pallet is not None and not may_reverse_at_current_location(completion.order_item_id) and any(
-        not (graph_restored and _is_reversed_delivery_pallet_restore(db, movement, lot, completion))
+        not ((placement_anchor is not None and movement.id < placement_anchor.id)
+             or (graph_restored and _is_reversed_delivery_pallet_restore(db, movement, lot, completion)))
         for movement in db.scalars(select(InventoryLocationMovement)
         .where(
             InventoryLocationMovement.pallet_id == pallet.id,
@@ -6377,6 +6481,92 @@ def _annotate_customer_finished_storage_preferences(
         row["preferred_finished_storage_areas"] = areas
 
 
+def _annotate_product_production_storage(db: Session, rows: Sequence[dict]) -> None:
+    """One page-wide preference/candidate read, never one HTTP query per task.
+
+    This is a suggestion only. The completion keeps the operator's explicit
+    location and layout version and validates the same destination on write.
+    """
+    from app.models.receipt_putaway import ProductStoragePreference
+    from app.models.fixed_shelf import ShelfBinding
+    product_ids = {int(row['product_id']) for row in rows if row.get('product_id')}
+    if not product_ids:
+        return
+    preferences = {pref.product_id: pref for pref in db.scalars(select(ProductStoragePreference).where(
+        ProductStoragePreference.product_id.in_(product_ids)))}
+    primary_bindings = {binding.product_id: binding for binding in db.scalars(select(ShelfBinding).where(
+        ShelfBinding.product_id.in_(product_ids), ShelfBinding.priority == 0))}
+    needs_candidates = any(pref.area_id or pref.location_id for pref in preferences.values()) or bool(primary_bindings) or any(
+        row.get('preferred_finished_storage_area_ids') for row in rows)
+    candidates = list_temporary_locations(db) if needs_candidates else []
+    by_id = {candidate['id']: candidate for candidate in candidates}
+    bindings = {binding.location_id: binding for binding in db.scalars(select(ShelfBinding).where(
+        ShelfBinding.location_id.in_(by_id)))} if by_id else {}
+    by_area: dict[int, list[dict]] = {}
+    for candidate in candidates:
+        if candidate['area_id'] is not None:
+            by_area.setdefault(candidate['area_id'], []).append(candidate)
+    projected = {}
+    for row in rows:
+        product_id = row.get('product_id')
+        if not product_id:
+            continue
+        if product_id in projected:
+            row['production_default_storage'] = dict(projected[product_id])
+            continue
+        pref = preferences.get(product_id)
+        primary = primary_bindings.get(product_id) if pref is None else None
+        configured = pref is not None or primary is not None
+        data = dict(configured=configured, source=None, product_id=product_id,
+            preference_version=pref.version if pref else 0, area_id=pref.area_id if pref else None,
+            configured_location_id=pref.location_id if pref else None,
+            location_id=None, layout_version=None, location=None, issue=None)
+        chosen = None
+        def usable(candidate):
+            binding = bindings.get(candidate['id']) if candidate else None
+            return candidate is not None and (binding is None or binding.product_id == product_id)
+        if pref and (pref.area_id or pref.location_id):
+            data['source'] = 'product_location' if pref.location_id else 'product_area'
+            if pref.location_id:
+                candidate = by_id.get(pref.location_id)
+                if usable(candidate) and candidate['area_id'] == pref.area_id:
+                    chosen = candidate
+                else:
+                    data['issue'] = '产品默认货位已失效、不可存放或与保存区域不一致，请先到常用箱修改或取消默认位置'
+            else:
+                chosen = next((candidate for candidate in by_area.get(pref.area_id, []) if usable(candidate)), None)
+                if chosen is None:
+                    data['issue'] = '产品指定区域没有可用的已发布成品库位，请先到常用箱核对默认区域'
+        elif primary is not None:
+            data['source'] = 'fixed_shelf'
+            candidate = by_id.get(primary.location_id)
+            if usable(candidate):
+                from app.services.fixed_shelf import incoming_primary_location, ShelfError
+                try:
+                    configured = incoming_primary_location(db, product_id=product_id, customer_id=row['customer_id'])
+                    chosen = candidate if configured is not None else None
+                except ShelfError as error:
+                    data['issue'] = str(error)
+            else:
+                data['issue'] = '产品固定货位不可用，请先在常用箱核对'
+        else:
+            preferred = row.get('preferred_finished_storage_area_ids') or []
+            if preferred:
+                data.update(configured=True, source='customer_area', area_id=preferred[0])
+                chosen = next((candidate for area_id in preferred for candidate in by_area.get(area_id, [])
+                    if usable(candidate)), None)
+                if chosen is None:
+                    data['issue'] = '客户指定区域当前没有可用的已发布成品库位，请先核对存放区域'
+        if chosen is not None:
+            data.update(area_id=chosen['area_id'], location_id=chosen['id'], layout_version=chosen['layout_version'],
+                location=dict(location_id=chosen['id'], name=chosen['employee_location_name'],
+                    floor=chosen['warehouse_floor'], area=chosen['area_code'], rack=chosen['rack_code'],
+                    level=chosen['level_no'], slot=chosen['slot_no'], layout_version=chosen['layout_version'],
+                    address_version=chosen['address_version']))
+        projected[product_id] = data
+        row['production_default_storage'] = dict(data)
+
+
 def list_production_tasks(
     db: Session,
     *,
@@ -6650,6 +6840,7 @@ def list_production_tasks(
                 automatic_output=automatic_output,
             )
     _annotate_customer_finished_storage_preferences(db, result)
+    _annotate_product_production_storage(db, result)
     _annotate_printing_plate_current_locations(db, result)
     return result
 

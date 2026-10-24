@@ -21,3 +21,5 @@
 必要结构：fa1023oc→fb1024rs，新增stock_replenishment_production_jobs及废料任务可空stock_replenishment_item_id；无旧业务回填。签名读取能力replenishment_production_v1禁止旧程序忽略覆盖而重复报料，新事实存在禁止有损降级。根负责原Manager现有首启恢复协议的有限适配；原有记录、程序包和备份保留。
 
 整合候选：后端df7d489e、前端dcd88696、普通订单24e7ba44、财务6af9a995合并；两项读取能力共同保留。根定向执行40项普通片料/财务/reader通过，随后31项补库/普通片料/实际签名空迁移恢复通过（其中9项恢复）；前端30项通过，完整Vue模板编译通过。独立静态复核reader无阻断。首次合成恢复fixture缺两张最小ERP表已补齐，未放宽恢复门禁。未对正式页面自动操作。准备v0.22.719，仍未发布。
+
+2026-10-24 11:45技术发布已完成，正式v719/f2028a3d/包7baf2e9a7e16/headfb1024rs；健康及LAN资源摘要通过。正式未代操作80011641，管理员人工验收待反馈。新备份及14既有备份保留；原维护close-readback返回ValueError，临时副本保留。精确身份与未闭合收尾以ERP3_V719_RELEASE_20261024.md为准。

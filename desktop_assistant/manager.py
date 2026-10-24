@@ -124,6 +124,10 @@ class Manager:
                 replenishment_source_contract = has_replenishment_schema(db)
                 from desktop_assistant.supplier_sheet_reader import has_extra_input_facts
                 extra_sheet_input_contract = has_extra_input_facts(db)
+                from desktop_assistant.customer_price_label_reader import has_facts as has_price_media_facts
+                price_media_contract = has_price_media_facts(db)
+            if price_media_contract and not self._shared_finished_reader(release, 'customer_price_label_media_v1'):
+                return False
             if replenishment_source_contract and not self._shared_finished_reader(release, 'replenishment_production_v1'):
                 return False
             if extra_sheet_input_contract and not self._shared_finished_reader(release, 'sheet_extra_input_v1'):
@@ -249,6 +253,8 @@ class Manager:
         require_replenishment_reader(self.root/'shared/data/carton_erp.sqlite3', manifest)
         from desktop_assistant.supplier_sheet_reader import require_extra_input_reader
         require_extra_input_reader(self.root/'shared/data/carton_erp.sqlite3', manifest)
+        from desktop_assistant.customer_price_label_reader import require_reader as require_price_media_reader
+        require_price_media_reader(self.root/'shared/data/carton_erp.sqlite3', manifest)
 
     def _quotation_writer(self, release):
         package = self.root / 'packages' / (release + '.zip')
@@ -1481,6 +1487,8 @@ class Manager:
             require_replenishment_reader(database, release_manifest)
             from desktop_assistant.supplier_sheet_reader import require_extra_input_reader
             require_extra_input_reader(database, release_manifest)
+            from desktop_assistant.customer_price_label_reader import require_reader as require_price_media_reader
+            require_price_media_reader(database, release_manifest)
             # Promote program caches only after all payload checks pass.
             for original in originals.values():
                 self.stage_release(original, verify_existing=True)

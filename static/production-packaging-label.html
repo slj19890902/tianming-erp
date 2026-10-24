@@ -153,6 +153,19 @@
     }
   </style>
   <style id="legacyPageSize"></style>
+  <style>
+    .media-controls { margin:12px 16px; padding:12px 16px; border:1px solid #cbd5e1; border-radius:8px; background:white; font-size:14px; }
+    .media-line { display:flex; flex-wrap:wrap; align-items:center; gap:10px 18px; }
+    .media-controls label { display:inline-flex; align-items:center; gap:6px; }
+    .media-controls input { width:76px; }
+    .media-controls select,.media-controls input { padding:7px; border:1px solid #94a3b8; border-radius:5px; font:inherit; }
+    .media-controls button { padding:7px 12px; font:inherit; cursor:pointer; }
+    .media-controls summary { cursor:pointer; margin:10px 0; }
+    #mediaSummary { color:#475569; }
+    .media-controls [hidden] { display:none !important; }
+    .label-media-sheet { flex:none; }
+  </style>
+  <script src="/static/ui/product-label-media.js?v=20261024-1"></script>
 </head>
 <body>
   <nav class="toolbar">
@@ -167,6 +180,25 @@
   </nav>
   <div id="message" class="message">正在读取冻结的生产包装标签计划……</div>
   <div id="bomTailLinks" class="message" hidden></div>
+  <section id="mediaControls" class="media-controls" aria-label="产品标签纸张设置">
+    <div class="media-line">
+      <label>纸张规格<select id="mediaPreset" aria-label="纸张规格"></select></label>
+      <span id="mediaCustomDimensions" hidden><label>宽<input id="mediaWidth" type="number" min="20" max="300" step="0.1" value="40">mm</label> <label>高<input id="mediaHeight" type="number" min="20" max="420" step="0.1" value="30">mm</label></span>
+      <label id="mediaStartField" hidden>从空白格开始<select id="mediaStart"><option value="1">左上（第1格）</option><option value="2">右上（第2格）</option><option value="3">左下（第3格）</option><option value="4">右下（第4格）</option></select></label>
+      <button id="mediaReprintButton" type="button" hidden>换纸补打</button>
+      <span id="mediaSummary" role="status"></span>
+    </div>
+    <details><summary>高级设置 · 纸张边距与格间距</summary><div class="media-line">
+      <label>上边距<input data-media-field="margin_top_mm" type="number" min="0" max="50" step="0.1" value="0">mm</label>
+      <label>右边距<input data-media-field="margin_right_mm" type="number" min="0" max="50" step="0.1" value="0">mm</label>
+      <label>下边距<input data-media-field="margin_bottom_mm" type="number" min="0" max="50" step="0.1" value="0">mm</label>
+      <label>左边距<input data-media-field="margin_left_mm" type="number" min="0" max="50" step="0.1" value="0">mm</label>
+      <label data-media-gap>横向格间距<input data-media-field="gap_x_mm" type="number" min="0" max="50" step="0.1" value="0">mm</label>
+      <label data-media-gap>纵向格间距<input data-media-field="gap_y_mm" type="number" min="0" max="50" step="0.1" value="0">mm</label>
+      <button id="mediaSavePreset" type="button">保存为我的常用纸张</button>
+      <button id="mediaCalibration" type="button">打印一张校准纸</button>
+    </div></details>
+  </section>
   <section id="printPlanPanel" class="print-plan-panel" hidden aria-label="本次打印标签张数">
     <div class="print-plan-actions">
       <button id="allPlannedButton" type="button">全部按计划</button>
@@ -331,6 +363,150 @@
       let layoutMutationAttempt = null;
       let layoutOperationBusy = false;
       let layoutDrag = null;
+      const mediaApi = window.ERPProductLabelMedia;
+      const mediaControls = document.getElementById("mediaControls");
+      const mediaPreset = document.getElementById("mediaPreset");
+      const mediaSummary = document.getElementById("mediaSummary");
+      const mediaReprintButton = document.getElementById("mediaReprintButton");
+      let activeMedia = mediaApi ? mediaApi.normalize() : null;
+      let mediaReprintMode = false;
+      let mediaStorageKey = null;
+      let personalMediaPresets = {};
+      let mediaEdited = false;
+
+      function mediaInput() {
+        if (!mediaApi) return null;
+        const saved = personalMediaPresets[mediaPreset.value];
+        const value = {preset:saved?.preset || mediaPreset.value || "roll_40x30",
+          width_mm:Number(document.getElementById("mediaWidth").value),
+          height_mm:Number(document.getElementById("mediaHeight").value),
+          start_position:Number(document.getElementById("mediaStart").value)};
+        mediaControls.querySelectorAll("[data-media-field]").forEach(input=>{value[input.dataset.mediaField]=Number(input.value);});
+        return mediaApi.normalize(value);
+      }
+
+      function fillMediaInputs(media, selection = null) {
+        if (!mediaApi) return;
+        activeMedia = mediaApi.normalize(media);
+        mediaPreset.value = selection || activeMedia.preset;
+        document.getElementById("mediaWidth").value = activeMedia.width_mm;
+        document.getElementById("mediaHeight").value = activeMedia.height_mm;
+        document.getElementById("mediaStart").value = activeMedia.start_position;
+        mediaControls.querySelectorAll("[data-media-field]").forEach(input=>{input.value=activeMedia[input.dataset.mediaField];});
+        document.getElementById("mediaCustomDimensions").hidden = activeMedia.preset !== "custom";
+        document.getElementById("mediaStartField").hidden = activeMedia.preset !== "a4_4up";
+        mediaControls.querySelectorAll("[data-media-gap]").forEach(label=>{label.hidden=activeMedia.preset !== "a4_4up";});
+      }
+
+      function mediaOptions() {
+        if (!mediaApi) return;
+        const selected=mediaPreset.value;
+        mediaPreset.innerHTML = Object.entries(mediaApi.PRESETS).map(([key,value])=>`<option value="${key}">${escapeHtml(value.name)}</option>`).join("")
+          + Object.keys(personalMediaPresets).map(key=>`<option value="${escapeHtml(key)}">${escapeHtml(key.slice(6))}（我的纸张）</option>`).join("");
+        if ([...mediaPreset.options].some(option=>option.value===selected)) mediaPreset.value=selected;
+      }
+
+      async function loadPersonalMedia() {
+        if (!mediaApi) return;
+        try {
+          const auth = await requestJson("/api/auth/me", {method:"GET"});
+          const user = auth?.user;
+          if (!positiveInteger(user?.id)) return;
+          mediaStorageKey = `erp.productLabelMedia.v1.user.${user.id}`;
+          const saved = JSON.parse(window.localStorage.getItem(mediaStorageKey) || "null");
+          if (saved?.presets && typeof saved.presets === "object") {
+            for (const [name,value] of Object.entries(saved.presets).slice(0,20)) {
+              if (name.startsWith("saved:") && name.length<=46) { try { personalMediaPresets[name]=mediaApi.normalize(value); } catch (_) { /* ignore invalid device preference */ } }
+            }
+          }
+          mediaOptions();
+          if (!loadedJobs.length && !prepareAttempt && !mediaEdited && saved?.last) {
+            fillMediaInputs(saved.last);
+            if (plannedPackage) renderSelectedLabels();
+          }
+        } catch (_) { /* A device preference must never block the label task. */ }
+      }
+
+      function savePersonalMedia() {
+        if (!mediaStorageKey || !activeMedia) return;
+        try { window.localStorage.setItem(mediaStorageKey,JSON.stringify({last:activeMedia,presets:personalMediaPresets})); } catch (_) { /* printing works without local storage */ }
+      }
+
+      function updateMediaLock(locked = false) {
+        if (!mediaApi) return;
+        const frozen = loadedJobs.length > 0 && !mediaReprintMode;
+        mediaControls.querySelectorAll("input,select,button").forEach(el=>{el.disabled=locked || frozen;});
+        mediaReprintButton.disabled = locked;
+        document.getElementById("mediaCalibration").disabled = locked;
+        mediaReprintButton.hidden = !loadedJobs.length || mediaReprintMode || loadedJobs.some(job=>job.status!=="printed" && !job.printed_at);
+      }
+
+      function paintMediaLabels(packageData, frozen = false) {
+        if (!mediaApi || (!packageData.print_media && frozen && !mediaReprintMode)) {
+          labelList.innerHTML = (packageData.labels || []).map(label=>labelHtml(label,packageData)).join("");
+          return;
+        }
+        const media = frozen && !mediaReprintMode ? mediaApi.normalize(packageData.print_media) : activeMedia;
+        if (!media) throw new Error("请选择有效的标签纸张");
+        document.documentElement.style.setProperty("--label-width",`${media.label_width_mm}mm`);
+        document.documentElement.style.setProperty("--label-height",`${media.label_height_mm}mm`);
+        legacyPageSize.textContent=mediaApi.css(media);
+        labelList.innerHTML=mediaApi.pages(packageData.labels || [],media,label=>mediaApi.labelHtml(label,packageData,media));
+        const sheets=mediaApi.pageCount(packageData.labels?.length || 0,media);
+        mediaSummary.textContent=`单格 ${media.label_width_mm} × ${media.label_height_mm} mm｜${packageData.labels?.length || 0} 张标签／${sheets} 张纸`;
+        toolbarNote.textContent=`${media.width_mm} × ${media.height_mm} mm 纸张｜打印请选择100%实际大小，关闭适合页面与页眉页脚`;
+      }
+
+      function changeMedia() {
+        if (prepareAttempt?.uncertain || printing || loadedJobs.length && !mediaReprintMode) return;
+        try {
+          activeMedia=mediaInput();
+          mediaEdited=true;
+          fillMediaInputs(activeMedia,mediaPreset.value);
+          prepareAttempt=null;
+          savePersonalMedia();
+          if (plannedPackage) renderSelectedLabels();
+          else if (loadedPackage) paintMediaLabels(loadedPackage,true);
+          requestAnimationFrame(()=>{try {validateRenderedLabels();printButton.disabled=!labelList.querySelector(".label-card");message.hidden=true;} catch(error){printButton.disabled=true;showMessage(error.message,"message error");}});
+        } catch(error) { printButton.disabled=true;showMessage(error.message,"message error"); }
+      }
+
+      function initializeMediaControls() {
+        if (!mediaApi) { mediaControls.hidden=true; return; }
+        mediaOptions();fillMediaInputs(activeMedia);
+        mediaPreset.addEventListener("change",()=>{
+          const selected=mediaPreset.value;
+          fillMediaInputs(personalMediaPresets[selected] || {preset:selected},selected);
+          changeMedia();
+        });
+        mediaControls.querySelectorAll("input,select:not(#mediaPreset)").forEach(el=>el.addEventListener("change",changeMedia));
+        document.getElementById("mediaSavePreset").addEventListener("click",()=>{
+          try {
+            activeMedia=mediaInput();
+            const name=window.prompt("给这套纸张设置一个名称，例如：仓库A4四格");
+            if (!name?.trim()) return;
+            if (!mediaStorageKey) throw new Error("当前账号尚未确认，请重新加载后再保存常用纸张");
+            const key=`saved:${name.trim().slice(0,40)}`;
+            personalMediaPresets[key]=activeMedia;mediaOptions();mediaPreset.value=key;savePersonalMedia();
+            mediaSummary.textContent="已保存到当前账号在本设备的常用纸张";
+          } catch(error){showMessage(error.message,"message error");}
+        });
+        mediaReprintButton.addEventListener("click",()=>{
+          if (prepareAttempt?.uncertain || printing) return;
+          mediaReprintMode=true;
+          fillMediaInputs(loadedPackage.print_media || {preset:loadedPackage.template_version===LEGACY_TEMPLATE_VERSION ? "roll_65x45" : "roll_40x30"});
+          updateMediaLock();
+          printButton.textContent="按所选纸张补打";
+          showMessage("选择本次纸张后打印，将保留原标签内容并新增补打记录。");
+          paintMediaLabels(loadedPackage,true);
+        });
+        document.getElementById("mediaCalibration").addEventListener("click",()=>{
+          try {
+            const media=mediaInput();
+            window.open(`/static/product-label-calibration.html?media=${encodeURIComponent(JSON.stringify(media))}`,"_blank","noopener");
+          } catch(error){showMessage(error.message,"message error");}
+        });
+      }
 
       const LAYOUT_CATALOG_VERSION = "p1-66b-v1";
       const DEFAULT_QUANTITY_FIXED_SUFFIX = "只/捆";
@@ -497,10 +673,11 @@
         } : null;
         const normalizedJobs = Array.isArray(root.jobs) ? root.jobs.map((item) => ({
           ...item,
-          id:Number(item?.id || item?.job_id || 0),
-          status:String(item?.status || "").trim(),
-          printed_at:item?.printed_at || null,
-          template_version:String(item?.template_version || packageData.template_version || "").trim(),
+          ...(item?.job || {}),
+          id:Number(item?.id || item?.job_id || item?.job?.id || 0),
+          status:String(item?.status || item?.job?.status || "").trim(),
+          printed_at:item?.printed_at || item?.job?.printed_at || null,
+          template_version:String(item?.template_version || item?.job?.template_version || packageData.template_version || "").trim(),
         })).filter((item) => positiveInteger(item.id)) : [];
         return {
           packageData:{...packageData, template_version:templateVersion},
@@ -577,6 +754,7 @@
       }
 
       function setPrepareAttemptLocked(locked) {
+        updateMediaLock(locked);
         printPlanBody.querySelectorAll(".print-count-input").forEach((input) => { input.disabled = locked; });
         allPlannedButton.disabled = locked;
         allZeroButton.disabled = locked;
@@ -587,7 +765,8 @@
 
       function renderSelectedLabels() {
         const selected = selectedPrintPackage();
-        labelList.innerHTML = selected?.labels?.map((label) => labelHtml(label, selected)).join("") || "";
+        if (selected) paintMediaLabels(selected);
+        else labelList.innerHTML="";
         const total = selected?.labels?.length || 0;
         const products = selected?.plans?.length || 0;
         printPlanSummary.textContent = `本次 ${products} 款，共 ${total} 张标签`;
@@ -767,6 +946,25 @@
       }
 
       function validateRenderedLabels() {
+        const mediaValues = [...labelList.querySelectorAll(".media-value")];
+        const mediaFits = mediaValues.every(element=>{
+          const cell=element.parentElement, style=getComputedStyle(cell);
+          const width=cell.clientWidth-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight);
+          const height=cell.clientHeight-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom);
+          const minimum=1.8*96/25.4;
+          const initial=parseFloat(style.fontSize);
+          if (width<=0 || height<=0) return false;
+          element.style.maxWidth=`${width}px`;
+          element.style.fontSize=`${initial}px`;
+          const fits=()=>element.scrollWidth<=width+.5 && element.getBoundingClientRect().height<=height+.5;
+          if (fits()) return true;
+          let low=minimum,high=Math.max(minimum,initial);
+          element.style.fontSize=`${minimum}px`;
+          if (!fits()) return false;
+          for(let n=0;n<14;n++){const mid=(low+high)/2;element.style.fontSize=`${mid}px`;if(fits())low=mid;else high=mid;}
+          element.style.fontSize=`${low}px`;return fits();
+        });
+        if (!mediaFits) throw new Error("标签文字在最小可读字号下仍放不下，请选择更大的纸张或调整布局；本次尚未打印");
         fitLayoutText(labelList);
         const textFits = [...labelList.querySelectorAll(".fit-value")].every(fitElement);
         const layoutTextFits = [...labelList.querySelectorAll(".layout-print-element")].every((element) =>
@@ -1109,7 +1307,12 @@
       async function render(normalized, {isPrepared=false, showPrintConfirmation=false} = {}) {
         const packageData = normalized.packageData;
         validatePackage(packageData);
+        loadedPackage = packageData;
+        loadedJob = normalized.job || null;
+        loadedJobs = normalized.jobs?.length ? normalized.jobs : (loadedJob ? [loadedJob] : []);
+        updateMediaLock(!!prepareAttempt?.uncertain);
         applyTemplate(packageData.template_version);
+        if (packageData.print_media) fillMediaInputs(packageData.print_media);
         if (packageData.source_type === "stock_bom_parent") {
           toolbarNote.textContent += packageData.assembly_lot_id
             ? `｜实际成套批次 ${packageData.assembly_lot_id} 的尾捆标签`
@@ -1119,7 +1322,7 @@
           printPlanPanel.hidden = true;
           plannedPackage = null;
           printCounts = new Map();
-          labelList.innerHTML = packageData.labels.map((label) => labelHtml(label, packageData)).join("");
+          paintMediaLabels(packageData,true);
         } else {
           renderPrintPlanEditor(packageData);
         }
@@ -1139,6 +1342,7 @@
         if (!bomParentLink.hidden) bomParentLink.href = `${window.location.pathname}?bom_stock_order_id=${relatedStockOrders[0]}`;
         loadedJob = normalized.job || null;
         loadedJobs = normalized.jobs?.length ? normalized.jobs : (loadedJob ? [loadedJob] : []);
+        updateMediaLock(!!prepareAttempt?.uncertain);
         updateLatestJobLink(normalized);
         printButton.textContent = Number.isInteger(requestedJobId) && requestedJobId > 0 ? "补打冻结作业" : "打印包装标签";
         printButton.disabled = false;
@@ -1155,6 +1359,7 @@
       }
 
       function resetView() {
+        mediaReprintMode = false;
         loadedPackage = null;
         bomTailLinks.hidden = true;
         bomTailLinks.innerHTML = "";
@@ -1242,6 +1447,7 @@
             const normalized = normalizeResponse(payload);
             if ((!normalized.job || !positiveInteger(normalized.job.id)) && !normalized.jobs?.length) throw new Error("服务器未返回冻结打印作业编号，已停止打印");
             prepareAttempt = null;
+            mediaReprintMode = false;
             setPrepareAttemptLocked(false);
             return normalized;
           } catch (error) {
@@ -1252,6 +1458,7 @@
             throw error;
           }
         }
+        if (mediaReprintMode) return prepareMediaReprint();
         const fingerprint = planFingerprint(loadedPackage);
         if (!fingerprint) throw new Error("标签计划缺少校验指纹，已停止创建打印作业；请重新加载");
         if (finishedStockSource && finishedLatestPrinted && !finishedReprintConfirmed) {
@@ -1282,7 +1489,8 @@
           : Number.isInteger(compositeBatchId) && compositeBatchId > 0
             ? `composite:${compositeBatchId}:${compositeItemIds.join(",")}`
             : `supplier:${supplierOrderId}:${compositeItemIds.join(",")}`;
-        const signature = `${sourceSignature}|${loadedPackage.template_version}|${fingerprint}|${JSON.stringify(items)}`;
+        const printMedia = mediaApi ? mediaInput() : null;
+        const signature = `${sourceSignature}|${loadedPackage.template_version}|${fingerprint}|${JSON.stringify(items)}|${JSON.stringify(printMedia)}`;
         if (!prepareAttempt || prepareAttempt.signature !== signature) {
           prepareAttempt = {signature, idempotencyKey:newIdempotencyKey("p1106-label-job"), uncertain:false};
         }
@@ -1303,6 +1511,7 @@
           confirmed:true,
           plan_fingerprint:fingerprint,
           items,
+          ...(printMedia ? {print_media:printMedia} : {}),
           ...(finishedStockSource ? {selections:plannedPackage.lot_versions.map(row=>({lot_id:row.lot_id,expected_version:row.expected_version})),reprint_confirmed:finishedReprintConfirmed} : {}),
           ...(isSupplierBatch ? {order_ids:supplierOrderIds} : {}),
           ...(isComposite ? {selected_item_ids:compositeItemIds} : {}),
@@ -1329,6 +1538,27 @@
         }
       }
 
+      async function prepareMediaReprint() {
+        if (!mediaApi || !loadedJobs.length) throw new Error("未找到可换纸的冻结作业");
+        if (!window.confirm("确认按所选纸张补打这些已实际打印的标签？将保留原内容并新增补打记录。")) throw new Error("已取消补打");
+        const media=mediaInput(), jobs=loadedJobs.map(job=>({kind:finishedStockSource ? "finished" : "packaging",id:Number(job.id)}));
+        const body={jobs,print_media:media,idempotency_key:newIdempotencyKey("label-media-reprint"),reprint_confirmed:true};
+        const url="/api/requisition/product-label-media/reprints";
+        prepareAttempt={signature:JSON.stringify(body),idempotencyKey:body.idempotency_key,url,body:deepClone(body),uncertain:false};
+        setPrepareAttemptLocked(true);
+        try {
+          const response=await requestJson(url,{method:"POST",body:JSON.stringify(body)});
+          const normalized=normalizeResponse(response);
+          if (!normalized.jobs?.length) throw new Error("服务器未返回换纸补打记录");
+          prepareAttempt=null;mediaReprintMode=false;setPrepareAttemptLocked(false);
+          return normalized;
+        } catch(error) {
+          if (error instanceof TypeError || !Number.isFinite(Number(error?.status)) || Number(error?.status)>=500) prepareAttempt.uncertain=true;
+          else prepareAttempt=null;
+          setPrepareAttemptLocked(!!prepareAttempt?.uncertain);throw error;
+        }
+      }
+
       async function startPrint() {
         if (printing || !loadedPackage) return;
         printing = true;
@@ -1337,7 +1567,7 @@
         try {
           if (!loadedJobs.length && !(selectedPrintPackage()?.labels?.length)) throw new Error("本次未选择需要打印的标签");
           validateRenderedLabels();
-          const hasFrozenJob = loadedJobs.length > 0;
+          const hasFrozenJob = loadedJobs.length > 0 && !mediaReprintMode;
           if (!hasFrozenJob) {
             showMessage("正在冻结本次打印作业……");
             const normalized = await preparePrintJob();
@@ -1400,6 +1630,7 @@
             job.status = "printed";
             job.printed_at = new Date().toISOString();
           });
+          updateMediaLock();
           if (loadedJob) {
             loadedJob.status = "printed";
             loadedJob.printed_at = loadedJobs[0]?.printed_at || new Date().toISOString();
@@ -1485,7 +1716,9 @@
       ));
       confirmPrintedButton.addEventListener("click", confirmPrinted);
       closeButton.addEventListener("click", () => window.close());
+      initializeMediaControls();
       loadPackage();
+      if (mediaApi) void loadPersonalMedia();
     })();
   </script>
 </body>

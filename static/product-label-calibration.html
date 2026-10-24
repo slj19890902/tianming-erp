@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>产品标签纸张校准</title>
+<script src="/static/ui/product-label-media.js?v=20261024-1"></script>
+<style>body{margin:0;background:#e5e7eb;font-family:Arial,"Microsoft YaHei",sans-serif}nav{padding:16px;background:white}button{padding:8px 18px;font:inherit}main{display:grid;gap:16px;justify-content:center;padding:20px}.calibration-cell{box-sizing:border-box;border:.2mm dashed #333;padding:3mm;font-size:3mm;overflow:hidden}.measure-line{height:2mm;border:solid #111;border-width:0 .2mm .2mm;margin-top:4mm}@media print{nav{display:none}main{padding:0;display:block}.calibration-cell{print-color-adjust:exact}}</style>
+<style id="paperStyle"></style></head><body><nav><button id="printButton" disabled>打印一张校准纸</button> <span id="status">读取纸张设置……</span></nav><main id="labelList"></main>
+<script>
+(()=>{"use strict";try{
+  const api=window.ERPProductLabelMedia,media=api.normalize(JSON.parse(new URLSearchParams(location.search).get("media")||"{}"));
+  document.getElementById("paperStyle").textContent=api.css(media);
+  const capacity=media.rows*media.columns;
+  document.getElementById("labelList").innerHTML=api.pages(Array.from({length:capacity-media.start_position+1},(_,index)=>index+media.start_position),media,index=>`<div class="calibration-cell">第 ${index} 格<br>单格 ${media.label_width_mm} × ${media.label_height_mm} mm<div class="measure-line" style="width:10mm"></div>此线应为 10 mm</div>`);
+  document.getElementById("status").textContent=`纸张 ${media.width_mm} × ${media.height_mm} mm；请选择100%实际大小，关闭适合页面及页眉页脚。虚线应落在每格标签内部。`;
+  document.getElementById("printButton").disabled=false;
+  document.getElementById("printButton").addEventListener("click",()=>window.print());
+}catch(error){document.getElementById("status").textContent=error.message;}})();
+</script></body></html>

@@ -6732,7 +6732,7 @@
                   <div class="field"><label>送货地址／联系人</label><select class="select" v-model="customerSharing.delivery_address_customer_id"><option :value="null">本客户资料</option><option v-for="c in sharingDocumentCustomers()" :key="c.id" :value="c.id">{{c.name}}</option></select></div>
                   <div class="field wide" v-if="customerSharing.scope==='selected'" style="max-height:160px;overflow:auto"><label v-for="p in customerSharing.products" :key="p.id" style="display:block"><input type="checkbox" :value="p.id" v-model="customerSharing.selected" /> {{p.code}} · {{p.name}}</label></div>
                 </fieldset>
-                <div class="muted">整套共用：库存、模具、常用箱生产报料资料、印刷图纸、当前报价和成本参数。开票资料沿用下面“开票／税务资料 → 合作模式”。</div>
+                <div class="muted">整套共用：库存、模具、常用箱生产报料资料、印刷图纸和成本参数。销售单价按客户独立维护，新客户首次共用时可带入初始价。开票资料沿用下面“开票／税务资料 → 合作模式”。</div>
                 <div class="toolbar-group" style="margin-top:8px"><button class="btn" type="button" :disabled="customerSharing.busy || !customerSharing.source_customer_id" @click="previewCustomerSharing">核对共用范围</button><button class="btn primary" type="button" :disabled="customerSharing.busy || customerSharing.loadedId!==Number(customerForm.id) || !customerSharing.source_customer_id" @click="saveCustomerSharing">{{customerSharing.busy?'处理中…':'保存共用设置'}}</button></div>
                 <div v-if="customerSharing.preview" class="notice" style="margin-top:8px">可共用 {{customerSharing.preview.actions.length}} 款；需核对 {{customerSharing.preview.blocked.length}} 款。保存只处理可共用项目。<div v-for="p in customerSharing.preview.blocked" :key="p.product_id">{{p.code}}：{{p.reason}}</div><template v-for="a in customerSharing.preview.actions" :key="a.source_id"><div v-for="lot in (a.stock_pending||[])" :key="lot.lot_id">{{a.code}} · 批次{{lot.lot_id}}暂不共用：{{lot.reason}}</div></template></div>
                 <div v-if="customerSharing.saved" class="status green">{{customerSharing.saved}}</div>
@@ -13580,7 +13580,23 @@
               this.loading = false;
             }
           },
+          productOnlySalePriceChange() {
+            if (!this.productForm?.id || !this.productFormSnapshot || this.drawingFile || this._productBomDirty() || this.receiptStorageDirty?.()) return false;
+            try {
+              const before=JSON.parse(this.productFormSnapshot),after=this._productFormSaveFields();
+              const priceChanged=JSON.stringify(before.sale_unit_price)!==JSON.stringify(after.sale_unit_price);
+              delete before.sale_unit_price;delete after.sale_unit_price;
+              return priceChanged && JSON.stringify(before)===JSON.stringify(after);
+            } catch (_) { return false; }
+          },
           buildProductWritePayload(options = null) {
+            if (this.productOnlySalePriceChange()) {
+              const form=this.productForm;
+              return this.attachMasterUpdateMetadata("product",{
+                customer_id:form.customer_id,product_code:form.product_code,product_name:form.product_name,
+                box_category:form.box_category,sale_unit_price:form.sale_unit_price === "" ? null : form.sale_unit_price,structure_edit_fields:[]
+              },options);
+            }
             const isExternal = this.productForm.supply_mode === "external_purchase";
             const productCreaseError = isExternal || this.productForm.box_style === "BOM组合" ? null : this.validateProductCreaseAndReport(this.productForm);
             if (productCreaseError) throw new Error(productCreaseError);
@@ -41243,7 +41259,7 @@
               return false;
             }
             const masterSaveEntity = ["customer","product","material","supplier"].includes(this.modal?.type) ? this.modal.type : null;
-            if (masterSaveEntity === "product" && (this.bomEditor.loading || this.bomEditor.error || this.productForm.box_style === "BOM组合" || this._productBomDirty())) {
+            if (masterSaveEntity === "product" && !this.productOnlySalePriceChange() && (this.bomEditor.loading || this.bomEditor.error || this.productForm.box_style === "BOM组合" || this._productBomDirty())) {
               const bomError = this.validateProductBom();
               if (bomError) {
                 this.focusProductBomEditor();

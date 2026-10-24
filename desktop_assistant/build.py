@@ -181,6 +181,9 @@ def main():
                       'app/services/entry_source_valuation.py',
                       'app/core/inventory_entry_guard.py',
                       'desktop_assistant/reader_contract.py'}
+    from desktop_assistant.customer_price_label_reader import SOURCES as price_label_sources, require_sources as require_price_label_sources
+    reader_sources |= price_label_sources
+    require_price_label_sources(sources)
     if not reader_sources <= sources.keys():
         raise ValueError('库存业务读取契约的实现不完整，禁止签名发布')
     if args.runtime_platform == 'macos-arm64':
@@ -340,6 +343,7 @@ def main():
                                                     'exact_sales_decimal_v1': 1,
                                                     'home_collaboration_v1': 1,
                                                     'replenishment_production_v1': 1,
+                                                    'customer_price_label_media_v1': 1,
                                                     'shared_finished_v1': 1,
                                                     'shared_finished_management_v1': 1,
                                                     'shared_customer_members_v1': 1,

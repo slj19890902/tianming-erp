@@ -104,6 +104,8 @@ def target_readers(database, source, target, inventory_record, dispatch_record, 
         if has_shared_product_master_facts(db): required.add(SHARED_PRODUCT_MASTER_READER)
         from desktop_assistant.replenishment_source_reader import has_schema as has_replenishment_schema, CAPABILITY as replenishment_reader
         if has_replenishment_schema(db): required.add(replenishment_reader)
+        from desktop_assistant.customer_price_label_reader import has_facts as has_price_media_facts, CAPABILITY as price_media_reader
+        if has_price_media_facts(db): required.add(price_media_reader)
         if has_mold_label_text_facts(db):
             required.add(MOLD_LABEL_TEXT_READER)
         else:

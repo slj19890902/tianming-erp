@@ -1,6 +1,6 @@
 # ERP3 v0.22.720 客户售价、标签和产出库位
 
-状态：2026-10-24 14:37:54技术发布完成，待管理员人工验收；维护验证副本清理仍被原工具保留。
+状态：2026-10-24 14:37:54技术发布完成，待管理员人工验收；本轮验证副本随后已由原生维护安全清理。
 
 客户共用库存时销售价格独立。新客户无价时按明确来源初始化一次，常用箱后续改价仅影响本客户；历史订单、送货和财务价格不追改。独立售价保留追加证据，旧程序不能重新广播客户价格。
 
@@ -39,3 +39,9 @@
 健康、主界面及手机入口200，LAN独立读取index、production-desk和三项标签资源，与冻结manifest相同。候选源码已推GitHub分支codex/customer-price-labels-20261024且远端回读同SHA；Git bundle/patch和NAS资料保留本地原件。源码和发布回执在evidence/customer-price-labels-20261024/integrated。
 
 技术完成后原生close-readback返回ValueError，coordinator准确记录technical_release_complete_cleanup_retained及backup_work_retained=true；没有重发、回退或重启。本轮成功pytest副本已按fixture生命周期回收；本次发布验证副本及历史51个链接副本继续保留，未绕过拒绝条件清理。新的固定只读条件核对准备中，不能把清理记为完成。正式备份、业务服务和新代码均正常。
+
+## 后续清理闭环
+
+2026-10-24 14:43:18，已安装原生维护按现有锁及恢复证明关闭本轮独立验证副本，删除4604419455字节（约4.60GB），正式备份6e3ba158保持，服务健康。权威记录`/Library/TianmingERP-LocalMaintenance/cleanup-status.json`已复制至本任务integrated/native-cleanup-status.json，SHA9d043f75cbae7a0591ec8885a0300d2af4ff73a31ca5bbaba0487c54864560ae。最初final-result保留其真实当时状态，不覆盖历史。
+
+只读诊断认证随后在“必须仍有一个保留副本”前置条件处停止，没有创建报告、删除文件或重启；原生清理已经先完成，未重试诊断。成功pytest副本已按测试生命周期回收，历史51项链接副本及失败/受保护来源保持。发布续办自动化已停用，本轮空间例外不扩展到后续发布，全局200GB规则保持。

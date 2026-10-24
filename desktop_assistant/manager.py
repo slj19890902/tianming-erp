@@ -120,6 +120,10 @@ class Manager:
                 supplier_trim_contract = _has_supplier_trim_facts(db)
                 from desktop_assistant.reader_contract import has_shared_product_master_facts
                 shared_product_master_contract = has_shared_product_master_facts(db)
+                from desktop_assistant.replenishment_source_reader import has_schema as has_replenishment_schema
+                replenishment_source_contract = has_replenishment_schema(db)
+            if replenishment_source_contract and not self._shared_finished_reader(release, 'replenishment_production_v1'):
+                return False
             if shared_product_master_contract and not self._shared_finished_reader(release, "shared_product_master_v1"):
                 return False
             if actual_receipt_facts and not self._shared_finished_reader(release,"actual_receipt_specs_v1"):
@@ -237,6 +241,8 @@ class Manager:
         if manifest!=self.manifest(release):
             raise ValueError('实物组套读取清单与签名原包不一致')
         require_reader(self.root/'shared/data/carton_erp.sqlite3',manifest)
+        from desktop_assistant.replenishment_source_reader import require_reader as require_replenishment_reader
+        require_replenishment_reader(self.root/'shared/data/carton_erp.sqlite3', manifest)
 
     def _quotation_writer(self, release):
         package = self.root / 'packages' / (release + '.zip')
@@ -1154,9 +1160,9 @@ class Manager:
                 activated_package=candidate['id'], pre_activation_package=old['current'],
                 pre_activation_backup=str(backup), activated_at=datetime.now(CN).isoformat())
             new.update(previous=None, schema_authority=None)
-        if migrate and candidate['revision'] == 'fa1023oc':
-            # The old writer requires a customer code and must not receive
-            # future blank-code identities through the generic schema exception.
+        if migrate and candidate['revision'] in ('fa1023oc', 'fb1024rs'):
+            # Older writers cannot understand blank-code identities or the
+            # independent replenishment coverage; close the schema exception.
             new.update(previous=None, schema_authority=None)
         # Commit the reader gate and removal of unsafe one-click rollback before
         # starting the new process; failure here never opens new write requests.
@@ -1228,6 +1234,17 @@ class Manager:
                         new['operation'] = 'update_failed_reader_contract'
                     write_json(self.root / 'state.json', new)
                     raise ValueError('客户料号首次启动恢复校验未通过，保留现库与现场；未覆盖旧数据') from None
+            if migrate and candidate['revision'] == 'fb1024rs':
+                from desktop_assistant.exact_sales_reader import recover_empty_migration
+                try:
+                    recover_empty_migration(self, candidate['id'], old['current'],
+                        migration_manifest, new, environment=migration_environment,
+                        _replenishment_source=True)
+                except BaseException:
+                    if new.get('operation') != 'migration_failed':
+                        new['operation'] = 'update_failed_reader_contract'
+                    write_json(self.root / 'state.json', new)
+                    raise ValueError('补库生产首次启动恢复校验未通过，保留现库与现场；未覆盖旧数据') from None
             if not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']):
                 new.update(operation='update_failed_reader_contract', previous=None)
                 write_json(self.root / 'state.json', new)
@@ -1321,7 +1338,7 @@ class Manager:
             old_state = dict(state)
             state.update(current=target, previous=previous, schema_authority=target,
                          operation='migration_recovered', updated_at=datetime.now(CN).isoformat())
-            if manifest['revision'] == 'fa1023oc':
+            if manifest['revision'] in ('fa1023oc', 'fb1024rs'):
                 state.update(previous=None, schema_authority=None)
             self._activate_dispatch_reader(target, old_state, state, backup)
             write_json(self.root / 'state.json', state)
@@ -1454,6 +1471,8 @@ class Manager:
                 validate_database_schema(database, contract)
             from desktop_assistant.physical_kit_reader_contract import require_reader
             require_reader(database,release_manifest)
+            from desktop_assistant.replenishment_source_reader import require_reader as require_replenishment_reader
+            require_replenishment_reader(database, release_manifest)
             # Promote program caches only after all payload checks pass.
             for original in originals.values():
                 self.stage_release(original, verify_existing=True)

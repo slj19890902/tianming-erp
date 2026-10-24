@@ -102,6 +102,8 @@ def target_readers(database, source, target, inventory_record, dispatch_record, 
                 "SELECT 1 FROM shared_finished_mutations WHERE json_valid(result_json) AND json_type(result_json, '$.member_states') = 'object' LIMIT 1").fetchone():
             required.add('shared_customer_members_v1')
         if has_shared_product_master_facts(db): required.add(SHARED_PRODUCT_MASTER_READER)
+        from desktop_assistant.replenishment_source_reader import has_schema as has_replenishment_schema, CAPABILITY as replenishment_reader
+        if has_replenishment_schema(db): required.add(replenishment_reader)
         if has_mold_label_text_facts(db):
             required.add(MOLD_LABEL_TEXT_READER)
         else:

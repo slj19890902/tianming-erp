@@ -30,7 +30,7 @@ def has_home_tool_facts(db):
         for table in ('home_memos','shared_files','shared_file_versions','home_collaboration_mutations'))
 
 
-def recover_empty_migration(manager, candidate, previous, manifest, state, environment=None, *, _shared_catalog=False, _supplier_edges=False, _home_tools=False, _optional_customer_code=False):
+def recover_empty_migration(manager, candidate, previous, manifest, state, environment=None, *, _shared_catalog=False, _supplier_edges=False, _home_tools=False, _optional_customer_code=False, _replenishment_source=False):
     """Undo only a fixed empty additive migration after failed first startup.
 
     The installed previous supervisor cannot recognize a future revision. Return
@@ -48,7 +48,7 @@ def recover_empty_migration(manager, candidate, previous, manifest, state, envir
     from desktop_assistant import migration
     from desktop_assistant.runtime_platform import process_options
 
-    if sum(bool(v) for v in (_shared_catalog, _supplier_edges, _home_tools, _optional_customer_code)) > 1:
+    if sum(bool(v) for v in (_shared_catalog, _supplier_edges, _home_tools, _optional_customer_code, _replenishment_source)) > 1:
         raise ValueError('恢复类型不唯一')
     source_revision, target_revision = ('ew1020em','ex1021cp') if _shared_catalog else ('ev1020hr','ew1020em')
     capability = 'shared_product_master_v1' if _shared_catalog else CAPABILITY
@@ -65,6 +65,10 @@ def recover_empty_migration(manager, candidate, previous, manifest, state, envir
         capability = 'shared_product_master_v1'
         source_revision, target_revision = 'ez1022hc', 'fa1023oc'
         label, audit_key, prefix = '客户料号约束', 'unchanged_customer_code_recovery', 'unchanged-customer-code-recovery-'
+    if _replenishment_source:
+        from desktop_assistant.replenishment_source_reader import CAPABILITY as capability, SOURCE_REVISION, REVISION
+        source_revision, target_revision = SOURCE_REVISION, REVISION
+        label, audit_key, prefix = '补库生产来源', 'empty_replenishment_source_recovery', 'empty-replenishment-source-recovery-'
     root = manager.root
     shared = root / 'shared'
     database = shared / 'data/carton_erp.sqlite3'
@@ -99,7 +103,13 @@ def recover_empty_migration(manager, candidate, previous, manifest, state, envir
             and migration.files(shared) == state.get('migration_files'))
     with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro', uri=True)) as db:
         db.execute('PRAGMA query_only=ON')
-        if _optional_customer_code:
+        if _replenishment_source:
+            from desktop_assistant.replenishment_source_reader import has_facts as replenishment_facts, TABLE, COLUMN
+            require(not replenishment_facts(db))
+            require(db.execute('SELECT COUNT(*) FROM ' + TABLE).fetchone() == (0,))
+            column = next((r for r in db.execute('PRAGMA table_info(scrap_production_jobs)') if r[1] == COLUMN), None)
+            require(column is not None and column[2].upper() == 'INTEGER' and column[3] == 0 and column[4] is None)
+        elif _optional_customer_code:
             # All original rows must already match the authenticated report.
             # Recheck the old uniqueness rule before admitting any writer.
             require(not db.execute('SELECT 1 FROM products GROUP BY customer_id, '
@@ -143,7 +153,7 @@ def recover_empty_migration(manager, candidate, previous, manifest, state, envir
         source_report_sha256=state['migration_report_sha256'],
         backup_sha256=state['migration_backup_sha256'],
         database_replaced=False, started_at=datetime.now(timezone.utc).isoformat(), log=str(log))
-    audit['changed_customer_code_facts' if _optional_customer_code else ('new_home_tool_facts' if _home_tools else ('new_supplier_edge_facts' if _supplier_edges else ('new_shared_facts' if _shared_catalog else 'new_exact_facts')))]=0
+    audit['new_replenishment_source_facts' if _replenishment_source else ('changed_customer_code_facts' if _optional_customer_code else ('new_home_tool_facts' if _home_tools else ('new_supplier_edge_facts' if _supplier_edges else ('new_shared_facts' if _shared_catalog else 'new_exact_facts'))))]=0
     state.update(operation='migration_running')
     state[audit_key]=audit
     write_json(root/'state.json', state)

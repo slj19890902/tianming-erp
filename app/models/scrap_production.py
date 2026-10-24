@@ -13,6 +13,7 @@ class ScrapProductionJob(Base):
     customer_id:Mapped[int]=mapped_column(ForeignKey('customers.id',ondelete='RESTRICT'),index=True)
     product_id:Mapped[int]=mapped_column(ForeignKey('products.id',ondelete='RESTRICT'))
     order_item_id:Mapped[int|None]=mapped_column(ForeignKey('sales_order_items.id',ondelete='RESTRICT'),index=True)
+    stock_replenishment_item_id:Mapped[int|None]=mapped_column(ForeignKey('stock_replenishment_order_items.id',ondelete='RESTRICT'),index=True)
     quantity:Mapped[int]=mapped_column(Integer)
     location_id:Mapped[int]=mapped_column(ForeignKey('warehouse_locations.id',ondelete='RESTRICT'))
     stock_date:Mapped[date]=mapped_column(Date)

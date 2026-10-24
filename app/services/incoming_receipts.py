@@ -311,7 +311,8 @@ def stock_source_summary(
         )
         .order_by(IncomingReceiptItem.id.desc())
     )
-    planned = int(item.quantity or 0)
+    from app.services.replenishment_production import purchased_sheet_quantity
+    planned = purchased_sheet_quantity(db,item)
     variance = received - planned
     return {
         "planned_quantity": planned,
@@ -1663,7 +1664,8 @@ def _receive_stock_replenishment_one(
         )
     from app.services.incoming_actual_specs import prepare, freeze
     actual = prepare(db, item_key, actual_spec, user)
-    planned = int(item.quantity or 0)
+    from app.services.replenishment_production import purchased_sheet_quantity
+    planned = purchased_sheet_quantity(db,item)
     before = int(
         db.scalar(
             select(
@@ -2238,7 +2240,8 @@ def accept_short(
             raise IncomingReceiptError("请在最新一笔待补料记录上结单", 409)
         from app.services.replenishment_receipt_progress import receipt_progress, refresh_order_progress
         progress = receipt_progress(db, item)
-        if not 0 < progress['received_quantity'] < item.quantity:
+        from app.services.replenishment_production import purchased_sheet_quantity
+        if not 0 < progress['received_quantity'] < purchased_sheet_quantity(db,item):
             raise IncomingReceiptError("当前记录不是可结单的短收状态", 409)
         row.resolution_action = "accept_short"
         row.resolution_status = "resolved"
@@ -2261,7 +2264,7 @@ def accept_short(
             entity_type="stock_replenishment_item", entity_id=item.id,
             object_ref=f"stock_replenishment_item:{item.id}", customer_id=item.customer_id,
             description="补库按实收结单，不再补料", details={
-                "incoming_receipt_item_id": row.id, "planned_quantity": item.quantity,
+                "incoming_receipt_item_id": row.id, "planned_quantity": purchased_sheet_quantity(db,item),
                 "cumulative_received_quantity": progress['received_quantity'],
                 "resolution_action": "accept_short", "resolution_reason": clean_reason,
             })

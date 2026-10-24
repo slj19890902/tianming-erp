@@ -198,6 +198,10 @@ class _PendingIncomingReadContext:
         self._handled_keys: set[tuple[str, int]] = set()
         self._summaries: dict[tuple[str, int], dict | None] = {}
         planned_by_key: dict[tuple[str, int], int] = {}
+        from app.models.procurement_source import ProcurementSourceLink
+        stock_ids=[int(r['stock_replenishment_item_id']) for r in rows if r.get('stock_replenishment_item_id')]
+        stock_plans=dict(db.execute(select(ProcurementSourceLink.stock_replenishment_item_id,ProcurementSourceLink.source_quantity).where(
+            ProcurementSourceLink.stock_replenishment_item_id.in_(stock_ids),ProcurementSourceLink.status=='active')).all()) if stock_ids else {}
         for row in rows:
             key = self._row_source_key(row)
             if key is None:
@@ -205,7 +209,7 @@ class _PendingIncomingReadContext:
             self._handled_keys.add(key)
             kind, _source_id = key
             if kind == "stock":
-                planned = int(row.get("quantity") or 0)
+                planned = int(stock_plans.get(_source_id,row.get("quantity") or 0))
             elif kind in {"requisition", "supplier_order_item"}:
                 planned = int(row.get("requisition_qty") or 0)
             else:
@@ -2126,6 +2130,15 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
         stock_row["customer_name"] = stock_row.get("customer_name") or ""
         stock_row["delivery_date"] = None
         rows.append(stock_row)
+    from app.models.procurement_source import ProcurementSourceLink
+    stock_ids=[r['stock_replenishment_item_id'] for r in rows if r.get('stock_replenishment_item_id')]
+    quantities=dict(db.execute(select(ProcurementSourceLink.stock_replenishment_item_id,ProcurementSourceLink.source_quantity).where(
+        ProcurementSourceLink.stock_replenishment_item_id.in_(stock_ids),ProcurementSourceLink.status=='active')).all()) if stock_ids else {}
+    for row in rows:
+        source_id=row.get('stock_replenishment_item_id')
+        if source_id in quantities:
+            received=int(row.get('quantity') or 0)-int(row.get('requisition_qty') or 0)
+            row['requisition_qty']=max(quantities[source_id]-received,0)
     return rows
 
 

@@ -17,6 +17,7 @@ class ScrapPayload(BaseModel):
     action:Literal['plan','finish_now','complete','cancel']='plan'
     product_id:int=Field(gt=0)
     order_item_id:int|None=Field(default=None,gt=0)
+    stock_replenishment_item_id:int|None=Field(default=None,gt=0)
     quantity:int=Field(default=1,gt=0,le=10000000,strict=True)
     location_id:int|None=Field(default=None,gt=0)
     stock_date:date
@@ -46,8 +47,9 @@ def jobs(db:Session=Depends(get_db),user:User=Depends(PermissionChecker('orders.
 
 @router.get('/options')
 def options(product_id:int=Query(gt=0),order_item_id:int|None=Query(default=None,gt=0),
+            stock_replenishment_item_id:int|None=Query(default=None,gt=0),
             db:Session=Depends(get_db),user:User=Depends(PermissionChecker('orders.view'))):
-    value=service.options(db,product_id,order_item_id,user)
+    value=service.options(db,product_id,order_item_id,user,stock_replenishment_item_id=stock_replenishment_item_id)
     value['jobs']=[public(j,user) for j in value['jobs']]
     return value
 

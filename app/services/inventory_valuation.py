@@ -389,6 +389,9 @@ def resolve_lot_cost(db, lot) -> CostResolution:
 
 def frozen_cost(lot, db=None, visited=None):
     """Read only the entry snapshot, never today's price or a currency conversion."""
+    if db is not None and lot.cost_snapshot_source=='replenishment_production':
+        from app.services.replenishment_production import frozen_cost as replenishment_cost
+        return replenishment_cost(db,lot,set(visited or ()))
     if lot.cost_snapshot_source=='scrap_zero_material_frozen_labour':
         from app.services.scrap_production import frozen_cost as scrap_cost
         try:detail=json.loads(lot.cost_snapshot_detail_json or '{}')

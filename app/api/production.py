@@ -1100,3 +1100,6 @@ from app.api.scrap_production import router as scrap_production_router
 router.include_router(scrap_production_router)
 from app.api.bom_assembly_confirmation import router as bom_assembly_router
 router.include_router(bom_assembly_router)
+
+from app.api.replenishment_production import router as replenishment_production_router
+router.include_router(replenishment_production_router)

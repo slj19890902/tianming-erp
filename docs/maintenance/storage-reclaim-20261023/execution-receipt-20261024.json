@@ -1,0 +1,71 @@
+{
+  "type": "tianming.storage-reclaim-execution.v1",
+  "at": "2026-10-24T05:35:08.854887+00:00",
+  "units": "decimal GB = 1,000,000,000 bytes",
+  "available_before_bytes": 40017551360,
+  "available_after_bytes": 200768786432,
+  "net_available_increase_bytes": 160751235072,
+  "target_available_bytes": 200000000000,
+  "goal_met": true,
+  "cleanup": {
+    "v718_test_payload_targets_deleted": 10,
+    "additional_historical_targets_deleted": 178,
+    "additional_historical_deleted_by_kind": {
+      "retired-isolated-stage": 33,
+      "retired-root-task-copy": 3,
+      "owner-closed-failed-rehearsal": 5,
+      "owner-closed-historical-test-copy": 137
+    },
+    "duplicate_staged_package_files_deleted": 4,
+    "obsolete_unsigned_developer_archives_deleted": 32,
+    "inactive_code_files_compacted_without_content_or_metadata_change": 31401,
+    "retained_targets": 53,
+    "retained_reasons": {
+      "unclassified_payload_links": 51,
+      "missing_required_signed_original": 2
+    },
+    "skipped_code_file_candidates_with_extended_attribute_differences": 2856
+  },
+  "preservation": {
+    "production_database_and_attachments_unchanged": true,
+    "formal_state_unchanged": true,
+    "formal_pid_unchanged": true,
+    "service_stopped": false,
+    "formal_backups_preserved": 15,
+    "existing_authenticated_recovery_proof_verified": true,
+    "signed_original_packages_preserved": true,
+    "business_repair_before_images_preserved": true,
+    "reports_and_current_isolated_sources_preserved": true
+  },
+  "git_archive": {
+    "verified_new_branches": 7,
+    "verified_unique_commits": 24,
+    "destination": "slj19890902/tianming-erp",
+    "business_data_uploaded": false,
+    "all_uncommitted_work_uploaded": false
+  },
+  "rules": {
+    "hourly_native_cleanup_loaded": true,
+    "database_backup_timer_loaded": true,
+    "storage_budget_entry": "/Users/kimiyf/ERP-Migration/tools/storage-budget/run.py",
+    "reserve_bytes": 200000000000,
+    "startup_rule_installed": true,
+    "budget_check_0_1GB_admitted": true,
+    "budget_check_5GB_blocked": true,
+    "budget_gate_scope": "ERP foreground development workflow, not an operating-system disk quota",
+    "targeted_tests_passed": 4
+  },
+  "health": {
+    "http": 200,
+    "ok": true
+  },
+  "remaining": {
+    "unclassified_test_links_preserved": 51,
+    "failed_migrations_without_required_original_preserved": 2,
+    "historically_missing_preserved_backup_originals": 4,
+    "automatic_backup_last_result": "insufficient-workspace before this cleanup; a later successful retry has not yet been verified",
+    "unique_or_uncommitted_workspaces_preserved": true,
+    "NAS_mount_is_local_proxy": "mounted readback alone does not prove independent remote persistence"
+  },
+  "local_evidence_directory": "/Users/kimiyf/ERP-Migration/evidence/storage-reclaim-20261024"
+}

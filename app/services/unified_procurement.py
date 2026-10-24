@@ -199,6 +199,8 @@ def pending_stock_rows(db, user):
         )))) if order_ids else set()
     result = []
     can_cancel = has_permission(user, 'requisition.execute')
+    from app.services.replenishment_production import coverage_map
+    production_by_id=coverage_map(db,[item for item,_ in rows])
     for item, order in rows:
         try:
             _require_stock_replenishment_order_access(db, order, user)
@@ -206,25 +208,31 @@ def pending_stock_rows(db, user):
             if error.status_code != 403:
                 raise
             continue
+        from app.services.replenishment_production import state
+        production=state(db,item,cover=production_by_id[item.id])
         snapshot = stock_snapshot(item, order)
+        if production['jobs']:snapshot=dict(snapshot,production_coverage=production['jobs'])
         customer = db.get(Customer, snapshot["source_customer_id"]) if snapshot["source_customer_id"] else None
         result.append({
             "source_type": "stock_replenishment", "stock_replenishment_item_id": item.id,
             "created_at": str(order.created_at or ''),
             "item_id": f"sr{item.id}", "id": f"sr{item.id}", "source_id": order.id,
             "stock_replenishment_can_void": (
-                can_cancel and order.status in ('draft', 'confirmed') and order.id not in blocked_order_ids
+                can_cancel and order.status in ('draft', 'confirmed') and order.id not in blocked_order_ids and not production["jobs"]
             ),
             "source_fingerprint": fingerprint(snapshot), "is_merge_group": False,
+            "product_id":item.reference_product_id or item.product_id,
+            "source_production":production,"can_purchase":production["can_purchase"],
+            "purchase_blocked_reason":production["purchase_blocked_reason"],
             "item_order_number": order.order_number, "order_number": order.order_number,
             "customer_id": snapshot["source_customer_id"], "customer_name": customer.name if customer else "通用备料",
             "product_code": item.product_code_snapshot, "product_name": item.product_name_snapshot or item.internal_name,
             "quantity": item.quantity, "production_required_qty": item.quantity,
             "required_piece_qty": item.quantity * item.stock_yield_per_sheet,
-            "remaining_required_piece_qty": item.quantity * item.stock_yield_per_sheet,
+            "remaining_required_piece_qty": production["remaining_sheet_quantity"] * item.stock_yield_per_sheet,
             "crease_type": item.crease_type, "crease_left_mm": item.crease_left_mm,
             "crease_middle_mm": item.crease_middle_mm, "crease_right_mm": item.crease_right_mm,
-            "inventory_deducted_qty": 0, "requisition_qty": item.quantity,
+            "inventory_deducted_qty": item.quantity-production["remaining_sheet_quantity"], "requisition_qty": production["remaining_sheet_quantity"],
             "report_length_mm": item.report_length_mm, "report_width_mm": item.report_width_mm,
             "material_id": item.material_id, "material": item.material_code_snapshot,
             "flute_type": item.flute_type, "layer_count": item.layer_count,
@@ -261,7 +269,13 @@ def attach_stock_sources(db, *, purchase, selections, user):
             raise HTTPException(404, "补库明细不存在")
         order = db.get(StockReplenishmentOrder, item.replenishment_order_id)
         _require_stock_replenishment_order_access(db, order, user)
+        from app.services.replenishment_production import state
+        production=state(db,item)
+        if not production['can_purchase']:raise HTTPException(409,production['purchase_blocked_reason'])
+        remaining=production['remaining_sheet_quantity']
+        if remaining<=0:raise HTTPException(409,'补库需求已经由实际生产覆盖，无需重复采购')
         snapshot = stock_snapshot(item, order)
+        if production['jobs']:snapshot=dict(snapshot,production_coverage=production['jobs'])
         if fingerprint(snapshot) != selection.source_fingerprint:
             raise HTTPException(409, "补库需求已变化，请刷新采购草稿")
         if order.status not in {"draft", "confirmed", "partially_stocked"} or not order.request_hash:
@@ -294,19 +308,19 @@ def attach_stock_sources(db, *, purchase, selections, user):
             order_number=order.order_number, product_code=item.product_code_snapshot,
             product_name=item.product_name_snapshot or item.internal_name,
             report_length_mm=item.report_length_mm, report_width_mm=item.report_width_mm,
-            quantity=item.quantity, stock_deduction_qty=0, requisition_qty=item.quantity,
+            quantity=item.quantity, stock_deduction_qty=item.quantity-remaining, requisition_qty=remaining,
             cutting_mode=(normalize_cutting_mode(item.stock_yield_per_sheet, strict=True)
                           if item.sheet_cutting_snapshot else DEFAULT_CUTTING_MODE), pieces_per_box=item.pieces_per_box,
-            required_piece_qty=item.quantity * item.stock_yield_per_sheet,
+            required_piece_qty=remaining * item.stock_yield_per_sheet,
             customer_name=customer.name if customer else "通用备料",
         )
         db.add(line)
         db.flush()
         db.add(ProcurementSourceLink(supplier_item_id=line.id,
             stock_replenishment_item_id=item.id, material_requisition_item_id=None,
-            source_quantity=item.quantity, source_snapshot_json=snapshot_text(snapshot), created_by=user.id))
-        purchase.total_quantity += item.quantity
-        purchase.requisition_qty += item.quantity
+            source_quantity=remaining, source_snapshot_json=snapshot_text(snapshot), created_by=user.id))
+        purchase.total_quantity += remaining
+        purchase.requisition_qty += remaining
         purchase.required_piece_qty = (purchase.required_piece_qty or 0) + line.required_piece_qty
     db.flush()
 

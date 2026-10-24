@@ -765,10 +765,11 @@ def ensure_semi_finished_lot_eligibility(
     reviewed: bool = False,
     allow_rotation: bool = False,
     confirm_processed_use: bool = False,
+    frozen_product=None,
 ) -> str:
     """Recheck the lot-level hard authorization independently of client data."""
 
-    product = db.get(Product, product_id)
+    product = frozen_product if frozen_product is not None else db.get(Product, product_id)
     if product is None or product.deleted_at is not None:
         raise WarehouseInventoryError("订单产品不存在", 404)
     if product.customer_id != customer_id or expected.customer_id != customer_id:

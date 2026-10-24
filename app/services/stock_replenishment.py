@@ -1062,9 +1062,12 @@ def customer_board_preparation_coverage(
                    StockReplenishmentOrderItem.reference_product_id == product.id))
         for item in pending_items:
             if is_owned_finished_liner(item) or _replenishment_item_signature(item) == signature:
-                remaining = max(int(item.quantity) - int(item.stocked_quantity), 0)
+                from app.services.replenishment_production import coverage
+                completed=coverage(db,item)['completed_output']*max(int(item.pieces_per_box),1)
+                remaining_pieces=max(covered_pieces(item,max(int(item.quantity)-int(item.stocked_quantity),0))-completed,0)
+                remaining=(remaining_pieces+max(int(item.stock_yield_per_sheet),1)-1)//max(int(item.stock_yield_per_sheet),1)
                 pending_sheets += remaining
-                pending_pieces += covered_pieces(item, remaining)
+                pending_pieces += remaining_pieces
     incoming_finished_capacity = 0
     incoming_auto_cover_capacity = 0
     from app.services.replenishment_receipt_progress import short_closed_clause
@@ -1099,10 +1102,8 @@ def customer_board_preparation_coverage(
         for item in incoming_items:
             if not is_owned_finished_liner(item) and _replenishment_item_signature(item) != signature:
                 continue
-            outstanding = max(
-                int(item.quantity or 0) - int(item.stocked_quantity or 0),
-                0,
-            )
+            from app.services.replenishment_production import purchased_sheet_quantity
+            outstanding = max(purchased_sheet_quantity(db,item)-int(item.stocked_quantity or 0),0)
             incoming_sheets += outstanding
             capacity = covered_pieces(item, outstanding)
             incoming_finished_capacity += capacity

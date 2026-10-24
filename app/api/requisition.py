@@ -17100,6 +17100,9 @@ def void_stock_replenishment_order(
         ProcurementSourceLink.stock_replenishment_item_id.in_([item.id for item in order.items]),
         ProcurementSourceLink.status == "active").limit(1)):
         raise HTTPException(409, "补库需求已关联统一采购单，请先撤销对应采购单")
+    from app.services.replenishment_production import coverage_map
+    if any(v['jobs'] for v in coverage_map(db,order.items).values()):
+        raise HTTPException(409, '补库单已有片料或废料生产安排，请先取消未执行安排；已实际完工不能撤销原需求')
     received_quantity = sum(int(item.stocked_quantity or 0) for item in order.items)
     receipt_fact_count = int(
         db.scalar(
@@ -17125,6 +17128,11 @@ def void_stock_replenishment_order(
             status_code=409,
             detail="该补库单已经部分或全部实际收货，不能直接撤销报料。",
         )
+    from app.models.replenishment_production import ReplenishmentProductionJob
+    from app.models.scrap_production import ScrapProductionJob
+    source_item_ids=select(StockReplenishmentOrderItem.id).where(StockReplenishmentOrderItem.replenishment_order_id==order_id)
+    source_clear=[~select(model.id).where(model.stock_replenishment_item_id.in_(source_item_ids),
+        model.status!='cancelled').exists() for model in (ReplenishmentProductionJob,ScrapProductionJob)]
     order_number = order.order_number
     voided_at = utc_now_naive()
     transition = db.execute(
@@ -17133,6 +17141,7 @@ def void_stock_replenishment_order(
             StockReplenishmentOrder.id == order_id,
             StockReplenishmentOrder.status == order.status,
             ~active_external_purchase,
+            *source_clear,
             ~select(ProcurementSourceLink.id).join(StockReplenishmentOrderItem,
                 StockReplenishmentOrderItem.id == ProcurementSourceLink.stock_replenishment_item_id)
                 .where(StockReplenishmentOrderItem.replenishment_order_id == order_id,

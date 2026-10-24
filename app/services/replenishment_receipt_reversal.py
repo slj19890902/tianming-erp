@@ -188,7 +188,8 @@ def reverse_stock_receipt(db, *, receipt_item, user, reason, idempotency_key, au
         remaining[-1].resolved_by = remaining[-1].resolved_at = None
     from app.services.replenishment_receipt_progress import refresh_order_progress
     refresh_order_progress(db, order, user.id)
-    if not any(row.stocked_quantity for row in order.items):
+    from app.services.replenishment_production import coverage_map
+    if not any(row.stocked_quantity for row in order.items) and not any(v['completed_output'] for v in coverage_map(db,order.items).values()):
         order.status, order.stocked_by, order.stocked_at = 'confirmed', None, None
     customer = db.get(Customer, item.customer_id) if item.customer_id else None
     append_audit_event(db, request=(audit_context or {}).get('request'), actor=user,

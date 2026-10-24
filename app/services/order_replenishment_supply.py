@@ -361,11 +361,15 @@ def _supplies(db, *, order_item_ids=None, source_item_ids=None):
             .where(ProcurementSourceLink.stock_replenishment_item_id == item.id,
                 ProcurementSourceLink.status == "active", SupplierRequisitionOrderItem.status == "active",
                 SupplierRequisitionOrder.status == "confirmed").limit(1)))
-        outstanding = 0 if closed or item.order.status not in {"draft", "confirmed", "partially_stocked"} else max(item.quantity - item.stocked_quantity, 0)
+        from app.services.replenishment_production import coverage,purchased_sheet_quantity
+        production=coverage(db,item)
+        outstanding = 0 if closed or item.order.status not in {"draft", "confirmed", "partially_stocked"} else max((purchased_sheet_quantity(db,item) if purchased else item.quantity) - item.stocked_quantity, 0)
         if outstanding:
             stage = "pending_incoming" if purchased else "pending_material"
             multiplier = item.pieces_per_box if item.target_inventory_type == "finished" else item.stock_yield_per_sheet
             pieces = outstanding * multiplier
+            if not purchased:
+                pieces=max(pieces-production['completed_output']*item.pieces_per_box,0)
             pieces -= pieces % max(item.pieces_per_box, 1)
             if pieces:
                 result.append(dict(row, stage=stage, quantity=pieces, lot_id=None))

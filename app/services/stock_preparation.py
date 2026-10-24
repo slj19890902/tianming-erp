@@ -154,12 +154,19 @@ def list_rows(db, *, scope=None, query="", include_movements=True):
 
 def _list_rows(db, cache, query):
     rows = []
+    from app.services.replenishment_production import coverage_map
+    source_production=coverage_map(db,cache.items)
     for item in cache.items:
         receipts = cache.receipts[item.id]
         posted = [r for r in receipts if r.status == 'posted']
         actual = sum(r.received_quantity for r in posted) if posted else int(item.stocked_quantity or 0)
         closed = any(r.resolution_action == 'accept_short' and r.resolution_status == 'resolved' for r in posted)
-        pending = 0 if closed else max(0, item.quantity - actual)
+        produced=source_production[item.id]
+        covered=(produced['pending_output']+produced['completed_output'])*max(int(item.pieces_per_box),1)
+        factor=max(int(item.stock_yield_per_sheet),1)
+        pending = 0 if closed else max(0, (item.quantity*factor-actual*factor-covered+factor-1)//factor)
+        if produced['jobs'] and not receipts and not pending:
+            continue
         sources = receipts + ([None] if pending or not receipts else [])
         for receipt in sources:
             # Pre-receipt-ledger replenishments already have a real stock lot.

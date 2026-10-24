@@ -26,7 +26,7 @@ def pending_quantity(db,item_id,exclude=None):
 def row(db,job):
     snap=json.loads(job.snapshot_json)
     return dict(id=job.id,version=job.version,product_id=job.product_id,order_item_id=job.order_item_id,
-        product_code=snap['code'],product_name=snap['name'],quantity=job.quantity,status=job.status,
+        stock_replenishment_item_id=job.stock_replenishment_item_id,product_code=snap['code'],product_name=snap['name'],quantity=job.quantity,status=job.status,
         location_id=job.location_id,stock_date=job.stock_date,output_lot_id=job.output_lot_id,
         material_cost='0',labour_cost=snap['labour']['estimated_processing_cost'],variant=snap.get('variant'))
 
@@ -61,7 +61,7 @@ def storage(db,product):
     return saved
 
 
-def options(db,product_id,order_item_id,actor):
+def options(db,product_id,order_item_id,actor,*,stock_replenishment_item_id=None):
     p=product_for(db,product_id,actor)
     from app.services.receipt_putaway import info
     item=db.get(OrderItem,order_item_id) if order_item_id else None
@@ -71,9 +71,28 @@ def options(db,product_id,order_item_id,actor):
         from app.api.requisition import _current_requisition_requirements
         requirement=_current_requisition_requirements(db,item)
         remaining=int(requirement['remaining_required_piece_qty'])//int(requirement['pieces_per_box'])
+    if stock_replenishment_item_id:
+        source=_replenishment_source(db,stock_replenishment_item_id,p,actor)
+        if order_item_id:raise HTTPException(409,'订单与补库来源不能同时填写')
+        from app.services.replenishment_production import state
+        remaining=state(db,source)['remaining_output']
     return dict(product_id=p.id,code=p.product_code,name=p.product_name,version=p.version,
         variants=p.production_variants or [],storage=storage(db,p),remaining_quantity=remaining,
-        jobs=[row(db,j) for j in db.scalars(select(Job).where(Job.product_id==p.id,Job.status=='pending').order_by(Job.id))])
+        jobs=[row(db,j) for j in db.scalars(select(Job).where(Job.product_id==p.id,Job.status=='pending',
+            Job.stock_replenishment_item_id==stock_replenishment_item_id if stock_replenishment_item_id else Job.stock_replenishment_item_id.is_(None)).order_by(Job.id))])
+
+
+def _replenishment_source(db,item_id,product,actor):
+    from app.services.replenishment_production import source,production_identity,purchase_block
+    item=source(db,item_id,actor)
+    identity,view=production_identity(db,item)
+    if view.id!=product.id:raise HTTPException(409,'补库来源与目标产品不一致')
+    blocked=purchase_block(db,item)
+    if blocked:raise HTTPException(409,blocked)
+    from app.services.finished_stock_identity import product_basis,matches_stock_identity
+    if not matches_stock_identity(product_basis(product),identity['physical_basis']):
+        raise HTTPException(409,'当前产品与补库冻结身份不同，请核对原补库加工资料')
+    return item
 
 
 def preview(db,payload,actor):
@@ -81,6 +100,10 @@ def preview(db,payload,actor):
     from app.services.production_variants import resolve_variant
     try:batch,variant=resolve_variant(db,p,payload.get('variant_id'))
     except ValueError as e:raise HTTPException(409,str(e)) from e
+    replenishment=None
+    if payload.get('stock_replenishment_item_id'):
+        if payload.get('order_item_id'):raise HTTPException(409,'订单与补库来源不能同时填写')
+        replenishment=_replenishment_source(db,payload['stock_replenishment_item_id'],p,actor)
     quantity=payload['quantity']
     if quantity<=0:raise HTTPException(422,'请输入实际合格数量')
     item=db.get(OrderItem,payload.get('order_item_id')) if payload.get('order_item_id') else None
@@ -93,6 +116,12 @@ def preview(db,payload,actor):
             raise HTTPException(409,'本次数量超过未覆盖缺口；已有采购、领料或生产安排须先从原入口调整。独立备库请不关联订单')
     elif payload.get('order_item_id'):
         raise HTTPException(404,'订单明细不存在')
+    if replenishment is not None:
+        from app.services.replenishment_production import state
+        if quantity>state(db,replenishment)['remaining_output']:
+            raise HTTPException(409,'本次数量超过补库未覆盖缺口')
+        if variant is not None:
+            raise HTTPException(409,'补库加工身份已冻结，不能另选生产方案')
     from app.services.receipt_putaway import info,location_issue
     saved=storage(db,p)
     location_id=payload.get('location_id') or saved['location_id']
@@ -113,11 +142,19 @@ def preview(db,payload,actor):
         layout_version=location.floor3_layout.version if location.floor3_layout else None,
         code=p.product_code,name=p.product_name,physical_basis=product_basis(p),variant=variant,labour=labour,
         stock_date=str(payload['stock_date']),remarks=payload.get('remarks') or '',material_cost='0')
+    if replenishment is not None:
+        from app.services.replenishment_production import state
+        plan['stock_replenishment_item_id']=replenishment.id
+        plan['source_fingerprint']=state(db,replenishment)['source_fingerprint']
     plan['preview_hash']=digest(plan)
     return plan
 
 
 def mutate(db,payload,actor):
+    # Keep the historical request bytes for ordinary/off-source replay.
+    payload=dict(payload)
+    if payload.get('stock_replenishment_item_id') is None:
+        payload.pop('stock_replenishment_item_id',None)
     from app.api.deps import require_customer_access
     from app.services.audit_log import append_audit_event
     request=canonical(dict(payload,actor_id=actor.id))
@@ -134,7 +171,7 @@ def mutate(db,payload,actor):
                 .values(version=Product.version,updated_at=Product.updated_at))
             if claimed.rowcount!=1:raise HTTPException(409,'产品资料已变化，请重新核对')
             job=Job(customer_id=plan['customer_id'],product_id=plan['product_id'],order_item_id=plan['order_item_id'],
-                quantity=plan['quantity'],location_id=plan['location_id'],stock_date=date.fromisoformat(plan['stock_date']),
+                stock_replenishment_item_id=plan.get('stock_replenishment_item_id'),quantity=plan['quantity'],location_id=plan['location_id'],stock_date=date.fromisoformat(plan['stock_date']),
                 snapshot_json=canonical(plan),actor_id=actor.id,status='pending',version=1)
             db.add(job);db.flush()
         else:
@@ -146,6 +183,16 @@ def mutate(db,payload,actor):
                 .values(version=Job.version+1))
             if claimed.rowcount!=1:raise HTTPException(409,'生产状态已变化，本次未保存')
             plan=json.loads(job.snapshot_json)
+        if job.stock_replenishment_item_id:
+            if payload.get('stock_replenishment_item_id')!=job.stock_replenishment_item_id or payload.get('order_item_id'):
+                raise HTTPException(409,'废料生产与补库来源不一致')
+            if action=='cancel':
+                from app.services.replenishment_production import source,purchase_block
+                origin=source(db,job.stock_replenishment_item_id,actor)
+                if origin.order.status=='voided' or purchase_block(db,origin):
+                    raise HTTPException(409,'补库状态或采购已变化，不能取消原生产安排')
+            else:
+                _replenishment_source(db,job.stock_replenishment_item_id,db.get(Product,job.product_id),actor)
         if action=='cancel':job.status='cancelled'
         elif action in ('complete','finish_now'):
             product=product_for(db,job.product_id,actor)
@@ -174,6 +221,9 @@ def mutate(db,payload,actor):
                     reserve_finished_inventory(db,order_item_id=item.id,inventory_lot_id=lot.id,
                         quantity=min(need,job.quantity),expected_version=lot.version,operator_id=actor.id,
                         idempotency_key='scrap-reserve:'+str(job.id),warning_acknowledged_codes=[])
+        if job.stock_replenishment_item_id:
+            from app.services.replenishment_production import source,refresh
+            refresh(db,source(db,job.stock_replenishment_item_id,actor),actor)
         result=row(db,job)
         db.add(Command(operation_key=payload['operation_key'],receipt_item_id=None,request_json=request,
             result_json=canonical(result),actor_id=actor.id))

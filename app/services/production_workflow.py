@@ -2891,15 +2891,17 @@ def _consume_completion_semi_reservations(
         target_pieces = planned_quantity * max(int(requirement.pieces_per_box or 1), 1)
         remaining_pieces = target_pieces
         for reservation in reservations:
-            if remaining_pieces <= 0:
-                break
+            sheet_plan = json.loads(reservation.cut_plan_json) if reservation.cut_plan_json else {}
+            actual_input = sheet_plan.get('actual_sheet_input_v1') is True
+            if remaining_pieces <= 0 and not actual_input:
+                continue
             available_credit = max(
                 int(reservation.credited_requirement_quantity or 0)
                 - int(reservation.consumed_requirement_quantity or 0)
                 - int(reservation.released_requirement_quantity or 0),
                 0,
             )
-            if available_credit <= 0:
+            if available_credit <= 0 and not actual_input:
                 continue
             yield_factor = max(int(reservation.yield_factor or 1), 1)
             available_stock = (
@@ -2909,10 +2911,9 @@ def _consume_completion_semi_reservations(
             )
             stock_quantity = min(
                 available_stock,
-                ceil(min(remaining_pieces, available_credit) / yield_factor),
+                ceil(max(min(remaining_pieces, available_credit), 0) / yield_factor),
             )
-            sheet_plan = json.loads(reservation.cut_plan_json) if reservation.cut_plan_json else {}
-            if sheet_plan.get('actual_sheet_input_v1') is True:
+            if actual_input:
                 stock_quantity = available_stock
             if stock_quantity <= 0:
                 continue
@@ -2931,6 +2932,7 @@ def _consume_completion_semi_reservations(
                 ),
                 delivery_item_id=None,
                 reason="生产完工消耗半成品预占",
+                allow_extra_input=actual_input,
             )
             consumed_credit = (
                 int(mutation.reservation.consumed_requirement_quantity or 0)
@@ -6035,7 +6037,10 @@ def _active_customer_board_preparation_sources(
             - int(reservation.released_requirement_quantity or 0),
             0,
         )
-        if remaining_sheets <= 0 or remaining_pieces <= 0:
+        sheet_plan = json.loads(reservation.cut_plan_json or '{}')
+        if remaining_sheets <= 0 or (remaining_pieces <= 0
+                and not (sheet_plan.get('actual_sheet_input_v1') is True
+                    and sheet_plan.get('full_sheet_output_v1') is True)):
             continue
         readable_location_name = employee_location_name(
             location,
@@ -6071,6 +6076,7 @@ def _active_customer_board_preparation_sources(
                 "employee_location_name": readable_location_name,
                 "remaining_sheet_quantity": remaining_sheets,
                 "remaining_product_quantity": remaining_pieces,
+                "planned_piece_output_quantity": remaining_sheets * int(reservation.yield_factor or 1),
                 "stock_yield_per_sheet": int(
                     reservation.yield_factor or detail.stock_yield_per_sheet or 1
                 ),

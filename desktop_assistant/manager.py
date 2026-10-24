@@ -120,6 +120,10 @@ class Manager:
                 supplier_trim_contract = _has_supplier_trim_facts(db)
                 from desktop_assistant.reader_contract import has_shared_product_master_facts
                 shared_product_master_contract = has_shared_product_master_facts(db)
+                from desktop_assistant.supplier_sheet_reader import has_extra_input_facts
+                extra_sheet_input_contract = has_extra_input_facts(db)
+            if extra_sheet_input_contract and not self._shared_finished_reader(release, 'sheet_extra_input_v1'):
+                return False
             if shared_product_master_contract and not self._shared_finished_reader(release, "shared_product_master_v1"):
                 return False
             if actual_receipt_facts and not self._shared_finished_reader(release,"actual_receipt_specs_v1"):
@@ -237,6 +241,8 @@ class Manager:
         if manifest!=self.manifest(release):
             raise ValueError('实物组套读取清单与签名原包不一致')
         require_reader(self.root/'shared/data/carton_erp.sqlite3',manifest)
+        from desktop_assistant.supplier_sheet_reader import require_extra_input_reader
+        require_extra_input_reader(self.root/'shared/data/carton_erp.sqlite3', manifest)
 
     def _quotation_writer(self, release):
         package = self.root / 'packages' / (release + '.zip')
@@ -1454,6 +1460,8 @@ class Manager:
                 validate_database_schema(database, contract)
             from desktop_assistant.physical_kit_reader_contract import require_reader
             require_reader(database,release_manifest)
+            from desktop_assistant.supplier_sheet_reader import require_extra_input_reader
+            require_extra_input_reader(database, release_manifest)
             # Promote program caches only after all payload checks pass.
             for original in originals.values():
                 self.stage_release(original, verify_existing=True)

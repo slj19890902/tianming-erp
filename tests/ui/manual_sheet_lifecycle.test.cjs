@@ -179,3 +179,33 @@ test('return to pending selects only the original order item and performs no new
   assert.equal(h.writes,0);
  }finally{h.app.unmount();}
 });
+
+test('real Vue: covered plan can use every sheet or leave three, with immutable growth retry',async()=>{
+ const data=()=>({...adjustmentPreview(),remaining_required_piece_qty:0,semi_finished_reserved_piece_qty:20,
+  existing_reservations:[{reservation_id:42,lot_id:7,remaining_stock_quantity:70,keep_stock_quantity:70,
+   can_adjust:true,can_increase:true,max_stock_quantity:75,available_stock_quantity:5,stock_yield_per_sheet:4,warning_codes:['REVIEW']}]});
+ const h=await harness({get:()=>({data:data()}),removeAfterSuccess:false,
+  post:n=>{if(n===1)throw Error('lost growth response');return {data:{message:'已增加',remaining_required_piece_qty:0}};}});
+ try{
+  const row=h.sheet.preview.existing_reservations[0];row.keep_stock_quantity=row.max_stock_quantity;
+  assert.equal(h.sheet.adjustmentValid(),true);assert.equal(h.sheet.plannedInputSummary().stock,75);
+  h.sheet.keepSpare(row,'3');assert.equal(row.keep_stock_quantity,72);assert.equal(h.sheet.adjustmentValid(),true);
+  await h.sheet.saveAdjustment();await h.tick();assert.equal(h.writes,1);
+  assert.equal(h.requests[0].payload.items[0].keep_stock_quantity,72);
+  assert.deepEqual(h.requests[0].payload.items[0].warning_acknowledged_codes,['REVIEW']);
+  row.keep_stock_quantity=75;await h.sheet.submitHeld();await h.tick();
+  assert.deepEqual(h.requests[0],h.requests[1]);assert.equal(h.parent.manualSheetParentControlsBlocked(),false);
+ }finally{h.app.unmount();}
+});
+test('real Vue: demand already covered can append another explicit physical batch',async()=>{
+ const h=await harness({get:()=>({data:{...preview(),remaining_required_piece_qty:0,
+  items:[{...preview().items[0],max_stock_quantity:0,actual_max_stock_quantity:5,extra_stock_allowed:true}]}}),
+  removeAfterSuccess:false});
+ try{
+  h.sheet.rows[0].selected=true;h.sheet.rows[0].inputQuantity=4;
+  assert.equal(h.sheet.totals().valid,true);assert.equal(h.sheet.totals().extra,true);
+  await h.sheet.confirmSelection();await h.tick();assert.equal(h.writes,1);
+  assert.equal(h.requests[0].payload.produce_extra_stock,true);
+  assert.equal(h.requests[0].payload.items[0].stock_quantity,4);
+ }finally{h.app.unmount();}
+});

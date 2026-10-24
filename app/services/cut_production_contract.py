@@ -27,12 +27,13 @@ def completion_contract(db, task, item, planned_output, *, require_cost=True):
         for reservation in rows:
             credit = reservation.credited_requirement_quantity - reservation.consumed_requirement_quantity - reservation.released_requirement_quantity
             stock = reservation.reserved_stock_quantity - reservation.consumed_stock_quantity - reservation.released_stock_quantity
-            if remaining <= 0 or credit <= 0 or stock <= 0:
-                continue
-            take_credit = min(remaining, credit)
-            take = min(stock, ceil(take_credit / reservation.yield_factor))
             frozen = json.loads(reservation.cut_plan_json) if reservation.cut_plan_json else None
-            if frozen and frozen.get('actual_sheet_input_v1') is True:
+            actual_input = frozen and frozen.get('actual_sheet_input_v1') is True
+            if stock <= 0 or ((remaining <= 0 or credit <= 0) and not actual_input):
+                continue
+            take_credit = min(max(remaining, 0), max(credit, 0))
+            take = min(stock, ceil(take_credit / reservation.yield_factor))
+            if actual_input:
                 if len(requirements) != 1 or requirement.component_type != 'whole':
                     raise WarehouseInventoryError('自定片料投入必须是独立整片加工批次', 409)
                 take = stock

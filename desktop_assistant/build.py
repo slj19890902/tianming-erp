@@ -344,6 +344,7 @@ def main():
                                                     'shared_customer_members_v1': 1,
                                                     'shared_product_master_v1': 1,
                                                     'supplier_sheet_edges_v1': 1,
+                                                    'sheet_extra_input_v1': 1,
                                                     'contract_seal_v1': 1,
                                                     'company_profiles_v1': 1, 'shared_bom_v1': 1,
                                                     'stock_purchase_identity_v1': 1,
